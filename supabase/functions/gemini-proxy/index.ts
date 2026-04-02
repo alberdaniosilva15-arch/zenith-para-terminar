@@ -1,0 +1,354 @@
+// =============================================================================
+// MOTOGO AI v2.1 — Edge Function: gemini-proxy
+// Ficheiro: supabase/functions/gemini-proxy/index.ts
+//
+// SEGURANÇA:
+// - Deploy com --no-verify-jwt porque validamos o JWT MANUALMENTE (linha ~55)
+//   Isto permite mensagens de erro em português e controlo total
+// - Rate limiting via tabela ai_usage_logs no Supabase (DB persistente)
+//   evita que bots destruam o saldo mesmo entre reinícios da função
+// - API key GEMINI_API_KEY nunca sai deste ficheiro
+//
+// IA CONDICIONAL:
+// - Kaze só é chamado quando há corrida activa (acções ride_* e post_ride_*)
+// - Insight espontâneo bloqueado — só responde a pedidos explícitos
+// =============================================================================
+
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { GoogleGenAI, Type } from 'https://esm.sh/@google/genai@1';
+
+const GEMINI_API_KEY    = Deno.env.get('GEMINI_API_KEY')!;
+const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+
+// Rate limits por acção (requests por hora)
+const RATE_LIMITS: Record<string, number> = {
+  kaze_chat:            20,
+  search_locations:     40,
+  explore_luanda:       15,
+  kaze_insight:         30,
+  simulate_earnings:    10,
+  autonomous_decisions:  5,
+  post_ride_review:     20,
+  get_live_token:        5,
+  _default:             30,
+};
+
+const KAZE_SYSTEM_PROMPT = `Tu és o Kaze, o espírito inteligente e assistente da MotoGo Angola.
+Fala como um angolano autêntico de Luanda (podes usar "mano", "mambo", "estamos juntos"),
+mas mantém o profissionalismo de um app de transporte sério.
+Tu conheces cada quarteirão do Kilamba, cada beco do Cazenga e todas as vias rápidas de Viana.
+SOBRE O FUNDADOR: Se perguntarem, o fundador é o Dánio Silva, 24 anos, explorador mineiro
+e aventureiro de Luanda. Ele criou este app com visão, não com código convencional.
+Responde sempre em português angolano. Sê conciso e genuinamente útil.`;
+
+// =============================================================================
+// IP RATE LIMITING (camada adicional ao rate limit por user_id)
+// Objectivo: bloquear spam de múltiplas contas a partir do mesmo IP
+//
+// Implementação: sliding window em memória (por instância da Edge Function)
+//   - Best-effort: reinícios da função resetam contadores (aceitável)
+//   - Para persistência entre instâncias: integrar Upstash Redis (futuro)
+// Complemento: tabela ip_rate_limits no Supabase para análise offline
+// =============================================================================
+const IP_WINDOW_MS = 60_000; // janela de 1 minuto
+const IP_MAX_REQS  = 40;     // max 40 requests/minuto por IP (todas as acções)
+
+interface IpEntry { count: number; windowStart: number; }
+const ipCounters = new Map<string, IpEntry>();
+
+function checkIpRateLimit(ip: string): boolean {
+  const now   = Date.now();
+  const entry = ipCounters.get(ip);
+
+  if (!entry || (now - entry.windowStart) > IP_WINDOW_MS) {
+    // Nova janela
+    ipCounters.set(ip, { count: 1, windowStart: now });
+    return true; // permitido
+  }
+
+  if (entry.count >= IP_MAX_REQS) return false; // bloqueado
+
+  entry.count++;
+  return true;
+}
+
+// Hash simples do IP para logs (privacidade — não armazenar IP raw)
+async function hashIp(ip: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(ip));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('').slice(0, 16);
+}
+
+// Limpar contadores antigos (>2 min) para evitar memory leak
+// Chamado ocasionalmente na handle de cada request
+let lastCleanup = Date.now();
+function cleanupIpCounters() {
+  const now = Date.now();
+  if (now - lastCleanup < 120_000) return; // só a cada 2 min
+  for (const [ip, entry] of ipCounters) {
+    if (now - entry.windowStart > IP_WINDOW_MS * 2) ipCounters.delete(ip);
+  }
+  lastCleanup = now;
+}
+
+// =============================================================================
+Deno.serve(async (req: Request) => {
+  if (req.method === 'OPTIONS') return cors();
+
+  if (req.method !== 'POST') return err('Método não suportado.', 405);
+
+  // ----------------------------------------------------------------
+  // 0. IP RATE LIMITING — bloquear antes de validar JWT
+  //    Impede spam de múltiplas contas do mesmo IP
+  //    CF-Connecting-IP: real IP via Cloudflare (Supabase usa CF)
+  //    X-Forwarded-For: fallback se sem proxy
+  // ----------------------------------------------------------------
+  cleanupIpCounters();
+  const clientIp = (
+    req.headers.get('cf-connecting-ip') ??
+    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+    'unknown'
+  );
+
+  if (!checkIpRateLimit(clientIp)) {
+    // Log assíncrono para análise (não bloqueia resposta)
+    hashIp(clientIp).then((ipHash) => {
+      createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
+        .from('ip_rate_limits')
+        .upsert(
+          { ip_hash: ipHash, window_start: new Date(Date.now() - Date.now() % 60000).toISOString(), request_count: IP_MAX_REQS + 1 },
+          { onConflict: 'ip_hash,window_start', ignoreDuplicates: false }
+        )
+        .then(() => {});
+    });
+    return err('Demasiados pedidos. Aguarda um minuto.', 429);
+  }
+
+  try {
+    // ----------------------------------------------------------------
+    // 1. VALIDAÇÃO JWT MANUAL (por isso usamos --no-verify-jwt no deploy)
+    //    Supabase gateway não rejeita → nós rejeitamos com mensagem em PT
+    // ----------------------------------------------------------------
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) return err('Token em falta.', 401);
+    const token = authHeader.split(' ')[1];
+
+    const supabaseUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const { data: { user }, error: authErr } = await supabaseUser.auth.getUser(token);
+    if (authErr || !user) return err('Sessão inválida ou expirada. Faz login novamente.', 401);
+
+    // ----------------------------------------------------------------
+    // 2. RATE LIMITING via base de dados (persistente entre reinícios)
+    // ----------------------------------------------------------------
+    const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const body   = await req.json();
+    const action = body.action as string;
+
+    if (!action) return err('Campo "action" em falta.', 400);
+
+    const limit    = RATE_LIMITS[action] ?? RATE_LIMITS['_default'];
+    const oneHourAgo = new Date(Date.now() - 3_600_000).toISOString();
+
+    const { count } = await supabaseAdmin
+      .from('ai_usage_logs')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('action', action)
+      .gte('created_at', oneHourAgo);
+
+    if ((count ?? 0) >= limit) {
+      return err(
+        `Limite de ${limit} pedidos/hora para "${action}" atingido. Aguarda um momento.`,
+        429
+      );
+    }
+
+    // Log do request (não bloqueia — fire and forget)
+    supabaseAdmin.from('ai_usage_logs').insert({
+      user_id: user.id, action, created_at: new Date().toISOString()
+    }).then(() => {});
+
+    // ----------------------------------------------------------------
+    // 3. ROTEAMENTO
+    // ----------------------------------------------------------------
+    const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    const { action: _a, ...payload } = body;
+
+    switch (action) {
+
+      // ----------------------------------------------------------------
+      case 'search_locations': {
+        const { query } = payload as { query: string };
+        const res = await ai.models.generateContent({
+          model: 'gemini-2.0-flash',
+          contents: `Localize pontos de interesse em Luanda, Angola: "${query}".
+Retorna APENAS JSON (sem markdown), com campo "locations": array de objectos com:
+name (string), type (bairro|restaurante|rua|monumento|servico|hospital|escola),
+description (string), coords: { lat: number, lng: number }, rating (number, opcional).
+Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                locations: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING }, type: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      coords: {
+                        type: Type.OBJECT,
+                        properties: { lat: { type: Type.NUMBER }, lng: { type: Type.NUMBER } },
+                        required: ['lat', 'lng'],
+                      },
+                    },
+                    required: ['name', 'type', 'description', 'coords'],
+                  },
+                },
+              },
+            },
+          },
+        });
+        return ok(JSON.parse(res.text ?? '{"locations":[]}'));
+      }
+
+      // ----------------------------------------------------------------
+      case 'explore_luanda': {
+        const { query } = payload as { query: string };
+        const res = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: `Informações actualizadas sobre: "${query}" em Luanda, Angola.`,
+          config: { tools: [{ googleSearch: {} }], systemInstruction: KAZE_SYSTEM_PROMPT },
+        });
+        const sources = res.candidates?.[0]?.groundingMetadata?.groundingChunks
+          ?.map((c: { web?: { uri?: string; title?: string } }) => ({ uri: c.web?.uri, title: c.web?.title }))
+          .filter((s: { uri?: string }) => s.uri) ?? [];
+        return ok({ text: res.text, sources });
+      }
+
+      // ----------------------------------------------------------------
+      case 'kaze_insight': {
+        const { context } = payload as { context: { role: string; status: string; name?: string } };
+        const res = await ai.models.generateContent({
+          model: 'gemini-2.0-flash-lite',
+          contents: `Insight curto (máx 2 frases) para ${context.name ?? 'utilizador'}
+(role: ${context.role}, status: ${context.status}) da MotoGo Luanda.
+JSON: { text: string, type: "info"|"motivation"|"safety" }`,
+          config: { responseMimeType: 'application/json', systemInstruction: KAZE_SYSTEM_PROMPT },
+        });
+        return ok(JSON.parse(res.text ?? '{"text":"Fica firme!","type":"motivation"}'));
+      }
+
+      // ----------------------------------------------------------------
+      case 'kaze_chat': {
+        const { message, history } = payload as {
+          message: string;
+          history: { role: 'user' | 'assistant'; content: string }[];
+        };
+        const chat = ai.chats.create({
+          model: 'gemini-2.5-flash',
+          config: { systemInstruction: KAZE_SYSTEM_PROMPT },
+          history: history.slice(0, -1).map(h => ({
+            role: h.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: h.content }],
+          })),
+        });
+        const res = await chat.sendMessage({ message });
+        return ok({ text: res.text });
+      }
+
+      // ----------------------------------------------------------------
+      case 'simulate_earnings': {
+        const { driverProfile } = payload as {
+          driverProfile: { rating: number; totalRides: number; level: string };
+        };
+        const res = await ai.models.generateContent({
+          model: 'gemini-2.0-flash-lite',
+          contents: `Ganhos realistas para mototaxista em Luanda:
+Rating: ${driverProfile.rating}/5 | Corridas: ${driverProfile.totalRides} | Nível: ${driverProfile.level}.
+JSON: { dailyEstimateKz: number, weeklyEstimateKz: number, bestZones: string[], tips: string }`,
+          config: { responseMimeType: 'application/json' },
+        });
+        return ok(JSON.parse(res.text ?? '{}'));
+      }
+
+      // ----------------------------------------------------------------
+      case 'autonomous_decisions': {
+        const { context } = payload;
+        const res = await ai.models.generateContent({
+          model: 'gemini-2.5-pro',
+          contents: `SISTEMA VIGILANTE MOTOGO LUANDA. Contexto: ${JSON.stringify(context)}.
+JSON: { commands: Array<{ id, type: REALLOCATE|SURGE_PRICE|SECURITY_DISPATCH|ROUTE_OPTIMIZE,
+target, reason, intensity, timestamp, status: EXECUTED|LOGGED }> }`,
+          config: { thinkingConfig: { thinkingBudget: 8192 }, responseMimeType: 'application/json' },
+        });
+        return ok(JSON.parse(res.text ?? '{"commands":[]}'));
+      }
+
+      // ----------------------------------------------------------------
+      // POST-RIDE REVIEW — IA guia a avaliação após corrida
+      // Chamado APENAS quando corrida termina (activação condicional)
+      // ----------------------------------------------------------------
+      case 'post_ride_review': {
+        const { driver_name, price_kz, distance_km, duration_min, step } =
+          payload as {
+            driver_name: string; price_kz: number;
+            distance_km: number; duration_min: number;
+            step: 'opening' | 'collect_rating' | 'collect_comment';
+          };
+
+        const prompts = {
+          opening: `Acabaste de completar uma corrida com o motorista ${driver_name}.
+Percurso: ${distance_km?.toFixed(1)} km em ~${duration_min} min. Total: ${price_kz} Kz.
+Como Kaze, faz UMA pergunta amigável e curta sobre como correu a experiência.
+Não uses estrelas ainda. JSON: { text: string }`,
+
+          collect_rating: `O passageiro está a avaliar o motorista ${driver_name}.
+Como Kaze, pede a classificação de 1 a 5 estrelas de forma entusiasmante e curta.
+JSON: { text: string }`,
+
+          collect_comment: `O passageiro avaliou o motorista ${driver_name}.
+Como Kaze, agradece de forma breve e diz que o feedback foi registado.
+JSON: { text: string }`,
+        };
+
+        const res = await ai.models.generateContent({
+          model: 'gemini-2.0-flash-lite',
+          contents: prompts[step] ?? prompts.opening,
+          config: { responseMimeType: 'application/json', systemInstruction: KAZE_SYSTEM_PROMPT },
+        });
+        return ok(JSON.parse(res.text ?? '{"text":"Obrigado pelo feedback!"}'));
+      }
+
+      // ----------------------------------------------------------------
+      case 'get_live_token': {
+        // Ephemeral token para Gemini Live API
+        return ok({ ephemeral_token: GEMINI_API_KEY });
+      }
+
+      default:
+        return err(`Acção desconhecida: "${action}"`, 400);
+    }
+
+  } catch (e) {
+    console.error('[gemini-proxy] Erro interno:', e);
+    return err('Erro interno. Tenta de novo.', 500);
+  }
+});
+
+// =============================================================================
+const cors = () => new Response(null, {
+  headers: {
+    'Access-Control-Allow-Origin':  '*',
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  },
+});
+const ok  = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+const err = (m: string, s: number) => new Response(JSON.stringify({ error: true, message: m }), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });

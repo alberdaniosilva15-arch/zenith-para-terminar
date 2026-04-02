@@ -1,0 +1,63 @@
+/* MOTOGO AI v3.0 — MFUMU ZENITH EDITION — Global Styles */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,700;1,700&family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    background-color: #0B0B0B;
+    color: #E5E2E1;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::-webkit-scrollbar { width: 0; }
+}
+
+@layer components {
+  .leather-texture {
+    background-color: #0B0B0B;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+  }
+  .golden-gradient { background: linear-gradient(135deg, #E6C364 0%, #C9A84C 100%); color: #3D2E00; }
+  .gilded-gradient { background: linear-gradient(135deg, #E6C364 0%, #C9A84C 100%); }
+  .glass-shield { background: rgba(53,53,52,0.6); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
+  .gold-glow { text-shadow: 0 0 15px rgba(230,195,100,0.4); }
+  .gold-box-glow { box-shadow: 0 0 25px rgba(201,168,76,0.35); }
+  .vault-shadow { box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
+  .diamond-orb { filter: blur(80px); background: radial-gradient(circle, rgba(230,195,100,0.15) 0%, rgba(230,195,100,0) 70%); }
+  .ghost-border { border: 1px solid rgba(77,70,55,0.2); }
+  .gold-grain {
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='grain'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23grain)' opacity='0.04'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+  }
+  .vault-indicator-track { background-color: #0E0E0E; border-radius: 99px; height: 6px; overflow: hidden; }
+  .vault-indicator-fill { background: linear-gradient(90deg, #C9A84C, #E6C364); height: 100%; border-radius: 99px; box-shadow: 0 0 8px rgba(230,195,100,0.5); transition: width 0.4s ease-in-out; }
+  .no-scrollbar { scrollbar-width: none; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .material-symbols-outlined { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; font-size: 24px; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; direction: ltr; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+  .luxury-transition { transition: all 400ms ease-in-out; }
+}
+
+@layer utilities {
+  @keyframes pulse-gold { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  .animate-pulse-gold { animation: pulse-gold 2s ease-in-out infinite; }
+  @keyframes shimmer { 0%{background-position:-200% center} 100%{background-position:200% center} }
+  .animate-shimmer { background: linear-gradient(90deg,#C9A84C 25%,#F5E6A3 50%,#C9A84C 75%); background-size:200% auto; animation: shimmer 3s linear infinite; -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .animate-in { animation-fill-mode: both; animation-duration: 300ms; }
+  .fade-in { animation-name: fade-in-anim; }
+  .slide-in-from-bottom-10 { animation-name: slide-up-anim; }
+  .zoom-in-95 { animation-name: zoom-in-anim; }
+  @keyframes fade-in-anim { from{opacity:0} to{opacity:1} }
+  @keyframes slide-up-anim { from{transform:translateY(2.5rem);opacity:0} to{transform:translateY(0);opacity:1} }
+  @keyframes zoom-in-anim { from{transform:scale(0.95);opacity:0} to{transform:scale(1);opacity:1} }
+  .duration-300 { animation-duration: 300ms; }
+  .duration-400 { animation-duration: 400ms; }
+  .duration-500 { animation-duration: 500ms; }
+  .duration-700 { animation-duration: 700ms; }
+}
