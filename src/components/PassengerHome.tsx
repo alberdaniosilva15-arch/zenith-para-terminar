@@ -3,7 +3,7 @@
 // Adicionado: ecrã de leilão — passageiro vê motoristas disponíveis e escolhe
 // =============================================================================
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Megaphone } from 'lucide-react';
 import RideTalk from './RideTalk';
 import Map3D from './Map3D';
@@ -11,7 +11,7 @@ import AgoraCall from './AgoraCall';
 import KazePreditivo  from './KazePreditivo';
 import FreePerkBanner from './FreePerkBanner';
 import ZonePriceMap   from './ZonePriceMap';
-import { mapService } from '../services/mapService';
+import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
 import { zonePriceService } from '../services/zonePrice';
 import type { RideState, AuctionState, AuctionDriver, LocationResult, LatLng } from '../types';
 import { RideStatus, UserRole } from '../types';
@@ -46,15 +46,36 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [zoneNames,    setZoneNames]    = useState<{ origin: string; dest: string } | null>(null);
   const [loadingRide,  setLoadingRide]  = useState(false);
 
-  const handleSearch = useCallback(async (query: string) => {
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleSearch = useCallback((query: string) => {
     setSearchQuery(query);
-    if (query.length < 1) {
-      setResults(mapService.LUANDA_STATIC_LOCATIONS?.filter(l => l.isPopular) as LocationResult[] ?? []);
+    // Cancel previous debounce
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+
+    // Avoid searching for 0-1 chars
+    if (query.length < 2) {
+      setResults(LUANDA_STATIC_LOCATIONS.filter((l: LocationResult) => l.isPopular) as LocationResult[] ?? []);
       return;
     }
-    setSearching(true);
-    try { setResults(await mapService.searchPlaces(query)); }
-    finally { setSearching(false); }
+
+    // Debounce actual API call
+    searchDebounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await mapService.searchPlaces(query);
+        setResults(res);
+      } finally {
+        setSearching(false);
+      }
+    }, 400);
+  }, []);
+
+  useEffect(() => {
+    return () => { if (searchDebounceRef.current) { clearTimeout(searchDebounceRef.current); } };
   }, []);
 
   const selectLocation = async (loc: LocationResult) => {

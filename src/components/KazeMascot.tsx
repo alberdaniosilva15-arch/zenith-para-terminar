@@ -26,6 +26,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
   const [isThinking,  setIsThinking]  = useState(false);
   const [thought,     setThought]     = useState<string | null>(null);
   const [isLive,      setIsLive]      = useState(false);
+  const [voiceError,  setVoiceError]  = useState<string | null>(null);
 
   const chatRef   = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -92,7 +93,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         onmessage: () => {},
         onclose: () => setIsLive(false),
       });
-      if (session) setIsLive(true);
+      if (session) { setIsLive(true); setVoiceError(null); }
     } catch { setIsLive(false); }
   };
 
@@ -221,6 +222,9 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
                     className="gilded-gradient text-on-primary px-10 py-5 rounded-[2rem] font-black text-[10px] uppercase tracking-[0.2em] shadow-[0_20px_40px_rgba(230,195,100,0.25)] hover:scale-105 active:scale-95 transition-all">
                     Sintonizar Kaze
                   </button>
+                )}
+                {voiceError && (
+                  <p className="text-[11px] text-error mt-3 px-6">{voiceError}</p>
                 )}
               </div>
             )}

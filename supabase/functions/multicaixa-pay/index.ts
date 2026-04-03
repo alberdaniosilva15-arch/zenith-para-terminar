@@ -21,6 +21,7 @@ const MULTICAIXA_BASE_URL   = Deno.env.get('MULTICAIXA_BASE_URL') ?? 'https://ap
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
 
 // Limites de carregamento (em KZS)
 const MIN_TOP_UP = 500;
@@ -219,10 +220,10 @@ Deno.serve(async (req: Request) => {
           p_user_id: user_id,
           p_amount:  amount_kz,
         });
-        return new Response(JSON.stringify({
+        return jsonOk({
           success: true,
           message: `Levantamento de ${amount_kz.toLocaleString('pt-AO')} Kz iniciado. Processamento em 24h úteis.`,
-        }), { headers: { 'Content-Type': 'application/json' } });
+        });
       }
 
       default:
@@ -236,7 +237,7 @@ Deno.serve(async (req: Request) => {
 });
 
 const corsOk = () => new Response(null, {
-  headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type, x-client-info, apikey' },
+  headers: { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Access-Control-Allow-Headers': 'authorization, content-type, x-client-info, apikey', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' },
 });
-const jsonOk  = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
-const jsonErr = (m: string, s: number) => new Response(JSON.stringify({ error: true, message: m }), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+const jsonOk  = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
+const jsonErr = (m: string, s: number) => new Response(JSON.stringify({ error: true, message: m }), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });

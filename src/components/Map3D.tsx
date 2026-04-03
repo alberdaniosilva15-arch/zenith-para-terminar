@@ -271,7 +271,7 @@ const Map3D: React.FC<Map3DProps> = ({
       map.remove();
       mapRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Helper: colocar / mover marcador estático ───────────────────────────
   const placeMarker = (
@@ -335,7 +335,7 @@ const Map3D: React.FC<Map3DProps> = ({
       pitch:    dataSaver ? 0 : 48,
       duration: 1400,
     });
-  }, [dataSaver]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dataSaver]);
 
   // ── 2. Reagir a mudanças de pickup / destination ─────────────────────────
   useEffect(() => {
@@ -348,9 +348,8 @@ const Map3D: React.FC<Map3DProps> = ({
       // Aguardar o evento 'load' (tratado no init)
       const onLoad = () => drawRouteAndMarkers(map, pickup!, destination!);
       map.once('load', onLoad);
-      return () => map.off('load', onLoad);
+      return () => { map.off('load', onLoad); };
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pickup?.lat, pickup?.lng, destination?.lat, destination?.lng]);
 
   // ── 3. Tracking em tempo real do motorista ───────────────────────────────

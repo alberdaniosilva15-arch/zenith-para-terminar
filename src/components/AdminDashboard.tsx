@@ -26,6 +26,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
       setLoading(true);
       try {
         const data = await geminiService.getAutonomousDecisions({
+          role: 'admin',
+          activeRideStatus: 'IDLE',
+          multiplier: 1,
           system_load: 0.85,
           luanda_time: new Date().toLocaleTimeString(),
           hot_zones: MOCK_ZONES.filter(z => z.demand > 80).map(z => z.name)

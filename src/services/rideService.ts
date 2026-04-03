@@ -125,21 +125,46 @@ class RideService {
     return { data: data as DbRide, error: null };
   }
 
-  async updateRideStatus(rideId: string, status: RideStatus, driverId?: string): Promise<RideUpdateResult> {
+  async updateRideStatus(rideId: string, status: RideStatus, actorId: string): Promise<RideUpdateResult> {
+    // States that only the assigned driver may transition
+    const driverOnlyStates = [
+      RideStatus.PICKING_UP,
+      RideStatus.IN_PROGRESS,
+      RideStatus.COMPLETED,
+    ];
+
     const tsField: Partial<Record<RideStatus, string>> = {
       [RideStatus.PICKING_UP]: 'pickup_at', [RideStatus.IN_PROGRESS]: 'started_at',
       [RideStatus.COMPLETED]: 'completed_at', [RideStatus.CANCELLED]: 'cancelled_at',
     };
+
     const payload: Record<string, unknown> = { status };
     const f = tsField[status]; if (f) payload[f] = new Date().toISOString();
+
+    // Base query always restricts to the ride id
     let query = supabase.from('rides').update(payload).eq('id', rideId);
-    if (driverId) query = query.eq('driver_id', driverId);
+
+    if (driverOnlyStates.includes(status)) {
+      // Only the assigned driver may perform these transitions
+      query = query.eq('driver_id', actorId);
+    } else {
+      // For other transitions (eg. CANCELLED) allow either participant
+      query = query.or(`driver_id.eq.${actorId},passenger_id.eq.${actorId}`);
+    }
+
     const { data, error } = await query.select().single();
     if (error) return { data: null, error: { code: error.code, message: 'Erro ao actualizar corrida.' } };
+
+    // If ride finished or cancelled, mark driver as available when applicable
     if (status === RideStatus.COMPLETED || status === RideStatus.CANCELLED) {
-      if (driverId) await supabase.from('driver_locations').update({ status: 'available' }).eq('driver_id', driverId);
-      if (status === RideStatus.COMPLETED && data) await this.processPayment(data as DbRide);
+      const updated = data as DbRide | null;
+      if (updated && updated.driver_id) {
+        await supabase.from('driver_locations').update({ status: 'available' }).eq('driver_id', updated.driver_id);
+      }
+      // Pagamento processado automaticamente pelo trigger DB trg_payment_on_complete
+      // Ver: migrations/schema.sql -> trigger_process_payment_on_complete
     }
+
     return { data: data as DbRide, error: null };
   }
 
@@ -158,18 +183,31 @@ class RideService {
   }
 
   async getActiveRide(userId: string): Promise<(DbRide & { driver_name?: string; passenger_name?: string }) | null> {
+    // Buscar corrida principal, sem depender de nomes de FK específicos
     const { data, error } = await supabase.from('rides')
-      .select('*, driver:profiles!rides_driver_id_fkey(name), passenger:profiles!rides_passenger_id_fkey(name)')
+      .select('*')
       .or(`passenger_id.eq.${userId},driver_id.eq.${userId}`)
       .not('status', 'in', `(${RideStatus.COMPLETED},${RideStatus.CANCELLED})`)
       .order('created_at', { ascending: false }).limit(1).maybeSingle();
     if (error) { console.error('[rideService.getActiveRide]', error); return null; }
     if (!data) return null;
-    const row = data as Record<string, unknown>;
+
+    const rideRow = data as DbRide;
+
+    // Buscar nomes de driver/passenger explicitamente para evitar dependência de
+    // nomes de foreign key no schema. Fazer em paralelo para performance.
+    const [driverRes, passengerRes] = await Promise.all([
+      rideRow.driver_id ? supabase.from('profiles').select('name').eq('user_id', rideRow.driver_id).single() : Promise.resolve({ data: null }),
+      rideRow.passenger_id ? supabase.from('profiles').select('name').eq('user_id', rideRow.passenger_id).single() : Promise.resolve({ data: null }),
+    ]);
+
+    const driverName = (driverRes as any)?.data?.name ?? undefined;
+    const passengerName = (passengerRes as any)?.data?.name ?? undefined;
+
     return {
-      ...(data as DbRide),
-      driver_name:    (row.driver    as { name?: string } | null)?.name,
-      passenger_name: (row.passenger as { name?: string } | null)?.name,
+      ...(rideRow as DbRide),
+      driver_name: driverName,
+      passenger_name: passengerName,
     };
   }
 
@@ -228,11 +266,23 @@ class RideService {
   }
 
   async updateDriverLocation(driverId: string, coords: LatLng, heading?: number): Promise<void> {
-    const { error } = await supabase.from('driver_locations').upsert({
-      driver_id: driverId, location: `POINT(${coords.lng} ${coords.lat})`,
-      heading: heading ?? null, updated_at: new Date().toISOString(),
-    });
-    if (error) console.error('[rideService.updateDriverLocation]', error);
+    const payload = {
+      location: `POINT(${coords.lng} ${coords.lat})`,
+      heading: heading ?? null,
+      updated_at: new Date().toISOString(),
+    };
+    try {
+      // Primeiro tenta actualizar a linha existente para não sobrescrever `status`.
+      const { data, error } = await supabase.from('driver_locations').update(payload).eq('driver_id', driverId).select();
+      if (error) { console.error('[rideService.updateDriverLocation] update error', error); return; }
+      // Se não existia, inserir com status 'available' para não deixar status NULL.
+      if (!data || (Array.isArray(data) && data.length === 0)) {
+        const { error: insErr } = await supabase.from('driver_locations').insert({ driver_id: driverId, ...payload, status: 'available' });
+        if (insErr) console.error('[rideService.updateDriverLocation] insert error', insErr);
+      }
+    } catch (e) {
+      console.error('[rideService.updateDriverLocation] exception', e);
+    }
   }
 
   async setDriverStatus(driverId: string, status: 'offline' | 'available' | 'busy'): Promise<void> {
@@ -279,11 +329,7 @@ class RideService {
     } catch { return { success: false, message: 'Erro de rede. Verifica a ligação e tenta de novo.' }; }
   }
 
-  private async processPayment(ride: DbRide): Promise<void> {
-    if (!ride.driver_id) return;
-    const { error } = await supabase.rpc('process_ride_payment', { p_ride_id: ride.id, p_passenger_id: ride.passenger_id, p_driver_id: ride.driver_id, p_amount: ride.price_kz });
-    if (error) console.error('[rideService.processPayment] CRÍTICO:', error);
-  }
+  
 }
 
 export const rideService = new RideService();

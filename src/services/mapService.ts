@@ -163,21 +163,21 @@ export const mapService = {
       l.name.toLowerCase().includes(q) || l.description.toLowerCase().includes(q)
     );
 
-    // Kilamba: gerar quarteirões A-Z
+    // Kilamba: gerar quarteirões A-H (evitar offsets inventados que produzem
+    // coordenadas absurdas). Usar passos pequenos e limitar a quarteirões reais.
     if (q.includes('kilamba')) {
-      const kilambaBlocks: LocationResult[] = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(
-        (letter, i) => ({
-          name:        `Kilamba — Quarteirão ${letter}`,
-          type:        'bairro' as const,
-          description: `Centralidade do Kilamba, Sector ${Math.floor(i / 5) + 1}`,
-          coords:      {
-            lat: -8.978 + i * 0.002,
-            lng: 13.218 + i * 0.001,
-          },
-        })
-      );
+      const letters = 'ABCDEFGH'.split('');
+      const kilambaBlocks: LocationResult[] = letters.map((letter, i) => ({
+        name:        `Kilamba — Quarteirão ${letter}`,
+        type:        'bairro' as const,
+        description: `Centralidade do Kilamba, Sector ${Math.floor(i / 2) + 1}`,
+        coords:      {
+          lat: -8.978 + i * 0.001, // passos pequenos (~110m)
+          lng: 13.218 + i * 0.001,
+        },
+      }));
       const filtered = kilambaBlocks.filter((b) => b.name.toLowerCase().includes(q));
-      return filtered.length ? filtered : kilambaBlocks.slice(0, 10);
+      return filtered.length ? filtered : kilambaBlocks.slice(0, 8);
     }
 
     // Se não há API key, retornar apenas resultados locais

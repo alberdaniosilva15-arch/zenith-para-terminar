@@ -12,6 +12,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
 
 // ─── Configuração de preços dinâmicos (fallback) ─────────────────────────────
 const PRICING = {
@@ -96,14 +97,14 @@ Deno.serve(async (req: Request) => {
 
         if (zp) {
           const distKm   = zp.distance_km ?? haversineKm(origin.lat, origin.lng, dest.lat, dest.lng);
-          const hourUTC1 = (new Date().getUTCHours() + 1) % 24;
+          const hourLuanda = Number(new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hour12: false, timeZone: 'Africa/Luanda' }).format(new Date()));
 
           return jsonOk({
             price_kz:         zp.price_kz,
             distance_km:      Math.round(distKm * 100) / 100,
             duration_min:     Math.round((distKm / PRICING.SPEED_KMH.medium) * 60),
             surge_multiplier: 1.0,                // sem surge nos preços fixos
-            traffic_level:    getTrafficLevel(hourUTC1),
+            traffic_level:    getTrafficLevel(hourLuanda),
             is_zone_price:    true,               // flag para o frontend mostrar "Preço Fixo"
             origin_zone:      originZone,
             dest_zone:        destZone,
@@ -120,11 +121,11 @@ Deno.serve(async (req: Request) => {
 
     // ── 2. Fallback: cálculo dinâmico (trajectos sem preço fixo) ──────────
     const distanceKm     = haversineKm(origin.lat, origin.lng, dest.lat, dest.lng);
-    const hourUTC1       = (new Date().getUTCHours() + 1) % 24;
-    const trafficLevel   = getTrafficLevel(hourUTC1);
+    const hourLuanda     = Number(new Intl.DateTimeFormat('en-GB', { hour: 'numeric', hour12: false, timeZone: 'Africa/Luanda' }).format(new Date()));
+    const trafficLevel   = getTrafficLevel(hourLuanda);
     const speedKmh       = PRICING.SPEED_KMH[trafficLevel];
     const durationMin    = Math.round((distanceKm / speedKmh) * 60);
-    const surgeMultiplier = getSurgeMultiplier(hourUTC1);
+    const surgeMultiplier = getSurgeMultiplier(hourLuanda);
 
     const baseKz   = PRICING.BASE_KZ;
     const perKmKz  = distanceKm * PRICING.PER_KM_KZ;
@@ -165,8 +166,8 @@ function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): nu
 }
 function toRad(d: number) { return d * Math.PI / 180; }
 function getTrafficLevel(h: number): 'low'|'medium'|'high' {
-  if ((h>=7&&h<=9)||(h>=17&&h<=20)) return 'high';
-  if ((h>=12&&h<=14)||(h>=6&&h<=22)) return 'medium';
+  if ((h >= 7 && h <= 9) || (h >= 17 && h <= 20)) return 'high';
+  if (h >= 6 && h < 22) return 'medium';
   return 'low';
 }
 function getSurgeMultiplier(h: number): number {
@@ -174,11 +175,11 @@ function getSurgeMultiplier(h: number): number {
   return 1.0;
 }
 function corsOk(): Response {
-  return new Response(null, { headers: { 'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type' } });
+  return new Response(null, { headers: { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' } });
 }
 function jsonOk(d: unknown): Response {
-  return new Response(JSON.stringify(d), { status:200, headers:{'Content-Type':'application/json','Access-Control-Allow-Origin':'*'} });
+  return new Response(JSON.stringify(d), { status:200, headers:{'Content-Type':'application/json','Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
 }
 function jsonError(m: string, s: number): Response {
-  return new Response(JSON.stringify({error:true,message:m}), { status:s, headers:{'Content-Type':'application/json','Access-Control-Allow-Origin':'*'} });
+  return new Response(JSON.stringify({error:true,message:m}), { status:s, headers:{'Content-Type':'application/json','Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
 }

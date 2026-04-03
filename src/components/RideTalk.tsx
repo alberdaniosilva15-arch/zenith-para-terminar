@@ -3,9 +3,9 @@ import React, { useState, useMemo } from 'react';
 import { UserRole, ChatMessage } from '../types';
 
 const MOCK_MESSAGES: ChatMessage[] = [
-  { id: '1', senderRole: UserRole.DRIVER, text: "Engarrafamento forte na descida da Estalagem. Evitem!", zone: "Viana", timestamp: Date.now(), type: 'traffic', confirmations: 12 },
-  { id: '2', senderRole: UserRole.PASSENGER, text: "Bomba de combustível na Mutamba está com fila curta.", zone: "Maianga", timestamp: Date.now() - 600000, type: 'fuel', confirmations: 4 },
-  { id: '3', senderRole: UserRole.DRIVER, text: "Operação Stop pesada no nó da Samba.", zone: "Geral", timestamp: Date.now() - 1200000, type: 'safety', confirmations: 28 },
+  { id: '1', senderRole: UserRole.DRIVER, senderName: 'Kuko', text: "Engarrafamento forte na descida da Estalagem. Evitem!", zone: "Viana", timestamp: Date.now(), type: 'traffic', confirmations: 12 },
+  { id: '2', senderRole: UserRole.PASSENGER, senderName: 'Ana', text: "Bomba de combustível na Mutamba está com fila curta.", zone: "Maianga", timestamp: Date.now() - 600000, type: 'fuel', confirmations: 4 },
+  { id: '3', senderRole: UserRole.DRIVER, senderName: 'Manel', text: "Operação Stop pesada no nó da Samba.", zone: "Geral", timestamp: Date.now() - 1200000, type: 'safety', confirmations: 28 },
 ];
 
 const RideTalk: React.FC<{ zone: string, role: UserRole }> = ({ zone, role }) => {
@@ -20,11 +20,19 @@ const RideTalk: React.FC<{ zone: string, role: UserRole }> = ({ zone, role }) =>
     });
   }, [zone, activeCat]);
 
-  const handleVoiceRecord = () => {
-    setIsRecording(!isRecording);
+  const handleVoiceRecord = async () => {
     if (!isRecording) {
-      // Iniciar captura do microfone
-      navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Permissão concedida — não manter stream aberto aqui
+        stream.getTracks().forEach(t => t.stop());
+        setIsRecording(true);
+      } catch (err) {
+        console.error('[RideTalk] getUserMedia erro:', err);
+        alert('Não foi possível aceder ao microfone. Verifica permissões do browser.');
+      }
+    } else {
+      setIsRecording(false);
     }
   };
 

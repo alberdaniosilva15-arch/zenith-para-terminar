@@ -48,16 +48,31 @@ export function useRide(): UseRideReturn {
   const driverLocUnsub = useRef<(() => void) | null>(null);
   const prevStatusRef  = useRef<RideStatus>(RideStatus.IDLE);
 
-  // ── v3.0: Persistência offline (localStorage) ────────────────────────────
-  // Se a rede cair a meio de uma corrida, o estado não perde-se
-  const RIDE_STORAGE_KEY = 'motogo_ride_state_v3';
+  // ── v3.0: Persistência de sessão (sessionStorage com fallback) ──────────
+  // Guarda o estado apenas por sessão; não persistir indefinidamente no cliente.
+  const RIDE_STORAGE_KEY = 'zenith_ride_session_v3';
+
+  const safeStorage = {
+    // Usar localStorage como fonte de verdade (compartilhada entre tabs)
+    get(key: string) {
+      try { return localStorage.getItem(key); } catch { /* fallback */ }
+      try { return sessionStorage.getItem(key); } catch { return null; }
+    },
+    set(key: string, value: string) {
+      try { localStorage.setItem(key, value); return; } catch { /* fallback */ }
+      try { sessionStorage.setItem(key, value); } catch { /* ignore */ }
+    },
+    remove(key: string) {
+      try { localStorage.removeItem(key); return; } catch { /* fallback */ }
+      try { sessionStorage.removeItem(key); } catch { /* ignore */ }
+    }
+  };
 
   const [ride, setRide] = useState<RideState>(() => {
     try {
-      const saved = localStorage.getItem(RIDE_STORAGE_KEY);
+      const saved = safeStorage.get(RIDE_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as RideState;
-        // Só restaura se não for IDLE (IDLE não precisa de persistência)
         if (parsed.status !== RideStatus.IDLE) return parsed;
       }
     } catch { /* corrupção de storage — ignora */ }
@@ -103,13 +118,32 @@ export function useRide(): UseRideReturn {
   // ── v3.0: Guarda estado da corrida no localStorage ───────────────────────
   useEffect(() => {
     if (ride.status === RideStatus.IDLE) {
-      localStorage.removeItem(RIDE_STORAGE_KEY);
+      safeStorage.remove(RIDE_STORAGE_KEY);
     } else {
       try {
-        localStorage.setItem(RIDE_STORAGE_KEY, JSON.stringify(ride));
+        safeStorage.set(RIDE_STORAGE_KEY, JSON.stringify(ride));
       } catch { /* storage cheio — ignora */ }
     }
   }, [ride]);
+
+  // Sincronizar estado entre abas usando localStorage 'storage' event
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== RIDE_STORAGE_KEY) return;
+      try {
+        if (!e.newValue) {
+          setRide(INITIAL_RIDE);
+          return;
+        }
+        const parsed = JSON.parse(e.newValue) as RideState;
+        if (parsed && parsed.status !== ride.status) {
+          setRide(parsed);
+        }
+      } catch { /* ignora valores inválidos */ }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [ride.status]);
 
   // ------------------------------------------------------------------
   // ✅ FIX 1: applyDbRide popula driverName e passengerName
@@ -137,6 +171,9 @@ export function useRide(): UseRideReturn {
   // ------------------------------------------------------------------
   const subscribeToRide = useCallback((rideId: string, driverId?: string) => {
     unsubRef.current?.();
+    // Cancelar qualquer subscrição de localização do motorista antes de resubscrever
+    driverLocUnsub.current?.();
+    driverLocUnsub.current = null;
     unsubRef.current = rideService.subscribeToRide(rideId, (updated) => {
       // Preservar nomes já conhecidos enquanto o Realtime não os devolve
       setRide(prev => ({

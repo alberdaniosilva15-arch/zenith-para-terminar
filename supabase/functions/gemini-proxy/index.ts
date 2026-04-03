@@ -21,6 +21,7 @@ const GEMINI_API_KEY    = Deno.env.get('GEMINI_API_KEY')!;
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
 
 // Rate limits por acção (requests por hora)
 const RATE_LIMITS: Record<string, number> = {
@@ -58,20 +59,47 @@ const IP_MAX_REQS  = 40;     // max 40 requests/minuto por IP (todas as acções
 interface IpEntry { count: number; windowStart: number; }
 const ipCounters = new Map<string, IpEntry>();
 
-function checkIpRateLimit(ip: string): boolean {
-  const now   = Date.now();
-  const entry = ipCounters.get(ip);
+// Persistência imediata: usar tabela `ip_rate_limits` para contagem por janela.
+// Se a operação DB falhar, cair para o fallback em memória.
+const supabasePersist = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
-  if (!entry || (now - entry.windowStart) > IP_WINDOW_MS) {
-    // Nova janela
-    ipCounters.set(ip, { count: 1, windowStart: now });
-    return true; // permitido
+async function checkIpRateLimit(ip: string): Promise<boolean> {
+  const now = Date.now();
+  const windowStartISO = new Date(now - (now % IP_WINDOW_MS)).toISOString();
+
+  try {
+    const ipHash = await hashIp(ip);
+
+    // Procurar entrada existente para a janela corrente
+    const { data } = await supabasePersist
+      .from('ip_rate_limits')
+      .select('request_count')
+      .eq('ip_hash', ipHash)
+      .eq('window_start', windowStartISO)
+      .maybeSingle();
+
+    if (!data) {
+      // Inserir nova janela com 1 pedido
+      await supabasePersist.from('ip_rate_limits').insert({ ip_hash: ipHash, window_start: windowStartISO, request_count: 1 });
+      return true;
+    }
+
+    const current = (data as any).request_count ?? 0;
+    if (current >= IP_MAX_REQS) return false;
+    await supabasePersist.from('ip_rate_limits').update({ request_count: current + 1 }).eq('ip_hash', ipHash).eq('window_start', windowStartISO);
+    return true;
+  } catch (e) {
+    // Falha na persistência — fallback para in-memory (best-effort)
+    console.warn('[gemini-proxy] ip rate limit DB check failed, falling back to memory', e);
+    const entry = ipCounters.get(ip);
+    if (!entry || (now - entry.windowStart) > IP_WINDOW_MS) {
+      ipCounters.set(ip, { count: 1, windowStart: now });
+      return true;
+    }
+    if (entry.count >= IP_MAX_REQS) return false;
+    entry.count++;
+    return true;
   }
-
-  if (entry.count >= IP_MAX_REQS) return false; // bloqueado
-
-  entry.count++;
-  return true;
 }
 
 // Hash simples do IP para logs (privacidade — não armazenar IP raw)
@@ -111,8 +139,8 @@ Deno.serve(async (req: Request) => {
     'unknown'
   );
 
-  if (!checkIpRateLimit(clientIp)) {
-    // Log assíncrono para análise (não bloqueia resposta)
+  if (!(await checkIpRateLimit(clientIp))) {
+    // Log assíncrono para análise (não bloqueia resposta) — garantir que há um registo
     hashIp(clientIp).then((ipHash) => {
       createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
         .from('ip_rate_limits')
@@ -138,7 +166,10 @@ Deno.serve(async (req: Request) => {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const { data: { user }, error: authErr } = await supabaseUser.auth.getUser(token);
+    // Note: the SDK reads the token from the Authorization header passed
+    // in the client; passing the token as an argument to getUser() is
+    // ignored by @supabase/supabase-js v2. Call without the token arg.
+    const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
     if (authErr || !user) return err('Sessão inválida ou expirada. Faz login novamente.', 401);
 
     // ----------------------------------------------------------------
@@ -328,8 +359,13 @@ JSON: { text: string }`,
 
       // ----------------------------------------------------------------
       case 'get_live_token': {
-        // Ephemeral token para Gemini Live API
-        return ok({ ephemeral_token: GEMINI_API_KEY });
+        // SECURITY: Never return the master GEMINI_API_KEY to a caller.
+        // Ephemeral token generation must be performed via a dedicated,
+        // auditable admin flow or the official Gemini tokens endpoint.
+        // Currently a generation endpoint is NOT implemented here. Return
+        // 501 Not Implemented with a clear message so the frontend can
+        // inform the user that voice is unavailable rather than silently fail.
+        return err('Ação não suportada: geração de token efémero não configurada no servidor. Contacta o administrador para ativar.', 501);
       }
 
       default:
@@ -345,10 +381,11 @@ JSON: { text: string }`,
 // =============================================================================
 const cors = () => new Response(null, {
   headers: {
-    'Access-Control-Allow-Origin':  '*',
+    'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Vary': 'Origin',
   },
 });
-const ok  = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
-const err = (m: string, s: number) => new Response(JSON.stringify({ error: true, message: m }), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+const ok  = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
+const err = (m: string, s: number) => new Response(JSON.stringify({ error: true, message: m }), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
