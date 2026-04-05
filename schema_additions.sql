@@ -51,16 +51,16 @@ CREATE POLICY "ai_logs: service insert" ON public.ai_usage_logs FOR INSERT WITH 
 
 ALTER VIEW public.ai_usage_last_hour SET (security_invoker = true);
 
--- 3. DRIVER BIDS
-CREATE TABLE IF NOT EXISTS public.driver_bids (
-  id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  ride_id    UUID REFERENCES public.rides(id) ON DELETE CASCADE,
-  driver_id  UUID REFERENCES public.users(id),
-  status     TEXT DEFAULT 'pending',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(ride_id, driver_id)
-);
-ALTER TABLE public.driver_bids ENABLE ROW LEVEL SECURITY;
+-- 3. DRIVER BIDS (Removido - Erro 47: Unused em frontend)
+-- CREATE TABLE IF NOT EXISTS public.driver_bids (
+--   id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+--   ride_id    UUID REFERENCES public.rides(id) ON DELETE CASCADE,
+--   driver_id  UUID REFERENCES public.users(id),
+--   status     TEXT DEFAULT 'pending',
+--   created_at TIMESTAMPTZ DEFAULT NOW(),
+--   UNIQUE(ride_id, driver_id)
+-- );
+-- ALTER TABLE public.driver_bids ENABLE ROW LEVEL SECURITY;
 
 -- 4. ✅ FIX: find_drivers_for_auction retorna TODOS os campos que o frontend precisa
 --    (avatar_url, total_rides, level, eta_min, heading além dos básicos)
@@ -210,49 +210,49 @@ ALTER TABLE public.ip_rate_limits ENABLE ROW LEVEL SECURITY;
 -- A tabela existia mas sem políticas → INSERT de motoristas falhava silenciosamente
 -- =============================================================================
 
--- Motorista pode ver os seus próprios bids
-CREATE POLICY "driver_bids: motorista vê próprios"
-ON public.driver_bids FOR SELECT
-USING (auth.uid() = driver_id);
+-- -- Motorista pode ver os seus próprios bids
+-- CREATE POLICY "driver_bids: motorista vê próprios"
+-- ON public.driver_bids FOR SELECT
+-- USING (auth.uid() = driver_id);
 
--- Passageiro vê bids da sua corrida
-CREATE POLICY "driver_bids: passageiro vê corrida"
-ON public.driver_bids FOR SELECT
-USING (
-  EXISTS (
-    SELECT 1 FROM public.rides
-    WHERE rides.id = driver_bids.ride_id
-      AND rides.passenger_id = auth.uid()
-  )
-);
+-- -- Passageiro vê bids da sua corrida
+-- CREATE POLICY "driver_bids: passageiro vê corrida"
+-- ON public.driver_bids FOR SELECT
+-- USING (
+--   EXISTS (
+--     SELECT 1 FROM public.rides
+--     WHERE rides.id = driver_bids.ride_id
+--       AND rides.passenger_id = auth.uid()
+--   )
+-- );
 
--- Motorista pode criar bid (apenas uma por corrida — UNIQUE já existe)
-CREATE POLICY "driver_bids: motorista cria"
-ON public.driver_bids FOR INSERT
-WITH CHECK (
-  auth.uid() = driver_id
-  AND EXISTS (
-    SELECT 1 FROM public.rides
-    WHERE rides.id = ride_id
-      AND rides.status = 'searching'
-  )
-);
+-- -- Motorista pode criar bid (apenas uma por corrida — UNIQUE já existe)
+-- CREATE POLICY "driver_bids: motorista cria"
+-- ON public.driver_bids FOR INSERT
+-- WITH CHECK (
+--   auth.uid() = driver_id
+--   AND EXISTS (
+--     SELECT 1 FROM public.rides
+--     WHERE rides.id = ride_id
+--       AND rides.status = 'searching'
+--   )
+-- );
 
--- Motorista pode atualizar o seu próprio bid (ex: accepted → declined)
-CREATE POLICY "driver_bids: motorista atualiza próprio"
-ON public.driver_bids FOR UPDATE
-USING (auth.uid() = driver_id);
+-- -- Motorista pode atualizar o seu próprio bid (ex: accepted → declined)
+-- CREATE POLICY "driver_bids: motorista atualiza próprio"
+-- ON public.driver_bids FOR UPDATE
+-- USING (auth.uid() = driver_id);
 
--- Passageiro pode eliminar bids da sua corrida (ex: ao cancelar corrida)
-CREATE POLICY "driver_bids: passageiro elimina"
-ON public.driver_bids FOR DELETE
-USING (
-  EXISTS (
-    SELECT 1 FROM public.rides
-    WHERE rides.id = driver_bids.ride_id
-      AND rides.passenger_id = auth.uid()
-  )
-);
+-- -- Passageiro pode eliminar bids da sua corrida (ex: ao cancelar corrida)
+-- CREATE POLICY "driver_bids: passageiro elimina"
+-- ON public.driver_bids FOR DELETE
+-- USING (
+--   EXISTS (
+--     SELECT 1 FROM public.rides
+--     WHERE rides.id = driver_bids.ride_id
+--       AND rides.passenger_id = auth.uid()
+--   )
+-- );
 
 -- =============================================================================
 -- FIM

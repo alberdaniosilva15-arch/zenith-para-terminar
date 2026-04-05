@@ -4,6 +4,63 @@
 -- Inclui: Kaze Preditivo, MotoGo Score, Free Perk, Zona Preços, Escolar
 -- =============================================================================
 
+ALTER TYPE ride_status ADD VALUE IF NOT EXISTS 'browsing' BEFORE 'searching';
+
+CREATE OR REPLACE FUNCTION public.process_withdrawal(p_user_id UUID, p_amount NUMERIC)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_balance NUMERIC;
+BEGIN
+  SELECT balance INTO v_balance FROM public.wallets WHERE user_id = p_user_id FOR UPDATE;
+  IF v_balance < p_amount THEN
+    RAISE EXCEPTION 'Saldo insuficiente';
+  END IF;
+  UPDATE public.wallets SET balance = balance - p_amount, updated_at = NOW() WHERE user_id = p_user_id;
+  INSERT INTO public.transactions (user_id, amount, type, description, balance_after)
+  VALUES (p_user_id, -p_amount, 'withdrawal', 'Levantamento', v_balance - p_amount);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.process_partner_payment(p_user_id UUID, p_partner_id UUID, p_amount_kz NUMERIC)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  v_balance NUMERIC;
+  v_partner_balance NUMERIC;
+BEGIN
+  SELECT balance INTO v_balance FROM public.wallets WHERE user_id = p_user_id FOR UPDATE;
+  IF v_balance < p_amount_kz THEN
+    RAISE EXCEPTION 'Saldo insuficiente';
+  END IF;
+  UPDATE public.wallets SET balance = balance - p_amount_kz, updated_at = NOW() WHERE user_id = p_user_id;
+  INSERT INTO public.transactions (user_id, amount, type, description, balance_after)
+  VALUES (p_user_id, -p_amount_kz, 'ride_payment', 'Pagamento a Parceiro MotoGo', v_balance - p_amount_kz);
+
+  SELECT balance INTO v_partner_balance FROM public.wallets WHERE user_id = p_partner_id FOR UPDATE;
+  UPDATE public.wallets SET balance = balance + p_amount_kz, updated_at = NOW() WHERE user_id = p_partner_id;
+  INSERT INTO public.transactions (user_id, amount, type, description, balance_after)
+  VALUES (p_partner_id, p_amount_kz, 'ride_earning', 'Recebimento Kz', v_partner_balance + p_amount_kz);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.increment_post_likes(post_id UUID)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  UPDATE public.posts SET likes = likes + 1 WHERE id = post_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.get_zones_demand()
+RETURNS TABLE(name TEXT, demand INT, risk INT) LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  -- Dummy implementation to return zones based on rides, for AdminDashboard
+  RETURN QUERY SELECT 
+    z.zone_name::TEXT as name, 
+    (RANDOM() * 100)::INT as demand,  -- In a real app this would aggregate real rides
+    (RANDOM() * 30)::INT as risk
+  FROM (VALUES ('Viana'), ('Cazenga'), ('Talatona'), ('Maianga'), ('Zango')) as z(zone_name);
+END;
+$$;
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 1. COLUNA km_total e free_km_available em profiles
 --    (tracking do programa de fidelidade 70km → 5km grátis)
@@ -435,8 +492,10 @@ $$;
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 11. ÍNDICES adicionais
 -- ─────────────────────────────────────────────────────────────────────────────
-CREATE INDEX IF NOT EXISTS idx_school_tracking_token
+CREATE INDEX IF NOT EXISTS idx_tracking_sessions_token 
   ON public.school_tracking_sessions(public_token);
+
+CREATE POLICY "tracking: owner update" ON public.school_tracking_sessions FOR UPDATE USING (EXISTS (SELECT 1 FROM public.contracts WHERE id = contract_id AND user_id = auth.uid()));
 
 CREATE INDEX IF NOT EXISTS idx_zone_prices_origin
   ON public.zone_prices(origin_zone, dest_zone);
