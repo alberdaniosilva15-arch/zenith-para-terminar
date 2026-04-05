@@ -164,7 +164,7 @@ CREATE TRIGGER t_wallets_updated_at  BEFORE UPDATE ON public.wallets  FOR EACH R
 CREATE OR REPLACE FUNCTION handle_new_user()
 RETURNS TRIGGER AS $$
 BEGIN
-  INSERT INTO public.users    (id, email, role) VALUES (NEW.id, NEW.email, 'passenger');
+  INSERT INTO public.users    (id, email, role) VALUES (NEW.id, NEW.email, COALESCE(NEW.raw_user_meta_data->>'role', 'passenger')::user_role);
   INSERT INTO public.profiles (user_id, name)   VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'name', split_part(NEW.email, '@', 1)));
   INSERT INTO public.wallets  (user_id, balance) VALUES (NEW.id, 0.00);
   RETURN NEW;
@@ -275,6 +275,7 @@ CREATE POLICY "rides: passageiro vê" ON public.rides FOR SELECT USING (auth.uid
 CREATE POLICY "rides: motorista vê"  ON public.rides FOR SELECT USING (auth.uid() = driver_id OR (status = 'searching' AND driver_id IS NULL));
 CREATE POLICY "rides: cria"          ON public.rides FOR INSERT WITH CHECK (auth.uid() = passenger_id);
 CREATE POLICY "rides: actualiza"     ON public.rides FOR UPDATE USING (auth.uid() = driver_id OR (driver_id IS NULL AND status = 'searching'));
+CREATE POLICY "rides: passenger cancel" ON public.rides FOR UPDATE USING (auth.uid() = passenger_id AND status NOT IN ('completed', 'cancelled'));
 CREATE POLICY "rides: admin"         ON public.rides FOR ALL    USING (EXISTS (SELECT 1 FROM public.users WHERE id = auth.uid() AND role = 'admin'));
 
 CREATE POLICY "wallets: próprio" ON public.wallets FOR SELECT USING (auth.uid() = user_id);
