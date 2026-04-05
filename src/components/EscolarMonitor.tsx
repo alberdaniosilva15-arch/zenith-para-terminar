@@ -18,6 +18,10 @@ import { rideService } from '../services/rideService';
 import type { RideState, SchoolTrackingSession } from '../types';
 import { RideStatus } from '../types';
 
+interface EscolarSessionState extends SchoolTrackingSession {
+  ride_status?: string;
+}
+
 interface EscolarMonitorProps {
   contractId:    string;
   contractTitle: string;
@@ -27,7 +31,7 @@ interface EscolarMonitorProps {
 const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
   contractId, contractTitle, activeRide
 }) => {
-  const [session,    setSession]    = useState<SchoolTrackingSession | null>(null);
+  const [session,    setSession]    = useState<EscolarSessionState | null>(null);
   const [creating,   setCreating]   = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [parentName, setParentName] = useState('');

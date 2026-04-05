@@ -1,0 +1,22 @@
+﻿# Dependências
+node_modules/
+vendor/
+__pycache__/
+
+# Arquivos de ambiente/configuração
+.env
+.env.local
+.env.*.local
+config.json
+secrets.yml
+
+# IDE
+.vscode/
+.idea/
+*.suo
+
+# Logs e temporários
+*.log
+*.tmp
+dist/
+build/

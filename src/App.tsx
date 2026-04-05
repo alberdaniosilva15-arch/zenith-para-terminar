@@ -27,6 +27,7 @@ import PostRideReview from './components/PostRideReview';
 import ZonePriceMap from './components/ZonePriceMap';
 import ParentTrackingPage from './components/ParentTrackingPage';
 import { geminiService } from './services/geminiService';
+import Toast from './components/Toast';
 
 // =============================================================================
 // APP INTERNO (dentro do AuthProvider)
@@ -156,8 +157,8 @@ const AppInner: React.FC = () => {
     }
   };
 
-  // Kaze só activo quando há corrida em progresso (poupa tokens)
-  const kazeActive = !kazeSilent && ride.status !== RideStatus.IDLE;
+  // Kaze sempre disponível (chat + explore), pensamentos espontâneos só durante corridas
+  const kazeActive = !kazeSilent;
 
   return (
     <Layout
@@ -173,7 +174,7 @@ const AppInner: React.FC = () => {
     >
       {renderContent()}
 
-      {/* Kaze condicional — só aparece durante corrida activa */}
+      {/* Kaze — sempre disponível para chat e assistência */}
       {kazeActive && (
         <KazeMascot
           role={role}
@@ -189,6 +190,9 @@ const AppInner: React.FC = () => {
         onSubmit={submitReview}
         onDismiss={dismissPostRide}
       />
+
+      {/* Toast — notificações globais de sistema */}
+      <Toast />
     </Layout>
   );
 };

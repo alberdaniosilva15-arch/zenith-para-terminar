@@ -274,7 +274,7 @@ const Map3D: React.FC<Map3DProps> = ({
   }, []);
 
   // ── Helper: colocar / mover marcador estático ───────────────────────────
-  const placeMarker = (
+  const placeMarker = useCallback((
     type: 'origin' | 'dest',
     map:  mapboxgl.Map,
     coords: [number, number]
@@ -298,7 +298,7 @@ const Map3D: React.FC<Map3DProps> = ({
         markerDestRef.current.setLngLat(coords);
       }
     }
-  };
+  }, []);
 
   // ── Helper: desenhar rota + marcadores + ajustar câmara ─────────────────
   const drawRouteAndMarkers = useCallback(async (
@@ -350,7 +350,7 @@ const Map3D: React.FC<Map3DProps> = ({
       map.once('load', onLoad);
       return () => { map.off('load', onLoad); };
     }
-  }, [pickup?.lat, pickup?.lng, destination?.lat, destination?.lng]);
+  }, [pickup?.lat, pickup?.lng, destination?.lat, destination?.lng, drawRouteAndMarkers]);
 
   // ── 3. Tracking em tempo real do motorista ───────────────────────────────
   // carLocation é actualizado externamente via Supabase Realtime

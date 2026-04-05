@@ -58,8 +58,13 @@ const RidesHistory: React.FC<RidesHistoryProps> = ({ userId }) => {
 
     geminiService.getKazeInsight({
       role:   role,
-      status: `${completedCount} corridas concluídas, ${cancelledCount} canceladas, taxa ${completionRate}%`,
-    }).then(insight => setAiSummary(insight.text));
+      status: RideStatus.IDLE,
+      extraText: `${completedCount} corridas concluídas, ${cancelledCount} canceladas, taxa ${completionRate}%`,
+    } as any).then(insight => {
+        if (insight && insight.text) {
+          setAiSummary(insight.text);
+        }
+    });
   }, [rides.length, role]);
 
   const loadMore = () => {

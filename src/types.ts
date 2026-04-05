@@ -127,6 +127,8 @@ export interface PostRideState {
   driverName:   string | null;
   driverRating: number | null;
   priceKz:      number | null;
+  distanceKm?:  number | null;
+  durationMin?: number | null;
 }
 
 export interface PostRideReviewInput {

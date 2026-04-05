@@ -63,7 +63,13 @@ const Login: React.FC = () => {
     if (role === UserRole.PASSENGER) {
       setLoading(true); reset();
       try {
-        const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+        const { error } = await supabase.auth.signInWithOtp({ 
+          email, 
+          options: { 
+            data: { name, role: 'passenger' }, 
+            emailRedirectTo: window.location.origin 
+          } 
+        });
         if (error) setError(error.message);
         else {
           setSuccess('Link mágico enviado! Verifica o teu email (verifica spam).');
