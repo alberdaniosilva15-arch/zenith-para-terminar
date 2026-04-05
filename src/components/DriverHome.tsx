@@ -49,38 +49,78 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const goOnline = useCallback(async () => {
     setIsOnline(true);
     await rideService.setDriverStatus(driverId, 'available');
-
-    // GPS tracking
-    gpsRef.current = mapService.watchPosition(async (coords, heading) => {
-      await rideService.updateDriverLocation(driverId, coords, heading);
-    });
-
-    // Subscrição 1: corridas em "searching" (fallback)
-    const rides = await rideService.getAvailableRides();
-    setAvailableRides(rides);
-    if (rides.length > 0) { setIncomingRide(rides[0]); setIsAuctionRide(false); }
-
-    unsubRef1.current = rideService.subscribeToAvailableRides(
-      (r) => { setAvailableRides(prev => [r, ...prev]); if (!ride.rideId) { setIncomingRide(r); setIsAuctionRide(false); } },
-      (id) => { setAvailableRides(prev => prev.filter(r => r.id !== id)); setIncomingRide(prev => prev?.id === id ? null : prev); }
-    );
-
-    // Subscrição 2: passageiro escolheu-me directamente (leilão)
-    unsubRef2.current = rideService.subscribeToDriverAssignments(driverId, (r) => {
-      if (!ride.rideId) { setIncomingRide(r); setIsAuctionRide(true); }
-    });
-  }, [driverId, ride.rideId]);
+  }, [driverId]);
 
   const goOffline = useCallback(async () => {
     setIsOnline(false); setAvailableRides([]); setIncomingRide(null);
     await rideService.setDriverStatus(driverId, 'offline');
-    gpsRef.current?.(); gpsRef.current = null;
-    unsubRef1.current?.(); unsubRef1.current = null;
-    unsubRef2.current?.(); unsubRef2.current = null;
   }, [driverId]);
 
+  useEffect(() => {
+    if (!isOnline) {
+      if (gpsRef.current) { gpsRef.current(); gpsRef.current = null; }
+      if (unsubRef1.current) { unsubRef1.current(); unsubRef1.current = null; }
+      if (unsubRef2.current) { unsubRef2.current(); unsubRef2.current = null; }
+      return;
+    }
+
+    // Inicializar quando fica online e gerir ciclo de vida aqui
+    const initOnline = async () => {
+      // GPS tracking
+      gpsRef.current = mapService.watchPosition(async (coords, heading) => {
+        await rideService.updateDriverLocation(driverId, coords, heading);
+      });
+
+      // Subscrição 1: corridas em "searching" (fallback)
+      const rides = await rideService.getAvailableRides();
+      setAvailableRides(rides);
+      // Aqui usamos callback para setIncomingRide evitando ride.rideId em dependency
+      if (rides.length > 0) {
+        setIncomingRide(prev => {
+          if (!prev) return rides[0];
+          return prev;
+        });
+        setIsAuctionRide(false);
+      }
+
+      unsubRef1.current = rideService.subscribeToAvailableRides(
+        (r) => { 
+          setAvailableRides(prev => [r, ...prev]); 
+          setIncomingRide(prev => {
+            if (!prev) { setIsAuctionRide(false); return r; }
+            return prev;
+          });
+        },
+        (id) => { 
+          setAvailableRides(prev => prev.filter(r => r.id !== id)); 
+          setIncomingRide(prev => prev?.id === id ? null : prev); 
+        }
+      );
+
+      // Subscrição 2: passageiro escolheu-me directamente (leilão)
+      unsubRef2.current = rideService.subscribeToDriverAssignments(driverId, (r) => {
+        if (r.status === RideStatus.ACCEPTED && !r.driver_confirmed) {
+          setIncomingRide(prev => {
+            if (!prev) { setIsAuctionRide(true); return r; }
+            return prev;
+          });
+        }
+      });
+    };
+
+    initOnline();
+
+    return () => {
+      if (gpsRef.current) { gpsRef.current(); gpsRef.current = null; }
+      if (unsubRef1.current) { unsubRef1.current(); unsubRef1.current = null; }
+      if (unsubRef2.current) { unsubRef2.current(); unsubRef2.current = null; }
+    };
+  }, [isOnline, driverId]);
+
   useEffect(() => () => {
-    gpsRef.current?.(); unsubRef1.current?.(); unsubRef2.current?.();
+    if (gpsRef.current) gpsRef.current();
+    if (unsubRef1.current) unsubRef1.current();
+    if (unsubRef2.current) unsubRef2.current();
     rideService.setDriverStatus(driverId, 'offline');
   }, [driverId]);
 

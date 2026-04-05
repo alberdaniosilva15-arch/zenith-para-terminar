@@ -53,7 +53,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
     const from = pageNum * PAGE_SIZE;
 
     const [walletRes, txRes] = await Promise.all([
-      pageNum === 0 ? supabase.from('wallets').select('*').eq('user_id', userId).single() : { data: wallet, error: null },
+      pageNum === 0 ? supabase.from('wallets').select('*').eq('user_id', userId).single() : Promise.resolve({ data: null, error: null }),
       supabase.from('transactions').select('*').eq('user_id', userId)
         .order('created_at', { ascending: false }).range(from, from + PAGE_SIZE - 1),
     ]);
@@ -64,7 +64,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
       setHasMore(txRes.data.length === PAGE_SIZE);
     }
     if (pageNum === 0) setLoading(false); else setLoadingMore(false);
-  }, [userId, wallet]);
+  }, [userId]);
 
   useEffect(() => { loadData(0); }, [userId]);
 
@@ -104,14 +104,13 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
     if (!amount || amount < 1000) { alert('Mínimo: 1.000 Kz'); return; }
     if (amount > wallet.balance)  { alert('Saldo insuficiente.'); return; }
     setWithdrawing(true);
-    const result = await rideService.initiateTopUp(-amount, ''); // reuse pattern
     // Chamar directamente multicaixa-pay withdrawal
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/multicaixa-pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token ?? ''}` },
-        body: JSON.stringify({ action: 'withdrawal', user_id: session?.user?.id, amount_kz: amount }),
+        body: JSON.stringify({ action: 'withdrawal', amount_kz: amount }),
       });
       const data = await res.json();
       alert(data.message ?? 'Levantamento submetido.');

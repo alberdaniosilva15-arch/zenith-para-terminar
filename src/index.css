@@ -40,6 +40,30 @@
   .vault-indicator-fill { background: linear-gradient(90deg, #C9A84C, #E6C364); height: 100%; border-radius: 99px; box-shadow: 0 0 8px rgba(230,195,100,0.5); transition: width 0.4s ease-in-out; }
   .no-scrollbar { scrollbar-width: none; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
+
+  /* Zenith logo orb and animation */
+  .zenith-orb {
+    position: absolute;
+    left: 0;
+    top: 48%;
+    transform: translateX(-120%) translateY(-50%);
+    width: 56px;
+    height: 56px;
+    border-radius: 999px;
+    background: radial-gradient(circle at 35% 35%, rgba(255,255,230,0.98) 0%, rgba(230,195,100,0.98) 18%, rgba(201,168,76,0.9) 38%, rgba(201,168,76,0) 70%);
+    filter: blur(10px);
+    box-shadow: 0 0 30px rgba(230,195,100,0.5);
+    animation: zenith-orb-move 3.6s ease-in-out infinite;
+    pointer-events: none;
+    mix-blend-mode: screen;
+  }
+  @keyframes zenith-orb-move {
+    0% { transform: translateX(-120%) translateY(-50%) scale(0.8); opacity: 0; }
+    10% { opacity: 0.95; }
+    50% { transform: translateX(50%) translateY(-60%) scale(1.05); opacity: 1; }
+    90% { opacity: 0.95; }
+    100% { transform: translateX(220%) translateY(-50%) scale(0.8); opacity: 0; }
+  }
   .material-symbols-outlined { font-family: 'Material Symbols Outlined'; font-weight: normal; font-style: normal; font-size: 24px; line-height: 1; letter-spacing: normal; text-transform: none; display: inline-block; white-space: nowrap; direction: ltr; font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
   .luxury-transition { transition: all 400ms ease-in-out; }
 }

@@ -75,12 +75,18 @@ const MotoGoPayPartners: React.FC<MotoGoPayPartnersProps> = ({ userId, walletBal
     const discountedAmount = amount * (1 - partner.discount_pct / 100);
 
     // Debita da wallet (transacção tipo 'ride_payment' por ora — no futuro 'partner_payment')
-    const { error } = await supabase.rpc('process_partner_payment', {
-      p_user_id:    userId,
-      p_amount:     Math.round(discountedAmount * 100) / 100,
-      p_partner_id: partner.id,
-      p_description: `Pagamento ${partner.name} — ${partner.discount_pct}% desconto`,
-    }).catch(() => ({ error: { message: 'RPC não encontrada — pagamento simulado' } }));
+    let error = null;
+    try {
+      const result = await supabase.rpc('process_partner_payment', {
+        p_user_id:    userId,
+        p_amount:     Math.round(discountedAmount * 100) / 100,
+        p_partner_id: partner.id,
+        p_description: `Pagamento ${partner.name} — ${partner.discount_pct}% desconto`,
+      });
+      error = result.error;
+    } catch (err) {
+      error = { message: 'RPC não encontrada — pagamento simulado' };
+    }
 
     if (error) {
       // Fallback: simula em modo demo se a RPC ainda não existe

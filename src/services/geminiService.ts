@@ -99,6 +99,7 @@ export const geminiService = {
   async getAutonomousDecisions(context: {
     role: string; activeRideStatus: string; multiplier: number;
     activeRides?: number; availableDrivers?: number;
+    system_load?: number; luanda_time?: string; hot_zones?: string[];
   }): Promise<AutonomousCommand[]> {
     try {
       const r = await callProxy<{ commands: AutonomousCommand[] }>('autonomous_decisions', { context });
@@ -152,9 +153,13 @@ export const geminiService = {
   // ------------------------------------------------------------------
   // Token para Gemini Live API (voz)
   // ------------------------------------------------------------------
-  async getKazeLiveToken(): Promise<{ ephemeral_token: string } | null> {
-    try { return await callProxy('get_live_token', {}); }
-    catch { return null; }
+  async getKazeLiveToken(): Promise<{ ephemeral_token: string }> {
+    try {
+      return await callProxy('get_live_token', {});
+    } catch (e: any) {
+      console.error('[geminiService.getKazeLiveToken]', e);
+      throw new Error(e?.message ?? 'Kaze Live não disponível no servidor.');
+    }
   },
 
   // ------------------------------------------------------------------
@@ -163,11 +168,17 @@ export const geminiService = {
   async connectKazeLive(callbacks: {
     onmessage: (msg: any) => void;
     onclose: () => void;
-  }): Promise<{ close: () => void } | null> {
-    const tokenData = await geminiService.getKazeLiveToken();
-    if (!tokenData) return null;
-    // O token ephemeral é usado pelo frontend para conectar directamente ao Gemini Live
-    console.log('[KazeLive] Token obtido, usar SDK Gemini Live com este token');
-    return { close: () => callbacks.onclose() };
+  }): Promise<{ close: () => void }> {
+    try {
+      const tokenData = await geminiService.getKazeLiveToken();
+      if (!tokenData?.ephemeral_token) throw new Error('Token efémero inválido.');
+      // O token ephemeral é usado pelo frontend para conectar directamente ao Gemini Live
+      console.log('[KazeLive] Token obtido, usar SDK Gemini Live com este token');
+      // TODO: integrar SDK Gemini Live aqui para abrir o canal de voz.
+      return { close: () => callbacks.onclose() };
+    } catch (e) {
+      console.error('[geminiService.connectKazeLive] falha:', e);
+      throw e;
+    }
   },
 };

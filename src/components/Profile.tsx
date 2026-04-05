@@ -45,7 +45,12 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
 
     setUploading(true);
     try {
-      const ext  = file.name.split('.').pop();
+      const ext  = file.name.split('.').pop()?.toLowerCase() || '';
+      if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+        alert('Apenas imagens (JPG, PNG, WEBP) são permitidas.');
+        setUploading(false);
+        return;
+      }
       const path = `avatars/${dbUser.id}.${ext}`;
 
       const { error: uploadError } = await supabase.storage

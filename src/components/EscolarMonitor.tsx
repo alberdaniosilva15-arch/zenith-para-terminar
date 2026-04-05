@@ -14,8 +14,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { rideService } from '../services/rideService';
 import type { RideState, SchoolTrackingSession } from '../types';
 import { RideStatus } from '../types';
+
+interface EscolarSessionState extends SchoolTrackingSession {
+  ride_status?: string;
+}
 
 interface EscolarMonitorProps {
   contractId:    string;
@@ -26,7 +31,7 @@ interface EscolarMonitorProps {
 const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
   contractId, contractTitle, activeRide
 }) => {
-  const [session,    setSession]    = useState<SchoolTrackingSession | null>(null);
+  const [session,    setSession]    = useState<EscolarSessionState | null>(null);
   const [creating,   setCreating]   = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [parentName, setParentName] = useState('');
@@ -34,7 +39,52 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
   const [showForm,   setShowForm]   = useState(false);
 
   useEffect(() => {
-    loadActiveSession();
+    let mounted = true;
+    let sessionChannel: any = null;
+    let rideUnsub: (() => void) | null = null;
+
+    const cleanup = () => {
+      if (sessionChannel) { supabase.removeChannel(sessionChannel); sessionChannel = null; }
+      if (rideUnsub) { rideUnsub(); rideUnsub = null; }
+    };
+
+    const handleSessionRow = (s: any) => {
+      if (!mounted) return;
+      if (!s) { setSession(null); return; }
+      if (s.status !== 'active' || new Date(s.expires_at) < new Date()) { setSession(null); return; }
+      setSession(s as SchoolTrackingSession);
+
+      // Subscrever corrida associada (se houver)
+      if (rideUnsub) { rideUnsub(); rideUnsub = null; }
+      if (s.ride_id) {
+        rideUnsub = rideService.subscribeToRide(s.ride_id, (updated) => {
+          // actualizar session com estado da corrida
+          setSession(prev => prev ? ({ ...prev, ride_status: updated.status }) : prev);
+        });
+      }
+    };
+
+    (async () => {
+      const { data } = await supabase
+        .from('school_tracking_sessions')
+        .select('*')
+        .eq('contract_id', contractId)
+        .eq('status', 'active')
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      handleSessionRow(data);
+
+      sessionChannel = supabase.channel(`escolar-monitor:${contractId}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'school_tracking_sessions', filter: `contract_id=eq.${contractId}` }, (p: any) => {
+          handleSessionRow(p.new);
+        })
+        .subscribe();
+    })();
+
+    return () => { mounted = false; cleanup(); };
   }, [contractId]);
 
   const loadActiveSession = async () => {

@@ -23,6 +23,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { rideService } from '../services/rideService';
 
 interface ParentTrackingPageProps {
   token: string;
@@ -46,10 +47,95 @@ const ParentTrackingPage: React.FC<ParentTrackingPageProps> = ({ token }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadSession();
-    // Actualiza de 30 em 30 segundos
-    const interval = setInterval(loadSession, 30_000);
-    return () => clearInterval(interval);
+    let mounted = true;
+    let sessionChannel: any = null;
+    let rideChannel: any = null;
+    let driverLocUnsub: (() => void) | null = null;
+
+    const cleanupRide = () => {
+      if (rideChannel) { supabase.removeChannel(rideChannel); rideChannel = null; }
+      if (driverLocUnsub) { driverLocUnsub(); driverLocUnsub = null; }
+    };
+
+    const handleSession = (session: any) => {
+      if (!mounted) return;
+      if (!session) { setExpired(true); setLoading(false); return; }
+      if (new Date(session.expires_at) < new Date()) { setExpired(true); setLoading(false); return; }
+
+      const ride = (session as any).rides;
+      const contract = (session as any).contracts;
+      const driverName = ride?.profiles?.name ?? 'Motorista';
+
+      setData({
+        session_id:     session.id,
+        contract_title: contract?.title ?? 'Contrato Escolar',
+        driver_name:    driverName,
+        status:         ride?.status ?? session.status,
+        origin:         ride?.origin_address ?? '',
+        destination:    ride?.dest_address ?? '',
+        expires_at:     session.expires_at,
+        driver_lat:     ride?.driver_lat ?? undefined,
+        driver_lng:     ride?.driver_lng ?? undefined,
+      });
+
+      setLoading(false);
+
+      // Subscrever updates da corrida específica
+      cleanupRide();
+      if (ride?.id) {
+        rideChannel = supabase.channel(`parent-tracking-ride:${ride.id}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'rides', filter: `id=eq.${ride.id}` }, (p: any) => {
+            const updated = p.new as any;
+            setData(prev => prev ? ({
+              ...prev,
+              status: updated.status ?? prev.status,
+              origin: updated.origin_address ?? prev.origin,
+              destination: updated.dest_address ?? prev.destination,
+            }) : prev);
+
+            if (updated.driver_id && !driverLocUnsub) {
+              driverLocUnsub = rideService.subscribeToDriverLocation(updated.driver_id, (coords) => {
+                setData(prev => prev ? ({ ...prev, driver_lat: coords.lat, driver_lng: coords.lng }) : prev);
+              });
+            }
+
+            if (updated.status === 'completed' || updated.status === 'cancelled') {
+              cleanupRide();
+            }
+          })
+          .subscribe();
+      }
+    };
+
+    (async () => {
+      const { data: session } = await supabase
+        .from('school_tracking_sessions')
+        .select(`
+          id, status, expires_at,
+          contracts ( title ),
+          rides (
+            id, status, origin_address, dest_address, driver_id,
+            profiles!rides_driver_id_fkey ( name )
+          )
+        `)
+        .eq('public_token', token)
+        .maybeSingle();
+
+      handleSession(session as any);
+
+      // Subscrever alterações na sessão (por token público)
+      sessionChannel = supabase.channel(`parent-tracking:${token}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'school_tracking_sessions', filter: `public_token=eq.${token}` }, (p: any) => {
+          handleSession(p.new);
+        })
+        .subscribe();
+    })();
+
+    return () => {
+      mounted = false;
+      if (sessionChannel) supabase.removeChannel(sessionChannel);
+      cleanupRide();
+    };
   }, [token]);
 
   const loadSession = async () => {

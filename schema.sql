@@ -398,3 +398,95 @@ END $$;
 -- =============================================================================
 -- FIM DO PATCH — riscos residuais corrigidos
 -- =============================================================================
+
+-- =============================================================================
+-- MIGRATION: Pagamento idempotente para evitar double-spend
+-- Adiciona coluna payment_processed a public.rides e garante que o
+-- processamento é feito apenas uma vez por corrida via lock FOR UPDATE.
+-- =============================================================================
+
+-- 1) Coluna de idempotência
+ALTER TABLE public.rides
+  ADD COLUMN IF NOT EXISTS payment_processed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- 2) Função process_ride_payment com guard de idempotência
+CREATE OR REPLACE FUNCTION process_ride_payment(
+  p_ride_id UUID, p_passenger_id UUID, p_driver_id UUID, p_amount NUMERIC
+) RETURNS void AS $$
+DECLARE
+  v_already_paid   BOOLEAN;
+  v_pass_balance   NUMERIC;
+  v_platform_fee   NUMERIC;
+  v_driver_earning NUMERIC;
+  v_pass_after     NUMERIC;
+  v_driv_after     NUMERIC;
+BEGIN
+  -- GUARD DE IDEMPOTÊNCIA: bloquear a linha e verificar se já foi pago
+  SELECT payment_processed INTO v_already_paid
+    FROM public.rides WHERE id = p_ride_id FOR UPDATE;
+
+  IF v_already_paid THEN
+    RETURN; -- já processado, sair silenciosamente
+  END IF;
+
+  -- Calcular comissão (15%)
+  v_platform_fee   := ROUND(p_amount * 0.15, 2);
+  v_driver_earning := p_amount - v_platform_fee;
+
+  -- Verificar saldo do passageiro
+  SELECT balance INTO v_pass_balance
+    FROM public.wallets WHERE user_id = p_passenger_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Wallet do passageiro não encontrada: %', p_passenger_id;
+  END IF;
+  IF v_pass_balance < p_amount THEN
+    RAISE EXCEPTION 'Saldo insuficiente. Disponível: % KZS | Necessário: % KZS', v_pass_balance, p_amount;
+  END IF;
+
+  -- Debitar passageiro
+  UPDATE public.wallets SET balance = balance - p_amount, updated_at = NOW()
+    WHERE user_id = p_passenger_id RETURNING balance INTO v_pass_after;
+  INSERT INTO public.transactions (user_id, ride_id, amount, type, description, balance_after)
+    VALUES (p_passenger_id, p_ride_id, -p_amount, 'ride_payment', 'Pagamento de corrida', v_pass_after);
+
+  -- Creditar motorista
+  UPDATE public.wallets SET balance = balance + v_driver_earning, updated_at = NOW()
+    WHERE user_id = p_driver_id RETURNING balance INTO v_driv_after;
+  INSERT INTO public.transactions (user_id, ride_id, amount, type, description, balance_after)
+    VALUES (p_driver_id, p_ride_id, v_driver_earning, 'ride_earning', 'Ganho de corrida', v_driv_after);
+
+  -- Marcar como pago (impede double-spend em chamadas futuras)
+  UPDATE public.rides SET payment_processed = TRUE WHERE id = p_ride_id;
+
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 3) Trigger que chama o processamento quando a corrida transita para COMPLETED
+CREATE OR REPLACE FUNCTION trigger_process_payment_on_complete()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Só activa na transição exacta para completed
+  IF NEW.status = 'completed'
+     AND OLD.status <> 'completed'
+     AND NEW.driver_id IS NOT NULL
+     AND NEW.payment_processed = FALSE
+  THEN
+    PERFORM process_ride_payment(
+      NEW.id,
+      NEW.passenger_id,
+      NEW.driver_id,
+      NEW.price_kz
+    );
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Garantir trigger único
+DROP TRIGGER IF EXISTS trg_payment_on_complete ON public.rides;
+CREATE TRIGGER trg_payment_on_complete
+  AFTER UPDATE OF status ON public.rides
+  FOR EACH ROW
+  EXECUTE FUNCTION trigger_process_payment_on_complete();
+
+-- FIM DA MIGRATION
