@@ -27,12 +27,13 @@ import PostRideReview from './components/PostRideReview';
 import ZonePriceMap from './components/ZonePriceMap';
 import ParentTrackingPage from './components/ParentTrackingPage';
 import { geminiService } from './services/geminiService';
+import Toast from './components/Toast';
 
 // =============================================================================
 // APP INTERNO (dentro do AuthProvider)
 // =============================================================================
 const AppInner: React.FC = () => {
-  const { dbUser, profile, role, loading: authLoading, signOut } = useAuth();
+  const { dbUser, profile, role, loading: authLoading, session, signOut } = useAuth();
 
   const {
     ride, auction, postRide, loading,
@@ -78,9 +79,24 @@ const AppInner: React.FC = () => {
   }
 
   // ------------------------------------------------------------------
-  // Login screen
+  // Login / awaiting setup screen
+  // If we have a valid session but the DB user row hasn't been created
+  // yet (trigger latency), show a finalizing message instead of the
+  // login form so the user sees progress after clicking the magic link.
   // ------------------------------------------------------------------
-  if (!dbUser) return <Login />;
+  if (!dbUser) {
+    if (session) {
+      return (
+        <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6 p-6">
+          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-white/80 font-bold">Conta autenticada — a finalizar registo...</p>
+          <p className="text-white/50 text-sm max-w-lg text-center mt-2">Estamos a concluir a criação do teu perfil. Se isto não avançar em alguns segundos, confirma que o teu projeto Supabase tem o trigger <code>handle_new_user</code> e as tabelas do schema.</p>
+        </div>
+      );
+    }
+
+    return <Login />;
+  }
 
   // ------------------------------------------------------------------
   // App principal
@@ -141,8 +157,8 @@ const AppInner: React.FC = () => {
     }
   };
 
-  // Kaze só activo quando há corrida em progresso (poupa tokens)
-  const kazeActive = !kazeSilent && ride.status !== RideStatus.IDLE;
+  // Kaze sempre disponível (chat + explore), pensamentos espontâneos só durante corridas
+  const kazeActive = !kazeSilent;
 
   return (
     <Layout
@@ -158,7 +174,7 @@ const AppInner: React.FC = () => {
     >
       {renderContent()}
 
-      {/* Kaze condicional — só aparece durante corrida activa */}
+      {/* Kaze — sempre disponível para chat e assistência */}
       {kazeActive && (
         <KazeMascot
           role={role}
@@ -174,6 +190,9 @@ const AppInner: React.FC = () => {
         onSubmit={submitReview}
         onDismiss={dismissPostRide}
       />
+
+      {/* Toast — notificações globais de sistema */}
+      <Toast />
     </Layout>
   );
 };

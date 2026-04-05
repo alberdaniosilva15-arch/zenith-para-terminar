@@ -1,17 +1,9 @@
 // =============================================================================
-// MOTOGO v3.0 — src/components/FreePerkBanner.tsx
-//
-// Banner de fidelidade: a cada 70km corridos, o passageiro ganha 5km grátis.
-// Aparece no PassengerHome em 2 momentos:
-//   1. Barra de progresso (sempre visível, discreta, em baixo do card de rota)
-//   2. Celebração (animação) quando o perk é desbloqueado
-//
-// Integração em PassengerHome.tsx (logo após o card de rota):
-//   import FreePerkBanner from './FreePerkBanner';
-//   <FreePerkBanner userId={userId} />
+// ZENITH RIDE v3.0 — FreePerkBanner.tsx
+// FIX: .on() chamado ANTES de .subscribe() para evitar erro Realtime
 // =============================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 
 interface FreePerkBannerProps {
@@ -29,73 +21,87 @@ const PERK_THRESHOLD = 70;
 const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
   const [perk,        setPerk]        = useState<PerkData | null>(null);
   const [celebrating, setCelebrating] = useState(false);
-  const prevFreeKm = React.useRef<number>(0);
+  const prevFreeKm = useRef<number>(0);
 
   useEffect(() => {
+    if (!userId) return;
+
+    // Carregar dados iniciais
+    const loadPerk = async () => {
+      const { data } = await supabase
+        .from('profiles')
+        .select('km_total, free_km_available, km_to_next_perk')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (data) {
+        prevFreeKm.current = (data as PerkData).free_km_available ?? 0;
+        setPerk(data as PerkData);
+      }
+    };
+
     loadPerk();
 
-    // Realtime: actualiza quando o perfil muda (após corrida completada)
+    // FIX CRÍTICO: definir .on() ANTES de .subscribe()
+    const channelName = `perk:${userId}`;
     const ch = supabase
-      .channel(`perk:${userId}`)
+      .channel(channelName)
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `user_id=eq.${userId}` },
+        {
+          event:  'UPDATE',
+          schema: 'public',
+          table:  'profiles',
+          filter: `user_id=eq.${userId}`,
+        },
         (payload) => {
           const p = payload.new as PerkData;
-          if (p.free_km_available > prevFreeKm.current) {
-            // Acabou de ganhar km grátis!
+          if ((p.free_km_available ?? 0) > prevFreeKm.current) {
             setCelebrating(true);
             setTimeout(() => setCelebrating(false), 5000);
           }
-          prevFreeKm.current = p.free_km_available;
+          prevFreeKm.current = p.free_km_available ?? 0;
           setPerk(p);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('[FreePerkBanner] Falha no canal Realtime, a continuar sem RT.');
+        }
+      });
 
-    return () => { supabase.removeChannel(ch); };
+    return () => {
+      supabase.removeChannel(ch);
+    };
   }, [userId]);
-
-  const loadPerk = async () => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('km_total, free_km_available, km_to_next_perk')
-      .eq('user_id', userId)
-      .single();
-
-    if (data) {
-      prevFreeKm.current = data.free_km_available;
-      setPerk(data as PerkData);
-    }
-  };
 
   if (!perk) return null;
 
   const progressPct = Math.min(
-    ((PERK_THRESHOLD - perk.km_to_next_perk) / PERK_THRESHOLD) * 100,
+    ((PERK_THRESHOLD - (perk.km_to_next_perk ?? PERK_THRESHOLD)) / PERK_THRESHOLD) * 100,
     100
   );
-  const kmDone = Math.round(PERK_THRESHOLD - perk.km_to_next_perk);
-  const hasFreeKm = perk.free_km_available > 0;
+  const kmDone   = Math.round(PERK_THRESHOLD - (perk.km_to_next_perk ?? PERK_THRESHOLD));
+  const hasFreeKm = (perk.free_km_available ?? 0) > 0;
 
-  // ─── MODO CELEBRAÇÃO ───────────────────────────────────────────────────────
+  // ─── MODO CELEBRAÇÃO ────────────────────────────────────────────────────────
   if (celebrating) {
     return (
       <div className="mx-4 mb-3 animate-in zoom-in duration-300">
         <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-[2rem] p-5 text-center text-white relative overflow-hidden">
           <div className="absolute inset-0 opacity-20"
-            style={{ background: 'repeating-linear-gradient(45deg, transparent, transparent 10px, rgba(255,255,255,0.1) 10px, rgba(255,255,255,0.1) 20px)' }} />
+            style={{ background: 'repeating-linear-gradient(45deg,transparent,transparent 10px,rgba(255,255,255,0.1) 10px,rgba(255,255,255,0.1) 20px)' }} />
           <p className="text-3xl mb-1">🎉</p>
           <p className="font-black text-lg uppercase tracking-tight">5 km GRÁTIS!</p>
           <p className="text-[10px] font-bold opacity-80 mt-1">
-            Chegaste aos {Math.round(perk.km_total)} km acumulados. A viagem fica por nossa conta!
+            Chegaste aos {Math.round(perk.km_total ?? 0)} km acumulados. A viagem fica por nossa conta!
           </p>
         </div>
       </div>
     );
   }
 
-  // ─── MODO FREE KM DISPONÍVEL ───────────────────────────────────────────────
+  // ─── MODO FREE KM DISPONÍVEL ────────────────────────────────────────────────
   if (hasFreeKm) {
     return (
       <div className="mx-4 mb-3 animate-in fade-in duration-300">
@@ -103,7 +109,7 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
           <span className="text-xl">🎁</span>
           <div className="flex-1">
             <p className="text-[10px] font-black text-primary uppercase tracking-widest">
-              Tens {perk.free_km_available.toFixed(1)} km grátis
+              Tens {(perk.free_km_available ?? 0).toFixed(1)} km grátis
             </p>
             <p className="text-[9px] text-primary font-bold">
               Aplicados automaticamente na próxima corrida
@@ -115,7 +121,7 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
     );
   }
 
-  // ─── MODO BARRA DE PROGRESSO ───────────────────────────────────────────────
+  // ─── MODO BARRA DE PROGRESSO ────────────────────────────────────────────────
   return (
     <div className="mx-4 mb-3">
       <div className="bg-surface-container-low/80 border border-outline-variant/20 rounded-[2rem] px-5 py-3">
@@ -123,7 +129,7 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
           <div className="flex items-center gap-2">
             <span className="text-sm">🛣️</span>
             <p className="text-[9px] font-black text-outline uppercase tracking-widest">
-              Fidelidade MotoGo
+              Fidelidade Zenith
             </p>
           </div>
           <p className="text-[9px] font-black text-on-surface-variant">
@@ -132,7 +138,6 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
           </p>
         </div>
 
-        {/* Barra de progresso */}
         <div className="h-2 bg-surface-container-low rounded-full overflow-hidden">
           <div
             className="h-full bg-primary rounded-full transition-all duration-1000"
@@ -141,7 +146,7 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
         </div>
 
         <p className="text-[8px] text-on-surface-variant/70 font-bold mt-1.5 text-right">
-          Faltam {Math.ceil(perk.km_to_next_perk)} km
+          Faltam {Math.ceil(perk.km_to_next_perk ?? PERK_THRESHOLD)} km
         </p>
       </div>
     </div>

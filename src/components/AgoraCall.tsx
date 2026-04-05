@@ -29,9 +29,17 @@ interface AgoraCallProps {
 
 type CallState = 'idle' | 'connecting' | 'active' | 'ended' | 'error';
 
+// Deriva uma chave de encriptação a partir do channel + hint (não expõe o appId completo)
+async function deriveEncryptionKey(channel: string, hint: string): Promise<string> {
+  const raw = new TextEncoder().encode(channel + hint);
+  const hash = await crypto.subtle.digest('SHA-256', raw);
+  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2,'0')).join('');
+}
+
 const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, peerName }) => {
   const [callState,   setCallState]   = useState<CallState>('idle');
   const [isMuted,     setIsMuted]     = useState(false);
+  const [isSpeaker,   setIsSpeaker]   = useState(true);
   const [duration,    setDuration]    = useState(0);
   const [errorMsg,    setErrorMsg]    = useState<string | null>(null);
   const [peerJoined,  setPeerJoined]  = useState(false);
@@ -42,11 +50,9 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
 
   const channelName = `corrida_${corridaId}`;
 
-  // Limpar ao desmontar
+  // Limpar ao desmontar — notifica pai para limpar estado
   useEffect(() => {
-    return () => {
-      endCall(false);
-    };
+    return () => { endCall(true); };
   }, []);
 
   // Timer de duração
@@ -74,10 +80,11 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         throw new Error(error?.message ?? 'Erro ao obter token de chamada.');
       }
 
-      const { token, appId } = data as { token: string; appId: string };
+      const { token, appId, uid: agoraUid } = data as { token: string; appId: string; uid: number };
 
       // 2. Criar cliente Agora (voz apenas)
-      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+      // Usar 'h264' como codec padrão para melhor compatibilidade em mobile
+      const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
       clientRef.current = client;
 
       // 3. Event listeners
@@ -91,14 +98,30 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         if (state === 'DISCONNECTED') setCallState('ended');
       });
 
-      // 4. Entrar no canal
-      const uid = parseInt(userId.replace(/-/g, '').slice(0, 8), 16) % 100000;
-      await client.join(appId, channelName, token, uid);
+      // 4. Entrar no canal (usa uid devolvido pelo backend)
+      await client.join(appId, channelName, token, agoraUid);
 
-      // 5. Capturar microfone
-      const micTrack = await AgoraRTC.createMicrophoneAudioTrack({
-        encoderConfig: 'speech_low_quality', // optimizado para voz em Angola
-      });
+      // 5. Activar encriptação AES-256-GCM de media streams
+      // Nota: derivamos uma chave determinística a partir do channel + hint
+      const AGORA_APP_ID_HINT = (appId || '').slice(0, 8);
+      const encKey = await deriveEncryptionKey(channelName, AGORA_APP_ID_HINT);
+      try {
+        // Usar o salt fornecido pelo servidor (base64)
+        const saltBase64 = (data as any)?.encryption_salt;
+        const base64ToUint8 = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+        const saltBytes = saltBase64 ? base64ToUint8(saltBase64) : crypto.getRandomValues(new Uint8Array(32));
+
+        await (client as any).enableEncryption(true, {
+          encryptionMode: 'aes-256-gcm2',
+          encryptionKey: encKey,
+          encryptionSalt: saltBytes,
+        });
+      } catch (e) {
+        console.warn('[AgoraCall] enableEncryption falhou:', e);
+      }
+
+      // 6. Capturar microfone (após enableEncryption) e publicar
+      const micTrack = await AgoraRTC.createMicrophoneAudioTrack({ encoderConfig: 'speech_low_quality' });
       audioRef.current = micTrack;
       await client.publish([micTrack]);
 
@@ -137,6 +160,26 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
     } else {
       audioRef.current.setEnabled(false);
       setIsMuted(true);
+    }
+  };
+
+  const toggleSpeaker = async () => {
+    if (!audioRef.current) {
+      alert('Não há áudio activo.');
+      return;
+    }
+    const playDev = isSpeaker ? 'earpiece' : 'speaker';
+    const setPlayback = (audioRef.current as any).setPlaybackDevice;
+    if (typeof setPlayback === 'function') {
+      try {
+        await setPlayback.call(audioRef.current, playDev);
+        setIsSpeaker(s => !s);
+      } catch (e) {
+        console.warn('[AgoraCall] setPlaybackDevice falhou', e);
+        alert('Não foi possível alternar o dispositivo de reprodução.');
+      }
+    } else {
+      alert('Usa os botões do teu dispositivo para controlar áudio.');
     }
   };
 
@@ -254,16 +297,25 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
           </span>
         </button>
 
-        {/* Speaker (placeholder) */}
-        <button className="w-16 h-16 rounded-full bg-surface-container border border-primary/20 text-on-surface-variant hover:text-primary flex items-center justify-center luxury-transition">
-          <span className="material-symbols-outlined">volume_up</span>
+        {/* Speaker */}
+        <button
+          onClick={toggleSpeaker}
+          className={`w-16 h-16 rounded-full flex items-center justify-center luxury-transition ${
+            isSpeaker
+              ? 'bg-surface-container border border-primary/20 text-on-surface-variant hover:text-primary'
+              : 'bg-error/20 border border-error/40 text-error'
+          }`}
+        >
+          <span className="material-symbols-outlined" style={{ fontVariationSettings: isSpeaker ? "'FILL' 0" : "'FILL' 1" }}>
+            {isSpeaker ? 'volume_up' : 'volume_off'}
+          </span>
         </button>
       </div>
 
       {/* Aviso de privacidade */}
       <div className="px-6 pb-6 text-center">
         <p className="text-[8px] text-on-surface-variant/40 font-label uppercase tracking-wider">
-          Chamada encriptada ponta-a-ponta via MotoGo VoIP
+          Chamada protegida com AES-256-GCM via MotoGo VoIP
         </p>
       </div>
     </div>

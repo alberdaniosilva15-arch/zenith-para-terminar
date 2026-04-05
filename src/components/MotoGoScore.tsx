@@ -27,11 +27,11 @@ interface MotoGoScoreProps {
 
 const SCORE_COLORS: Record<ScoreLabel, { bar: string; badge: string; text: string }> = {
   'Sem Historial': { bar: 'bg-outline-variant',    badge: 'bg-surface-container-low text-on-surface-variant',    text: 'text-on-surface-variant' },
-  'Básico':        { bar: 'bg-primary',    badge: 'bg-primary/15 text-primary',    text: 'text-primary' },
-  'Médio':         { bar: 'bg-primary',   badge: 'bg-primary/10 text-on-surface',  text: 'text-on-surface' },
-  'Bom':           { bar: 'bg-primary/100',    badge: 'bg-primary/10 text-primary',    text: 'text-primary' },
-  'Excelente':     { bar: 'bg-primary',     badge: 'bg-primary/10 text-primary',      text: 'text-primary' },
-  'Extraordinário':{ bar: 'bg-primary',   badge: 'bg-primary/10 text-primary',  text: 'text-primary' },
+  'Básico':        { bar: 'bg-primary/30',    badge: 'bg-primary/15 text-primary',    text: 'text-primary' },
+  'Médio':         { bar: 'bg-primary/60',   badge: 'bg-primary/10 text-on-surface',  text: 'text-on-surface' },
+  'Bom':           { bar: 'bg-primary',    badge: 'bg-primary/10 text-primary',    text: 'text-primary' },
+  'Excelente':     { bar: 'bg-emerald-500',     badge: 'bg-emerald-500/10 text-emerald-500',      text: 'text-emerald-500' },
+  'Extraordinário':{ bar: 'bg-yellow-400',   badge: 'bg-yellow-400/10 text-yellow-400',  text: 'text-yellow-400' },
 };
 
 const BANK_PARTNERS = [

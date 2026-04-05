@@ -25,6 +25,8 @@ import { supabase } from '../lib/supabase';
 import { zonePriceService } from '../services/zonePrice';
 import type { RidePrediction, ZonePrice } from '../types';
 
+const getLuandaHour = () => (new Date().getUTCHours() + 1) % 24;
+
 interface KazePreditivoProps {
   userId:   string;
   onAccept: (pred: RidePrediction) => void;
@@ -44,7 +46,7 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept }) => {
     setLoading(true);
 
     // Hora actual (Angola = UTC+1)
-    const currentHour = (new Date().getUTCHours() + 1) % 24;
+    const currentHour = getLuandaHour();
 
     // Busca as corridas mais frequentes, com preferência pela hora actual
     const { data } = await supabase
@@ -80,7 +82,7 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept }) => {
   if (loading || !prediction || dismissed) return null;
 
   // Mensagem personalizada do Kaze
-  const currentHour = (new Date().getUTCHours() + 1) % 24;
+  const currentHour = getLuandaHour();
   const greeting =
     currentHour < 12 ? 'Bom dia' :
     currentHour < 19 ? 'Boa tarde' : 'Boa noite';

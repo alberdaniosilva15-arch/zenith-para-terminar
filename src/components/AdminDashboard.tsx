@@ -3,14 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { AutonomousCommand } from '../types';
 import { geminiService } from '../services/geminiService';
-
-const MOCK_ZONES = [
-  { name: 'Viana', demand: 92, risk: 5 },
-  { name: 'Cazenga', demand: 75, risk: 22 },
-  { name: 'Talatona', demand: 98, risk: 3 },
-  { name: 'Maianga', demand: 82, risk: 8 },
-  { name: 'Zango', demand: 88, risk: 12 },
-];
+import { supabase } from '../lib/supabase';
 
 interface AdminDashboardProps {
   lastCommand?: AutonomousCommand | null;
@@ -21,14 +14,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
   const [commands, setCommands] = useState<AutonomousCommand[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const [zonesData, setZonesData] = useState<{name: string, demand: number, risk: number}[]>([]);
+
   useEffect(() => {
     const fetchDecisions = async () => {
       setLoading(true);
       try {
+        const { data: zData } = await supabase.rpc('get_zones_demand');
+        const activeZones = zData || [];
+        setZonesData(activeZones);
+
         const data = await geminiService.getAutonomousDecisions({
+          role: 'admin',
+          activeRideStatus: 'IDLE',
+          multiplier: 1,
           system_load: 0.85,
           luanda_time: new Date().toLocaleTimeString(),
-          hot_zones: MOCK_ZONES.filter(z => z.demand > 80).map(z => z.name)
+          hot_zones: activeZones.filter((z: any) => z.demand > 80).map((z: any) => z.name)
         });
         setCommands(data);
       } catch (e) {
@@ -129,11 +131,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
              <div className="bg-surface-container-low p-8 rounded-[3rem] shadow-sm border border-outline-variant/20 h-80">
                 <h3 className="text-[9px] font-black text-on-surface-variant/70 uppercase tracking-widest mb-8">Heatmap de Demanda Luanda</h3>
                 <ResponsiveContainer width="100%" height="100%">
-                   <BarChart data={MOCK_ZONES}>
+                   <BarChart data={zonesData}>
                       <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={9} tick={{fontWeight: '900', fill: '#94a3b8'}} />
                       <Tooltip contentStyle={{borderRadius: '20px', border: 'none', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', fontWeight: 'black', fontSize: '10px'}} />
                       <Bar dataKey="demand" radius={[12, 12, 12, 12]} barSize={28}>
-                        {MOCK_ZONES.map((entry, index) => (
+                        {zonesData.map((entry, index) => (
                            <Cell key={`cell-${index}`} fill={entry.risk > 15 ? '#ef4444' : '#4f46e5'} />
                         ))}
                       </Bar>

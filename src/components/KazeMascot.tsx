@@ -18,6 +18,19 @@ interface KazeMascotProps {
 
 const MASCOT_IMG = 'https://img.icons8.com/3d-fluency/180/robot-3.png';
 
+const KAZE_GREETINGS: Record<string, string[]> = {
+  passenger: [
+    'Olá! Sou o Kaze, o teu assistente de corridas em Luanda. Como posso ajudar?',
+    'Pronto para a tua próxima corrida? Diz-me onde queres ir!',
+    'Bem-vindo ao Zenith Ride! Posso ajudar-te a encontrar o melhor trajecto.',
+  ],
+  driver: [
+    'Força motorista! O Kaze está contigo na estrada.',
+    'Boa corrida! Lembra-te: segurança em primeiro lugar.',
+    'O trânsito de Luanda está aí. O Kaze tem dicas para ti!',
+  ],
+};
+
 const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, userName }) => {
   const [isOpen,      setIsOpen]      = useState(false);
   const [mode,        setMode]        = useState<'chat' | 'voice' | 'explore'>('chat');
@@ -26,6 +39,8 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
   const [isThinking,  setIsThinking]  = useState(false);
   const [thought,     setThought]     = useState<string | null>(null);
   const [isLive,      setIsLive]      = useState(false);
+  const [voiceError,  setVoiceError]  = useState<string | null>(null);
+  const [kazeOnline,  setKazeOnline]  = useState<boolean | null>(null); // null = a verificar
 
   const chatRef   = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -34,6 +49,20 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, isThinking]);
+
+  // Mostrar mensagem de boas-vindas ao abrir o chat pela primeira vez
+  useEffect(() => {
+    if (isOpen && messages.length === 0) {
+      const greetings = KAZE_GREETINGS[role] ?? KAZE_GREETINGS.passenger;
+      const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+      const name = userName ? `, ${userName.split(' ')[0]}` : '';
+      setMessages([{
+        role: 'model',
+        text: `Olá${name}! ${greeting}`,
+      }]);
+      setKazeOnline(true);
+    }
+  }, [isOpen]);
 
   // Pensamentos espontâneos — só quando há corrida activa e não está em modo silencioso
   useEffect(() => {
@@ -50,10 +79,12 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
           setThought(insight.text);
           setTimeout(() => setThought(null), 10000);
         }
-      } catch { /* silêncio */ }
+      } catch {
+        // Silêncio se offline — não mostrar erro
+      }
     };
 
-    const timer   = setTimeout(generate, 5000);
+    const timer    = setTimeout(generate, 5000);
     const interval = setInterval(generate, 90000);
     return () => { clearTimeout(timer); clearInterval(interval); };
   }, [rideStatus, dataSaver, role, userName]);
@@ -72,13 +103,20 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
       if (mode === 'explore') {
         const result = await geminiService.exploreLuanda(userText);
         setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
+        setKazeOnline(true);
       } else {
         if (!chatRef.current) chatRef.current = geminiService.createKazeChat();
         const response = await chatRef.current.sendMessage(userText);
         setMessages(prev => [...prev, { role: 'model', text: response.text }]);
+        setKazeOnline(true);
       }
-    } catch {
-      setMessages(prev => [...prev, { role: 'model', text: 'Epa mano, a rede está a dar mambo. Tenta de novo!' }]);
+    } catch (err) {
+      console.warn('[KazeMascot] Erro ao enviar:', err);
+      setKazeOnline(false);
+      setMessages(prev => [...prev, {
+        role: 'model',
+        text: 'Epa mano, a rede está a dar mambo. Verifica se a Edge Function gemini-proxy está activa no Supabase e tenta de novo!',
+      }]);
     } finally {
       setIsThinking(false);
     }
@@ -92,8 +130,9 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         onmessage: () => {},
         onclose: () => setIsLive(false),
       });
-      if (session) setIsLive(true);
-    } catch { setIsLive(false); }
+      if (session) { setIsLive(true); setVoiceError(null); }
+      else { setIsLive(false); setVoiceError('Modo de voz temporariamente indisponível.'); }
+    } catch { setIsLive(false); setVoiceError('Activa a Edge Function gemini-proxy no painel Supabase.'); }
   };
 
   const isDriver = role === UserRole.DRIVER;
@@ -221,6 +260,9 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
                     className="gilded-gradient text-on-primary px-10 py-5 rounded-[2rem] font-black text-[10px] uppercase tracking-[0.2em] shadow-[0_20px_40px_rgba(230,195,100,0.25)] hover:scale-105 active:scale-95 transition-all">
                     Sintonizar Kaze
                   </button>
+                )}
+                {voiceError && (
+                  <p className="text-[11px] text-error mt-3 px-6">{voiceError}</p>
                 )}
               </div>
             )}

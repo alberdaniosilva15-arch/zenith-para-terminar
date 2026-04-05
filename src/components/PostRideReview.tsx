@@ -38,8 +38,8 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
         const res = await geminiService.callPostRideReview({
           driver_name:  driverName ?? 'o motorista',
           price_kz:     priceKz ?? 0,
-          distance_km:  0,
-          duration_min: 0,
+          distance_km:  postRide.distanceKm ?? 0,
+          duration_min: postRide.durationMin ?? 0,
           step:         'opening',
         });
         setKazeText(res.text);
@@ -59,7 +59,7 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
     try {
       const res = await geminiService.callPostRideReview({
         driver_name: driverName ?? 'o motorista',
-        price_kz: priceKz ?? 0, distance_km: 0, duration_min: 0,
+        price_kz: priceKz ?? 0, distance_km: postRide.distanceKm ?? 0, duration_min: postRide.durationMin ?? 0,
         step: 'collect_rating',
       });
       setKazeText(res.text);
@@ -78,7 +78,7 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
     try {
       const res = await geminiService.callPostRideReview({
         driver_name: driverName ?? 'o motorista',
-        price_kz: priceKz ?? 0, distance_km: 0, duration_min: 0,
+        price_kz: priceKz ?? 0, distance_km: postRide.distanceKm ?? 0, duration_min: postRide.durationMin ?? 0,
         step: 'collect_comment',
       });
       setKazeText(res.text);

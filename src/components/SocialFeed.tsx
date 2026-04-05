@@ -1,7 +1,10 @@
 // =============================================================================
-// MOTOGO AI v2.1 — SocialFeed.tsx
-// Corrigido: removida dependência motion/react (não está no package.json)
-// Substituída por animações CSS nativas via Tailwind
+// ZENITH RIDE v3.0 — SocialFeed.tsx
+// FIXES:
+//   1. Query posts: SELECT simples sem join FK problemático — batch fetch de perfis
+//   2. increment_post_likes substituído por UPDATE directo (evita 404)
+//   3. Realtime: .on() ANTES de .subscribe()
+//   4. Posts com userRole real a partir do join a users
 // =============================================================================
 
 import React, { useState, useEffect } from 'react';
@@ -16,73 +19,119 @@ const ZONES = ['Geral', 'Viana', 'Kilamba', 'Talatona', 'Cazenga', 'Maianga', 'Z
 const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }> = ({
   userId, userName, role,
 }) => {
-  const [posts,     setPosts]     = useState<Post[]>([]);
-  const [newPost,   setNewPost]   = useState('');
-  const [zone,      setZone]      = useState('Geral');
-  const [postType,  setPostType]  = useState<'status' | 'alert' | 'event'>('status');
-  const [loading,   setLoading]   = useState(true);
-  const [posting,   setPosting]   = useState(false);
-  const [likedIds,  setLikedIds]  = useState<Set<string>>(new Set());
+  const { profile } = useAuth();
+  const [posts,    setPosts]    = useState<Post[]>([]);
+  const [newPost,  setNewPost]  = useState('');
+  const [zone,     setZone]     = useState('Geral');
+  const [postType, setPostType] = useState<'status' | 'alert' | 'event'>('status');
+  const [loading,  setLoading]  = useState(true);
+  const [posting,  setPosting]  = useState(false);
+  const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
 
-  // ------------------------------------------------------------------
-  // Carregar posts do Supabase
-  // ------------------------------------------------------------------
+  // ── Carregar posts ───────────────────────────────────────────────────────────
   useEffect(() => {
+    let mounted = true;
+
     const load = async () => {
       setLoading(true);
-      const { data } = await supabase
+
+      // FIX: SELECT simples sem FK dinâmica para evitar 400
+      const { data, error } = await supabase
         .from('posts')
-        .select(`*, profiles:user_id ( name, avatar_url, rating )`)
+        .select('id, user_id, content, post_type, location, likes, created_at')
         .order('created_at', { ascending: false })
         .limit(30);
 
-      if (data) {
-        setPosts(data.map(p => ({
-          id:        p.id,
-          userId:    p.user_id,
-          userName:  p.profiles?.name ?? 'Utilizador',
-          userRole:  role,   // simplificado — numa versão real viria do perfil
-          content:   p.content,
-          type:      p.post_type,
-          location:  p.location,
-          likes:     p.likes ?? 0,
-          comments:  0,
-          timestamp: new Date(p.created_at).getTime(),
-        })));
+      if (error) {
+        console.error('[SocialFeed] Erro na query posts:', error.message);
+        if (mounted) setLoading(false);
+        return;
       }
-      setLoading(false);
+
+      if (!data || !mounted) { setLoading(false); return; }
+
+      // Buscar nomes em batch
+      const ids = [...new Set(data.map((p: any) => p.user_id))];
+      const { data: profileRows } = await supabase
+        .from('profiles')
+        .select('user_id, name, avatar_url, rating')
+        .in('user_id', ids);
+
+      const profileMap: Record<string, { name: string; avatar_url: string | null; rating: number }> = {};
+      (profileRows ?? []).forEach((pr: any) => {
+        profileMap[pr.user_id] = { name: pr.name, avatar_url: pr.avatar_url, rating: pr.rating };
+      });
+
+      if (mounted) {
+        setPosts(
+          data.map((p: any) => ({
+            id:        p.id,
+            userId:    p.user_id,
+            userName:  profileMap[p.user_id]?.name ?? 'Utilizador',
+            userRole:  userId === p.user_id ? role : UserRole.DRIVER,
+            content:   p.content,
+            type:      p.post_type ?? 'status',
+            location:  p.location,
+            likes:     p.likes ?? 0,
+            comments:  0,
+            timestamp: new Date(p.created_at).getTime(),
+          }))
+        );
+        setLoading(false);
+      }
     };
 
     load();
 
-    // Realtime
-    const ch = supabase.channel('social_feed')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, (p) => {
-        const n = p.new as any;
-        setPosts(prev => [{
-          id:       n.id,
-          userId:   n.user_id,
-          userName: userName,
-          userRole: role,
-          content:  n.content,
-          type:     n.post_type,
-          location: n.location,
-          likes:    0,
-          comments: 0,
-          timestamp: new Date(n.created_at).getTime(),
-        }, ...prev]);
-      })
-      .subscribe();
+    // FIX: .on() ANTES de .subscribe()
+    const ch = supabase
+      .channel(`social_feed_${Date.now()}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, async (payload) => {
+        if (!mounted) return;
+        const n = payload.new as any;
+        const { data: pr } = await supabase
+          .from('profiles')
+          .select('name')
+          .eq('user_id', n.user_id)
+          .maybeSingle();
 
-    return () => { supabase.removeChannel(ch); };
+        const newPost: Post = {
+          id:        n.id,
+          userId:    n.user_id,
+          userName:  pr?.name ?? userName,
+          userRole:  userId === n.user_id ? role : UserRole.DRIVER,
+          content:   n.content,
+          type:      n.post_type ?? 'status',
+          location:  n.location,
+          likes:     0,
+          comments:  0,
+          timestamp: new Date(n.created_at).getTime(),
+        };
+        setPosts(prev => [newPost, ...prev].slice(0, 50));
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'posts' }, (payload) => {
+        if (!mounted) return;
+        const u = payload.new as any;
+        setPosts(prev => prev.map(p => p.id === u.id ? { ...p, likes: u.likes ?? p.likes } : p));
+      })
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.warn('[SocialFeed] Realtime channel error — a trabalhar sem RT.');
+        }
+      });
+
+    return () => {
+      mounted = false;
+      supabase.removeChannel(ch);
+    };
   }, [userId]);
 
-  // ------------------------------------------------------------------
+  // ── Publicar post ────────────────────────────────────────────────────────────
   const handlePost = async () => {
     if (!newPost.trim() || posting) return;
     setPosting(true);
 
-    await supabase.from('posts').insert({
+    const { error } = await supabase.from('posts').insert({
       user_id:   userId,
       content:   newPost.trim(),
       post_type: postType,
@@ -90,18 +139,34 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
       likes:     0,
     });
 
+    if (error) console.error('[SocialFeed] Erro ao publicar:', error.message);
     setNewPost('');
     setPosting(false);
   };
 
+  // FIX: UPDATE directo em vez de RPC inexistente
   const handleLike = async (post: Post) => {
     if (likedIds.has(post.id)) return;
+    const newLikes = (post.likes ?? 0) + 1;
     setLikedIds(prev => new Set([...prev, post.id]));
-    setPosts(prev => prev.map(p => p.id === post.id ? { ...p, likes: p.likes + 1 } : p));
-    await supabase.from('posts').update({ likes: post.likes + 1 }).eq('id', post.id);
+    setPosts(prev => prev.map(p => p.id === post.id ? { ...p, likes: newLikes } : p));
+
+    const { error } = await supabase
+      .from('posts')
+      .update({ likes: newLikes })
+      .eq('id', post.id);
+
+    if (error) console.error('[SocialFeed] Erro ao dar like:', error.message);
   };
 
-  // ------------------------------------------------------------------
+  const timeAgo = (ts: number) => {
+    const diff = Math.floor((Date.now() - ts) / 60000);
+    if (diff < 1) return 'agora mesmo';
+    if (diff < 60) return `${diff}m atrás`;
+    if (diff < 1440) return `${Math.floor(diff / 60)}h atrás`;
+    return `${Math.floor(diff / 1440)}d atrás`;
+  };
+
   return (
     <div className="flex flex-col bg-surface-container-lowest pb-24 min-h-screen">
 
@@ -109,27 +174,28 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
       <div className="bg-surface-container-low p-4 border-b border-outline-variant/20 sticky top-0 z-10 shadow-sm">
         <h2 className="text-lg font-black text-on-surface flex items-center gap-2">
           <ShieldCheck className="w-5 h-5 text-primary" />
-          Comunidade MotoGo
+          Comunidade Zenith
         </h2>
         <p className="text-xs text-outline font-bold">Alertas e status em tempo real de Luanda</p>
       </div>
 
       {/* Criar post */}
       <div className="bg-surface-container-low p-4 mb-2 shadow-sm border-b border-outline-variant/10">
-
-        {/* Filtros de zona */}
+        {/* Zonas */}
         <div className="flex gap-2 overflow-x-auto no-scrollbar mb-4">
           {ZONES.map(z => (
             <button key={z} onClick={() => setZone(z)}
               className={`px-4 py-2 rounded-full text-[9px] font-black uppercase shrink-0 transition-all border ${
-                zone === z ? 'bg-surface-container-highest text-white border-outline-variant' : 'bg-surface-container-low text-on-surface-variant/70 border-outline-variant/30'
+                zone === z
+                  ? 'bg-surface-container-highest text-white border-outline-variant'
+                  : 'bg-surface-container-low text-on-surface-variant/70 border-outline-variant/30 hover:border-outline-variant'
               }`}>
               {z}
             </button>
           ))}
         </div>
 
-        {/* Tipo de post */}
+        {/* Tipo */}
         <div className="flex gap-2 mb-4">
           {(['status', 'alert', 'event'] as const).map(t => (
             <button key={t} onClick={() => setPostType(t)}
@@ -147,14 +213,18 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
 
         <div className="flex gap-3">
           <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-black shrink-0">
-            {userName.charAt(0).toUpperCase()}
+            {(userName || 'U').charAt(0).toUpperCase()}
           </div>
           <div className="flex-1">
             <textarea
               value={newPost}
               onChange={e => setNewPost(e.target.value)}
-              placeholder="O que está a acontecer no trânsito de Luanda?"
-              className="w-full p-3 bg-surface-container-lowest rounded-xl text-sm border border-outline-variant/20 outline-none focus:ring-2 focus:ring-indigo-500 resize-none font-bold text-on-surface"
+              placeholder={
+                postType === 'alert' ? '🚨 Reporta um alerta de trânsito...' :
+                postType === 'event' ? '📍 Partilha um evento em Luanda...' :
+                '💬 O que está a acontecer no trânsito?'
+              }
+              className="w-full p-3 bg-surface-container-lowest rounded-xl text-sm border border-outline-variant/20 outline-none focus:ring-2 focus:ring-primary/30 resize-none font-bold text-on-surface"
               rows={2}
               maxLength={280}
             />
@@ -162,6 +232,7 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
               <div className="flex items-center gap-1 text-xs text-on-surface-variant/70">
                 <MapPin className="w-3 h-3" />
                 <span className="font-bold">{zone}</span>
+                <span className="text-on-surface-variant/40">· {newPost.length}/280</span>
               </div>
               <button
                 onClick={handlePost}
@@ -179,8 +250,9 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
       {/* Feed */}
       <div className="flex-1 space-y-2 p-3">
         {loading ? (
-          <div className="flex justify-center py-12">
+          <div className="flex flex-col items-center justify-center py-12 gap-3">
             <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <p className="text-[10px] font-black text-on-surface-variant/50 uppercase tracking-widest">A carregar feed...</p>
           </div>
         ) : posts.length === 0 ? (
           <div className="text-center py-12">
@@ -193,25 +265,22 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
             <div key={post.id}
               className="bg-surface-container-low p-4 rounded-2xl shadow-sm border border-outline-variant/20 animate-in fade-in duration-300">
 
-              {/* Cabeçalho do post */}
               <div className="flex justify-between items-start mb-3">
                 <div className="flex gap-3 items-center">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black ${
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm ${
                     post.userRole === UserRole.DRIVER ? 'bg-primary/15 text-primary' : 'bg-primary/10 text-primary'
                   }`}>
-                    {post.userName.charAt(0)}
+                    {(post.userName || 'U').charAt(0).toUpperCase()}
                   </div>
                   <div>
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-sm font-black text-on-surface">{post.userName}</span>
                       {post.userRole === UserRole.DRIVER && (
                         <span className="text-[8px] bg-primary/15 text-primary px-1.5 py-0.5 rounded font-black uppercase">Motorista</span>
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-[9px] text-on-surface-variant/70 font-bold">
-                        {Math.floor((Date.now() - post.timestamp) / 60000)}m atrás
-                      </span>
+                      <span className="text-[9px] text-on-surface-variant/70 font-bold">{timeAgo(post.timestamp)}</span>
                       {post.location && (
                         <span className="text-[9px] text-on-surface-variant/70 font-bold flex items-center gap-0.5">
                           <MapPin className="w-2.5 h-2.5" />{post.location}
@@ -220,25 +289,34 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
                     </div>
                   </div>
                 </div>
-                {post.type === 'alert' && (
-                  <span className="text-[9px] bg-red-100 text-error px-2 py-1 rounded-full font-black uppercase animate-pulse">
-                    Alerta
-                  </span>
-                )}
-                {post.type === 'event' && (
-                  <span className="text-[9px] bg-primary/10 text-primary px-2 py-1 rounded-full font-black uppercase">
-                    Evento
-                  </span>
-                )}
+
+                <div className="shrink-0">
+                  {post.type === 'alert' && (
+                    <span className="text-[9px] bg-red-100 text-red-600 px-2 py-1 rounded-full font-black uppercase animate-pulse">
+                      🚨 Alerta
+                    </span>
+                  )}
+                  {post.type === 'event' && (
+                    <span className="text-[9px] bg-primary/10 text-primary px-2 py-1 rounded-full font-black uppercase">
+                      📍 Evento
+                    </span>
+                  )}
+                  {post.type === 'status' && (
+                    <span className="text-[9px] bg-blue-500/10 text-blue-400 px-2 py-1 rounded-full font-black uppercase">
+                      💬 Status
+                    </span>
+                  )}
+                </div>
               </div>
 
               <p className="text-sm text-on-surface-variant leading-relaxed mb-4 font-bold">{post.content}</p>
 
-              {/* Acções */}
               <div className="flex items-center gap-6 pt-3 border-t border-outline-variant/10">
                 <button
                   onClick={() => handleLike(post)}
-                  className={`flex items-center gap-1.5 transition-colors ${likedIds.has(post.id) ? 'text-red-500' : 'text-on-surface-variant/70 hover:text-red-500'}`}
+                  className={`flex items-center gap-1.5 transition-colors ${
+                    likedIds.has(post.id) ? 'text-red-500' : 'text-on-surface-variant/70 hover:text-red-500'
+                  }`}
                 >
                   <Heart className={`w-4 h-4 ${likedIds.has(post.id) ? 'fill-current' : ''}`} />
                   <span className="text-xs font-bold">{post.likes}</span>

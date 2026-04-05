@@ -271,10 +271,10 @@ const Map3D: React.FC<Map3DProps> = ({
       map.remove();
       mapRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Helper: colocar / mover marcador estático ───────────────────────────
-  const placeMarker = (
+  const placeMarker = useCallback((
     type: 'origin' | 'dest',
     map:  mapboxgl.Map,
     coords: [number, number]
@@ -298,7 +298,7 @@ const Map3D: React.FC<Map3DProps> = ({
         markerDestRef.current.setLngLat(coords);
       }
     }
-  };
+  }, []);
 
   // ── Helper: desenhar rota + marcadores + ajustar câmara ─────────────────
   const drawRouteAndMarkers = useCallback(async (
@@ -335,7 +335,7 @@ const Map3D: React.FC<Map3DProps> = ({
       pitch:    dataSaver ? 0 : 48,
       duration: 1400,
     });
-  }, [dataSaver]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dataSaver]);
 
   // ── 2. Reagir a mudanças de pickup / destination ─────────────────────────
   useEffect(() => {
@@ -348,10 +348,9 @@ const Map3D: React.FC<Map3DProps> = ({
       // Aguardar o evento 'load' (tratado no init)
       const onLoad = () => drawRouteAndMarkers(map, pickup!, destination!);
       map.once('load', onLoad);
-      return () => map.off('load', onLoad);
+      return () => { map.off('load', onLoad); };
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pickup?.lat, pickup?.lng, destination?.lat, destination?.lng]);
+  }, [pickup?.lat, pickup?.lng, destination?.lat, destination?.lng, drawRouteAndMarkers]);
 
   // ── 3. Tracking em tempo real do motorista ───────────────────────────────
   // carLocation é actualizado externamente via Supabase Realtime

@@ -109,8 +109,9 @@ class ZonePriceService {
   detectZone(address: string): string | null {
     const normalized = address.toLowerCase();
 
-    // Busca directa
-    for (const [keyword, zone] of Object.entries(LUANDA_ZONE_MAP)) {
+    // Busca directa — procurar por palavras-chave mais específicas primeiro
+    const entries = Object.entries(LUANDA_ZONE_MAP).slice().sort((a, b) => b[0].length - a[0].length);
+    for (const [keyword, zone] of entries) {
       if (normalized.includes(keyword.toLowerCase())) {
         return zone;
       }

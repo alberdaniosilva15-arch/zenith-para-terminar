@@ -13,11 +13,12 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
-      headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, content-type' },
+      headers: { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Access-Control-Allow-Headers': 'authorization, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' },
     });
   }
 
@@ -100,23 +101,29 @@ Deno.serve(async (req: Request) => {
 
     // ------------------------------------------------------------------
     // 4. Opcional: notificar motoristas automaticamente via broadcast Supabase
-    // ------------------------------------------------------------------
-    const supabaseRealtime = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-    for (const driver of matchedDrivers.slice(0, 3)) {  // notificar top 3
-      await supabaseRealtime
-        .channel(`driver:${driver.driver_id}`)
-        .send({
-          type:    'broadcast',
-          event:   'new_ride_nearby',
-          payload: {
-            ride_id:        ride.id,
-            origin_address: ride.origin_address,
-            dest_address:   ride.dest_address,
-            price_kz:       ride.price_kz,
-            distance_km:    ride.distance_km,
-          },
-        });
-    }
+    // Use o `supabaseAdmin` já existente (service role) em vez de criar
+    // um novo cliente. Note que broadcasts não garantem entrega sem
+    // subscrições ativas no cliente — o frontend deve verificar subscrição.
+    // Enviar em paralelo e registar falhas para análise.
+    await Promise.all(matchedDrivers.slice(0, 3).map(async (driver) => {
+      try {
+        await supabaseAdmin
+          .channel(`driver:${driver.driver_id}`)
+          .send({
+            type:    'broadcast',
+            event:   'new_ride_nearby',
+            payload: {
+              ride_id:        ride.id,
+              origin_address: ride.origin_address,
+              dest_address:   ride.dest_address,
+              price_kz:       ride.price_kz,
+              distance_km:    ride.distance_km,
+            },
+          });
+      } catch (sendErr) {
+        console.warn(`[match-driver] broadcast falhou para ${driver.driver_id}:`, sendErr);
+      }
+    }));
 
     return jsonOk({
       matched: true,
@@ -133,13 +140,13 @@ Deno.serve(async (req: Request) => {
 function jsonOk(data: unknown): Response {
   return new Response(JSON.stringify(data), {
     status: 200,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' },
   });
 }
 
 function jsonError(message: string, status: number): Response {
   return new Response(JSON.stringify({ error: true, message }), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' },
   });
 }
