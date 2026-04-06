@@ -15,27 +15,50 @@ import { supabase, edgeFunctionUrl } from '../lib/supabase';
 import type { DbRide, AuctionDriver, NearbyDriver, PriceEstimate, AppError, LatLng } from '../types';
 import { RideStatus } from '../types';
 
-// ─── WKB Parser (formato que o Supabase Realtime envia para colunas geography) ─
-function hexToDouble(hex: string): number {
-  const bytes = new Uint8Array(8);
-  for (let i = 0; i < 8; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return new DataView(bytes.buffer).getFloat64(0, true);
-}
-
-function parseSupabasePoint(wkbHex: unknown): LatLng | null {
-  if (!wkbHex || typeof wkbHex !== 'string') return null;
-  try {
-    const hex = wkbHex.replace(/\s/g, '');
-    if (hex.length < 18) return null;
-    const hasSrid = hex.length >= 50;
-    const xOffset = hasSrid ? 18 : 10;
-    const lng = hexToDouble(hex.slice(xOffset, xOffset + 16));
-    const lat = hexToDouble(hex.slice(xOffset + 16, xOffset + 32));
-    if (isNaN(lat) || isNaN(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
-    return { lat, lng };
-  } catch {
-    return null;
+// ─── Geo Parser (Robusto) ───────────────────────────────────────────────────
+function parseSupabasePoint(val: unknown): LatLng | null {
+  if (!val) return null;
+  
+  // 1. Já é objecto JSON? { coordinates: [lng, lat] }
+  if (typeof val === 'object' && val !== null) {
+    const obj = val as Record<string, unknown>;
+    if (Array.isArray(obj.coordinates) && obj.coordinates.length >= 2) {
+      return { lng: Number(obj.coordinates[0]), lat: Number(obj.coordinates[1]) };
+    }
   }
+
+  if (typeof val !== 'string') return null;
+
+  // 2. É string POINT(lng lat)?
+  if (val.startsWith('POINT')) {
+    const match = val.match(/POINT\(([^ ]+)\s+([^ ]+)\)/);
+    if (match) return { lng: parseFloat(match[1]), lat: parseFloat(match[2]) };
+  }
+
+  // 3. É formato WKB Hex do realtime?
+  try {
+    const hex = val.replace(/\s/g, '');
+    if (hex.length >= 42) {
+      const hasSrid = hex.length >= 50;
+      const xOffset = hasSrid ? 18 : 10;
+      
+      const lngBytes = new Uint8Array(8);
+      for (let i = 0; i < 8; i++) lngBytes[i] = parseInt(hex.slice(xOffset + i * 2, xOffset + i * 2 + 2), 16);
+      const lng = new DataView(lngBytes.buffer).getFloat64(0, true);
+
+      const latBytes = new Uint8Array(8);
+      for (let i = 0; i < 8; i++) latBytes[i] = parseInt(hex.slice(xOffset + 16 + i * 2, xOffset + 16 + i * 2 + 2), 16);
+      const lat = new DataView(latBytes.buffer).getFloat64(0, true);
+
+      if (!isNaN(lat) && !isNaN(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        return { lat, lng };
+      }
+    }
+  } catch (e) {
+    console.warn('[rideService.parseSupabasePoint] WKB parse error:', e);
+  }
+
+  return null;
 }
 
 // ─── Tipos Internos ───────────────────────────────────────────────────────────
@@ -238,34 +261,45 @@ class RideService {
     }
   }
 
-  // ── acceptRide (modo searching — motorista aceita no mercado aberto) ───────
+  // ── acceptRide (atómico) ───────
   async acceptRide(rideId: string, driverId: string): Promise<RideUpdateResult> {
     try {
-      // Optimistic locking: só aceita se ainda estiver sem motorista e em searching
-      const { data, error } = await supabase.from('rides')
-        .update({
-          driver_id:        driverId,
-          status:           RideStatus.ACCEPTED,
-          accepted_at:      new Date().toISOString(),
-          driver_confirmed: true,
-        })
-        .eq('id', rideId)
-        .eq('status', RideStatus.SEARCHING)
-        .is('driver_id', null)
-        .select().single();
+      const { data, error } = await supabase.rpc('accept_ride_atomic', {
+        p_ride_id: rideId,
+        p_driver_id: driverId,
+      });
 
       if (error) {
-        console.error('[rideService.acceptRide]', error);
-        return { data: null, error: { code: error.code, message: 'Esta corrida já foi aceite por outro motorista.' } };
+        console.error('[rideService.acceptRide] RPC error:', error);
+        return { data: null, error: { code: error.code, message: 'Erro ao aceitar corrida.' } };
       }
 
-      // Marcar motorista como busy
-      await supabase.from('driver_locations').update({ status: 'busy' }).eq('driver_id', driverId);
+      if (!data.success) {
+        const messages: Record<string, string> = {
+          ride_not_found:      'Corrida não encontrada',
+          ride_not_searching:  'Esta corrida já foi aceite (já não está à espera)',
+          already_accepted:    'Corrida já aceite',
+          driver_not_available:'O teu estado não permite aceitar corridas agora',
+          race_condition_lost: 'Outro motorista aceitou primeiro. Tenta outra corrida!',
+        };
+        const msg = messages[data.reason] || 'Não foi possível aceitar a corrida';
+        return { data: null, error: { code: data.reason, message: msg } };
+      }
 
-      return { data: data as DbRide, error: null };
+      // Actualizar a flag driver_confirmed (já que a rpc não o fez directamente) e ler a corrida
+      const { data: rideData, error: rideError } = await supabase.from('rides')
+        .update({ driver_confirmed: true })
+        .eq('id', rideId)
+        .select().single();
+
+      if (rideError) {
+        return { data: null, error: { code: rideError.code, message: 'Corrida aceite, mas erro ao ler dados.' } };
+      }
+
+      return { data: rideData as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.acceptRide] Excepção:', err);
-      return { data: null, error: { code: 'unknown', message: 'Erro ao aceitar corrida.' } };
+      return { data: null, error: { code: 'unknown', message: 'Erro crítico ao aceitar corrida.' } };
     }
   }
 
@@ -333,6 +367,12 @@ class RideService {
 
       // Fallback: UPDATE directo
       console.warn('[rideService.cancelRide] RPC falhou, usando fallback directo:', error.message);
+      
+      // Validação básica UUID para evitar SQL string injection
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+         return { code: 'invalid_user', message: 'ID malformado' };
+      }
+
       const { error: updateErr } = await supabase.from('rides')
         .update({
           status:       RideStatus.CANCELLED,
@@ -367,35 +407,19 @@ class RideService {
   // ── getActiveRide ─────────────────────────────────────────────────────────
   async getActiveRide(userId: string): Promise<(DbRide & { driver_name?: string; passenger_name?: string }) | null> {
     try {
-      const terminalStatuses = [RideStatus.COMPLETED, RideStatus.CANCELLED];
-      const { data, error } = await supabase.from('rides')
-        .select('*')
-        .or(`passenger_id.eq.${userId},driver_id.eq.${userId}`)
-        .not('status', 'in', `(${terminalStatuses.join(',')})`)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data, error } = await supabase.rpc('get_active_ride', {
+        p_user_id: userId
+      });
 
-      if (error) { console.error('[rideService.getActiveRide]', error); return null; }
+      if (error) { 
+         console.error('[rideService.getActiveRide]', error); 
+         return null; 
+      }
+      
       if (!data) return null;
 
-      const rideRow = data as DbRide;
-
-      // Buscar nomes em paralelo
-      const [driverRes, passengerRes] = await Promise.all([
-        rideRow.driver_id
-          ? supabase.from('profiles').select('name').eq('user_id', rideRow.driver_id).single()
-          : Promise.resolve({ data: null }),
-        rideRow.passenger_id
-          ? supabase.from('profiles').select('name').eq('user_id', rideRow.passenger_id).single()
-          : Promise.resolve({ data: null }),
-      ]);
-
-      return {
-        ...rideRow,
-        driver_name:    (driverRes as any)?.data?.name ?? undefined,
-        passenger_name: (passengerRes as any)?.data?.name ?? undefined,
-      };
+      // JSONB do RPC vem formatado certinho
+      return data as DbRide & { driver_name?: string; passenger_name?: string };
     } catch (err) {
       console.error('[rideService.getActiveRide] Excepção:', err);
       return null;
@@ -615,15 +639,23 @@ class RideService {
   }
 
   // ── setDriverStatus ───────────────────────────────────────────────────────
-  async setDriverStatus(driverId: string, status: 'offline' | 'available' | 'busy'): Promise<void> {
+  async setDriverStatus(driverId: string, status: 'offline' | 'available' | 'busy', coords?: LatLng): Promise<void> {
     try {
-      await supabase.from('driver_locations').upsert({
-        driver_id: driverId,
-        status,
-        updated_at: new Date().toISOString(),
-        // Localização placeholder para satisfazer constraint NOT NULL (será actualizada pelo GPS)
-        location: 'POINT(13.2343 -8.8368)',
-      });
+      if (coords) {
+        await supabase.from('driver_locations').upsert({
+          driver_id: driverId,
+          status,
+          updated_at: new Date().toISOString(),
+          location: `POINT(${coords.lng} ${coords.lat})`,
+        });
+      } else {
+        // Apenas faz update ao status se não há coords, para evitar placeholder de Luanda
+        const { error } = await supabase.from('driver_locations')
+          .update({ status, updated_at: new Date().toISOString() })
+          .eq('driver_id', driverId);
+          
+        if (error) console.error('[rideService.setDriverStatus] Sem coords, update falhou:', error);
+      }
     } catch (err) {
       console.error('[rideService.setDriverStatus] Erro:', err);
     }
@@ -674,6 +706,8 @@ class RideService {
               Math.cos(dest.lat * Math.PI/180) * Math.sin(dLng/2)**2;
     const distanceKm = Math.max(0.5, R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
     const durationMin = Math.ceil((distanceKm / 25) * 60);
+    // Tarifário Provisório (Fallback) - Baseado nos preços de mercado actuais em Luanda (Táxi/Moto-táxi)
+    // Custo base: 150 KZ (Abertura de viagem) | Custo por Km: ~200 KZ
     const base_kz = 150;
     const per_km_kz = Math.ceil(distanceKm * 200);
     const total_kz = Math.ceil(base_kz + per_km_kz);

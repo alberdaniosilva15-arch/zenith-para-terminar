@@ -76,6 +76,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setDbUser(userRow as DbUser);
       setProfile(profileRow as DbProfile);
       setAuthError(null);
+      setLoading(false);
     } catch (err: any) {
       if (attempt < MAX_ATTEMPTS - 1) {
         const delay = BASE_DELAY_MS * Math.pow(2, attempt);
@@ -234,7 +235,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       email,
       password,
       options: {
-        data: { name, role },  // passado para handle_new_user() trigger
+        data: { name },  // Role ignorado no cliente; servidor define
       },
     });
 
