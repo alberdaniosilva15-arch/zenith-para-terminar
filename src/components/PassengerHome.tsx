@@ -402,7 +402,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                   {searching ? 'A consultar...' : `${results.length} locais`}
                 </p>
                 {results.map((res, i) => (
-                  <button key={i} onClick={() => selectLocation(res)}
+                  <button key={`location-${res.name}-${i}`} onClick={() => selectLocation(res)}
                     className="w-full flex items-center gap-4 p-4 hover:bg-surface-container-lowest rounded-2xl transition-colors text-left border border-transparent hover:border-outline-variant/20">
                     <div className="w-10 h-10 bg-surface-container-low rounded-xl flex items-center justify-center text-xl shrink-0">
                       {res.type === 'bairro' ? '🏘️' : res.type === 'hospital' ? '🏥' : res.type === 'servico' ? '🏪' : res.type === 'monumento' ? '🏛️' : '📍'}

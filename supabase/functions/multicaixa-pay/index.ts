@@ -47,7 +47,8 @@ Deno.serve(async (req: Request) => {
     // ----------------------------------------------------------------
     // 2. Parse e validação
     // ----------------------------------------------------------------
-    const body = await req.json();
+    const bodyText = await req.text();
+    const body = JSON.parse(bodyText);
     const { action, ...params } = body as {
       action: 'initiate_payment' | 'check_status' | 'callback' | 'withdrawal';
       [k: string]: unknown;
@@ -143,15 +144,40 @@ Deno.serve(async (req: Request) => {
       // Accredita o saldo após confirmação de pagamento
       // ----------------------------------------------------------------
       case 'callback': {
-        // Validar assinatura do webhook (segurança)
+        // Validar assinatura do webhook (segurança HMAC SHA256)
         const signature = req.headers.get('X-Multicaixa-Signature');
         if (!signature) return jsonErr('Assinatura em falta.', 401);
 
         const MULTICAIXA_WEBHOOK_SECRET = Deno.env.get('MULTICAIXA_WEBHOOK_SECRET') || '';
-        // Simulação de verificação HMAC conforme pedido do user
-        // Num cenário real usar Web Crypto API com body_raw
-        if (!MULTICAIXA_WEBHOOK_SECRET || signature !== 'VÁLIDO_SE_FOR_SIMULACAO') {
-             // fallback ou validação real
+        if (MULTICAIXA_WEBHOOK_SECRET && MULTICAIXA_WEBHOOK_SECRET !== 'simulated_dev_secret') {
+          try {
+            const encoder = new TextEncoder();
+            const key = await crypto.subtle.importKey(
+              'raw',
+              encoder.encode(MULTICAIXA_WEBHOOK_SECRET),
+              { name: 'HMAC', hash: 'SHA-256' },
+              false,
+              ['verify']
+            );
+            
+            // Converter a assinatura hex recebida para Uint8Array
+            const sigBytes = new Uint8Array(signature.match(/[\da-f]{2}/gi)?.map(h => parseInt(h, 16)) || []);
+            
+            const isValid = await crypto.subtle.verify(
+              'HMAC',
+              key,
+              sigBytes,
+              encoder.encode(bodyText)
+            );
+            
+            if (!isValid) {
+              console.error('[multicaixa-pay] Falha na validação HMAC do webhook.');
+              return jsonErr('Assinatura inválida.', 401);
+            }
+          } catch (err) {
+            console.error('[multicaixa-pay] Erro na verificação HMAC:', err);
+            return jsonErr('Erro de validação.', 401);
+          }
         }
 
         const { reference, status, amount, payer_phone } = params as {
