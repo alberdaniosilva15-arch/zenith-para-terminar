@@ -1,0 +1,14 @@
+{
+  "cookies": [],
+  "origins": [
+    {
+      "origin": "http://localhost:5173",
+      "localStorage": [
+        {
+          "name": "websdk_ng_install_id",
+          "value": "2F80DA1A0592492AB73868D6A987E577"
+        }
+      ]
+    }
+  ]
+}
