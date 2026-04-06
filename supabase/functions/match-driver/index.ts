@@ -34,6 +34,29 @@ Deno.serve(async (req: Request) => {
     const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
     if (authErr || !user) return jsonError('Token inválido.', 401);
 
+    // ── Rate limiting simples por user_id ──────────────────────────────────────
+    const supabaseRateLimit = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const rlWindow = new Date(Math.floor(Date.now() / 60000) * 60000).toISOString();
+
+    const { data: rlRow } = await supabaseRateLimit
+      .from('ai_usage_logs')
+      .select('request_count')
+      .eq('user_id', user.id)
+      .eq('action', 'match_driver')
+      .gte('created_at', rlWindow)
+      .maybeSingle();
+
+    if (rlRow && rlRow.request_count >= 10) {
+      return jsonError('Demasiados pedidos de matching. Aguarda 1 minuto.', 429);
+    }
+
+    supabaseRateLimit.from('ai_usage_logs').insert({
+      user_id: user.id,
+      action: 'match_driver',
+      tokens_used: 0,
+    }).then(() => {}).catch(() => {});
+    // ── Fim rate limiting ───────────────────────────────────────────────────────
+
     const { ride_id } = await req.json() as { ride_id: string };
     if (!ride_id) return jsonError('ride_id em falta.', 400);
 
