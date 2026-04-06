@@ -64,6 +64,31 @@ Deno.serve(async (req: Request) => {
     const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) return jsonError('Token inválido.', 401);
 
+    // ── Rate limiting simples por user_id ──────────────────────────────────────
+    // Máximo: 30 cálculos por minuto por utilizador
+    const supabaseAdmin2 = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const windowStart = new Date(Math.floor(Date.now() / 60000) * 60000).toISOString();
+
+    const { data: usageRow } = await supabaseAdmin2
+      .from('ai_usage_logs')
+      .select('request_count')
+      .eq('user_id', user.id)
+      .eq('action', 'calculate_price')
+      .gte('created_at', windowStart)
+      .maybeSingle();
+
+    if (usageRow && usageRow.request_count >= 30) {
+      return jsonError('Demasiados pedidos de preço. Aguarda 1 minuto.', 429);
+    }
+
+    // Registar uso (fire-and-forget, não bloqueia resposta)
+    supabaseAdmin2.from('ai_usage_logs').insert({
+      user_id: user.id,
+      action: 'calculate_price',
+      tokens_used: 0,
+    }).then(() => {}).catch(() => {});
+    // ── Fim rate limiting ───────────────────────────────────────────────────────
+
     const body = await req.json() as {
       origin:          { lat: number; lng: number };
       dest:            { lat: number; lng: number };
@@ -125,7 +150,9 @@ Deno.serve(async (req: Request) => {
     const trafficLevel   = getTrafficLevel(hourLuanda);
     const speedKmh       = PRICING.SPEED_KMH[trafficLevel];
     const durationMin    = Math.round((distanceKm / speedKmh) * 60);
-    const surgeMultiplier = getSurgeMultiplier(hourLuanda);
+    // Usar service role já instanciado para o surge real
+    const adminForSurge = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const surgeMultiplier = await getSurgeMultiplierReal(hourLuanda, origin.lat, origin.lng, adminForSurge);
 
     const baseKz   = PRICING.BASE_KZ;
     const perKmKz  = distanceKm * PRICING.PER_KM_KZ;
@@ -170,8 +197,48 @@ function getTrafficLevel(h: number): 'low'|'medium'|'high' {
   if (h >= 6 && h < 22) return 'medium';
   return 'low';
 }
-function getSurgeMultiplier(h: number): number {
-  for (const s of SURGE_HOURS) if (h>=s.start&&h<s.end) return s.multiplier;
+// Surge baseado em D/O real — com fallback por hora
+async function getSurgeMultiplierReal(
+  h: number,
+  originLat: number,
+  originLng: number,
+  adminClient: ReturnType<typeof createClient>
+): Promise<number> {
+  try {
+    // Contar pedidos activos (D) num raio de 5 km da origem
+    const { count: demandCount } = await adminClient
+      .from('rides')
+      .select('id', { count: 'exact', head: true })
+      .in('status', ['searching', 'accepted', 'picking_up'])
+      .gte('origin_lat', originLat - 0.045)  // ~5km
+      .lte('origin_lat', originLat + 0.045)
+      .gte('origin_lng', originLng - 0.065)
+      .lte('origin_lng', originLng + 0.065);
+
+    // Contar motoristas disponíveis (O) no mesmo raio
+    const { count: supplyCount } = await adminClient
+      .from('driver_locations')
+      .select('driver_id', { count: 'exact', head: true })
+      .eq('status', 'available')
+      .gte('updated_at', new Date(Date.now() - 5 * 60 * 1000).toISOString()) // activos nos últimos 5 min
+      .not('driver_id', 'is', null);
+
+    const D = demandCount ?? 0;
+    const O = supplyCount ?? 1; // evitar divisão por zero
+    const alpha = 0.5; // agressividade padrão
+    const SURGE_MAX = 2.5;
+
+    if (D > 0 && O > 0) {
+      const surgeDynamic = 1 + alpha * (D / O);
+      return Math.min(Math.round(surgeDynamic * 100) / 100, SURGE_MAX);
+    }
+  } catch (err) {
+    // Falha silenciosa — usa fallback por hora
+    console.warn('[calculate-price] surge D/O falhou, usando fallback hora:', err);
+  }
+
+  // Fallback: surge por hora do dia
+  for (const s of SURGE_HOURS) if (h >= s.start && h < s.end) return s.multiplier;
   return 1.0;
 }
 function corsOk(): Response {
