@@ -100,12 +100,40 @@ const Contract: React.FC = () => {
   }, [dbUser?.id]);
 
   // ── Schedule a ride for a contract ──────────────────────────────────────
-  const handleSchedule = async (contractId: string) => {
-    setScheduling(contractId);
-    await new Promise(r => setTimeout(r, 1800)); // Simula chamada — integrar com requestRide
-    setScheduling(null);
-    setSuccessId(contractId);
-    setTimeout(() => setSuccessId(null), 4000);
+  const handleSchedule = async (contract: Contract) => {
+    if (!dbUser?.id) return;
+    setScheduling(contract.id);
+    try {
+      const { data: profileData } = await supabase
+        .from('profiles')
+        .select('last_known_lat, last_known_lng')
+        .eq('user_id', dbUser.id)
+        .single();
+  
+      const originLat = profileData?.last_known_lat ?? -8.8368;
+      const originLng = profileData?.last_known_lng ?? 13.2343;
+  
+      const { error } = await supabase.from('rides').insert({
+        passenger_id:   dbUser.id,
+        status:         'searching',
+        dest_address:   contract.address,
+        dest_lat:       contract.dest_lat,
+        dest_lng:       contract.dest_lng,
+        origin_address: 'A minha localização',
+        origin_lat:     originLat,
+        origin_lng:     originLng,
+        contract_id:    contract.id,
+        scheduled_time: contract.time_start,
+      });
+  
+      if (error) throw new Error('Não foi possível agendar. Verifica a tua ligação.');
+      setSuccessId(contract.id);
+      setTimeout(() => setSuccessId(null), 4000);
+    } catch (err: any) {
+      alert(`❌ ${err?.message ?? 'Erro ao agendar corrida. Tenta de novo.'}`);
+    } finally {
+      setScheduling(null);
+    }
   };
 
   // ── Save new contract ────────────────────────────────────────────────────
@@ -139,10 +167,13 @@ const Contract: React.FC = () => {
   };
 
   // ── Deactivate contract ──────────────────────────────────────────────────
-  const handleDeactivate = async (id: string) => {
-    if (!confirm('Desativar este contrato?')) return;
-    await supabase.from('contracts').update({ active: false }).eq('id', id);
-    setContracts(prev => prev.filter(c => c.id !== id));
+  const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
+  const handleDeactivate  = (id: string) => setDeactivatingId(id);
+  const confirmDeactivate = async () => {
+    if (!deactivatingId) return;
+    await supabase.from('contracts').update({ active: false }).eq('id', deactivatingId);
+    setContracts(prev => prev.filter(c => c.id !== deactivatingId));
+    setDeactivatingId(null);
   };
 
   // ── KM Bonus bar ─────────────────────────────────────────────────────────
@@ -219,7 +250,7 @@ const Contract: React.FC = () => {
               contract={c}
               isScheduling={scheduling === c.id}
               isSuccess={successId === c.id}
-              onSchedule={() => handleSchedule(c.id)}
+              onSchedule={() => handleSchedule(c)}
               onDeactivate={() => handleDeactivate(c.id)}
             />
           ))}
@@ -322,6 +353,34 @@ const Contract: React.FC = () => {
           <span className="material-symbols-outlined block mb-1 text-2xl">add_circle</span>
           Adicionar Novo Contrato
         </button>
+      )}
+
+      {deactivatingId && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
+             style={{ background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(8px)' }}>
+          <div className="rounded-2xl p-6 w-full max-w-sm space-y-4"
+               style={{ background: '#0E0E0E', border: '1px solid rgba(230,195,100,0.2)' }}>
+            <div className="text-center">
+              <span className="material-symbols-outlined text-4xl text-primary mb-3 block">warning</span>
+              <h3 className="font-headline text-lg italic font-bold text-on-surface">Desactivar Contrato?</h3>
+              <p className="text-[11px] text-on-surface-variant/70 mt-2 font-label">
+                Esta acção não pode ser desfeita.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setDeactivatingId(null)}
+                className="flex-1 py-3 rounded-xl font-label text-[10px] uppercase tracking-widest font-bold"
+                style={{ border: '1px solid rgba(230,195,100,0.2)', color: 'rgba(230,195,100,0.5)' }}>
+                Cancelar
+              </button>
+              <button onClick={confirmDeactivate}
+                className="flex-1 py-3 rounded-xl font-label text-[10px] uppercase tracking-widest font-extrabold"
+                style={{ background: '#dc2626', color: 'white' }}>
+                Desactivar
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
