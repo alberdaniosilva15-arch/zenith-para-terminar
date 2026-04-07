@@ -190,15 +190,25 @@ const Login: React.FC = () => {
           ) : (screen === 'signin' ? (authRole === UserRole.DRIVER ? 'ENTRAR' : 'ENVIAR LINK MÁGICO') : 'CRIAR CONTA')}
         </button>
 
-        {/* Quick role buttons (signin) */}
+        {/* Botões de acesso rápido por tipo de utilizador (signin) */}
         {screen === 'signin' && (
           <div className="w-full grid grid-cols-2 gap-4">
-            <QuickBtn icon="two_wheeler" label="MOTORISTA" />
-            <QuickBtn icon="shield" label="ADMIN" />
+            <QuickBtn
+              icon="person"
+              label="PASSAGEIRO"
+              onClick={() => { setAuthRole(null); setError(null); }}
+              active={authRole === null}
+            />
+            <QuickBtn
+              icon="two_wheeler"
+              label="MOTORISTA"
+              onClick={() => { setAuthRole(UserRole.DRIVER); setError(null); }}
+              active={authRole === UserRole.DRIVER}
+            />
           </div>
         )}
 
-        {screen === 'signin' && (
+        {screen === 'signin' && authRole !== UserRole.DRIVER && (
           <div className="w-full mt-3 flex gap-3">
             <button
               onClick={handleSendMagicLink}
@@ -258,9 +268,14 @@ const RoleBtn: React.FC<{ label: string; icon: string; active: boolean; onClick:
   </button>
 );
 
-const QuickBtn: React.FC<{ icon: string; label: string }> = ({ icon, label }) => (
-  <button className="flex items-center justify-center gap-2 py-4 rounded-xl font-label text-[11px] uppercase tracking-wider transition-all duration-300 active:scale-95"
-    style={{ border: '1px solid rgba(230,195,100,0.2)', background: 'transparent', color: 'rgba(230,195,100,0.5)' }}>
+const QuickBtn: React.FC<{ icon: string; label: string; onClick?: () => void; active?: boolean }> = ({ icon, label, onClick, active }) => (
+  <button onClick={onClick}
+    className="flex items-center justify-center gap-2 py-4 rounded-xl font-label text-[11px] uppercase tracking-wider transition-all duration-300 active:scale-95"
+    style={{
+      border: `1px solid ${active ? 'rgba(230,195,100,0.6)' : 'rgba(230,195,100,0.2)'}`,
+      background: active ? 'rgba(230,195,100,0.10)' : 'transparent',
+      color: active ? '#E6C364' : 'rgba(230,195,100,0.5)',
+    }}>
     <span className="material-symbols-outlined text-xl">{icon}</span>
     {label}
   </button>

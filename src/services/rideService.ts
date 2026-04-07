@@ -75,6 +75,16 @@ interface CreateRideInput {
 
 interface RideUpdateResult { data: DbRide | null; error: AppError | null; }
 
+const rideRateTracker = new Map<string, number[]>();
+
+function checkRideRateLimit(userId: string): boolean {
+  const now        = Date.now();
+  const timestamps = (rideRateTracker.get(userId) ?? []).filter(ts => now - ts < 60_000);
+  if (timestamps.length >= 5) return false;
+  rideRateTracker.set(userId, [...timestamps, now]);
+  return true;
+}
+
 // ─── Classe Principal ─────────────────────────────────────────────────────────
 class RideService {
   private rideChannel:       RealtimeChannel | null = null;
@@ -157,6 +167,11 @@ class RideService {
 
   // ── createRide ────────────────────────────────────────────────────────────
   async createRide(input: CreateRideInput): Promise<RideUpdateResult> {
+    // Rate limit
+    if (!checkRideRateLimit(input.passenger_id)) {
+      return { data: null, error: { code: 'rate_limit', message: 'Demasiados pedidos de corrida. Aguarda 1 minuto antes de tentar de novo.' } };
+    }
+
     // Validação básica
     if (!input.passenger_id) return { data: null, error: { code: 'validation', message: 'ID de passageiro em falta.' } };
     if (!input.origin_address || !input.dest_address) return { data: null, error: { code: 'validation', message: 'Origem ou destino em falta.' } };
@@ -340,12 +355,47 @@ class RideService {
         if (updated?.driver_id) {
           await supabase.from('driver_locations').update({ status: 'available' }).eq('driver_id', updated.driver_id);
         }
+        
+        // FASE 11: Gamificação - Perk dos 70km (apenas para completed)
+        if (status === RideStatus.COMPLETED && updated?.passenger_id) {
+          const distKm = (updated as any).route_distance_km ?? updated.distance_km ?? 0;
+          if (distKm > 0) {
+            this._updateKmPerk(updated.passenger_id, distKm).catch(e => console.error('[rideService.Gamification]', e));
+          }
+        }
       }
 
       return { data: data as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.updateRideStatus] Excepção:', err);
       return { data: null, error: { code: 'unknown', message: 'Erro ao actualizar corrida.' } };
+    }
+  }
+
+  // ── Gamificação ───────────────────────────────────────────────────────────
+  private async _updateKmPerk(userId: string, rideDistanceKm: number) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('km_total, km_to_next_perk, free_km_available')
+      .eq('user_id', userId)
+      .single();
+  
+    if (!profile) return;
+  
+    const newTotal  = (profile.km_total       ?? 0)  + rideDistanceKm;
+    const newToNext = (profile.km_to_next_perk ?? 70) - rideDistanceKm;
+  
+    if (newToNext <= 0) {
+      await supabase.from('profiles').update({
+        km_total:          newTotal,
+        km_to_next_perk:   70,
+        free_km_available: (profile.free_km_available ?? 0) + 7,
+      }).eq('user_id', userId);
+    } else {
+      await supabase.from('profiles').update({
+        km_total:        newTotal,
+        km_to_next_perk: newToNext,
+      }).eq('user_id', userId);
     }
   }
 
@@ -639,26 +689,22 @@ class RideService {
   }
 
   // ── setDriverStatus ───────────────────────────────────────────────────────
-  async setDriverStatus(driverId: string, status: 'offline' | 'available' | 'busy', coords?: LatLng): Promise<void> {
-    try {
-      if (coords) {
-        await supabase.from('driver_locations').upsert({
-          driver_id: driverId,
-          status,
-          updated_at: new Date().toISOString(),
-          location: `POINT(${coords.lng} ${coords.lat})`,
-        });
-      } else {
-        // Apenas faz update ao status se não há coords, para evitar placeholder de Luanda
-        const { error } = await supabase.from('driver_locations')
-          .update({ status, updated_at: new Date().toISOString() })
-          .eq('driver_id', driverId);
-          
-        if (error) console.error('[rideService.setDriverStatus] Sem coords, update falhou:', error);
-      }
-    } catch (err) {
-      console.error('[rideService.setDriverStatus] Erro:', err);
+  async setDriverStatus(
+    driverId: string,
+    status: 'available' | 'offline' | 'busy' | 'on_trip',
+    coords?: { lat: number; lng: number }
+  ): Promise<void> {
+    const updateData: Record<string, unknown> = {
+      driver_id: driverId, status, updated_at: new Date().toISOString(),
+    };
+    // PostGIS: ordem SEMPRE (Longitude, Latitude)
+    if (coords?.lat && coords?.lng) {
+      updateData.location = `POINT(${coords.lng} ${coords.lat})`;
     }
+    const { error } = await supabase
+      .from('driver_locations')
+      .upsert(updateData, { onConflict: 'driver_id' });
+    if (error) console.error('[rideService.setDriverStatus]', error);
   }
 
   // ── findNearbyDrivers ─────────────────────────────────────────────────────

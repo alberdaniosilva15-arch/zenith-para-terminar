@@ -202,64 +202,87 @@ export const mapService = {
     }
   },
 
-  // ── getCurrentPosition ───────────────────────────────────────────────────────
+  // ── getCurrentPosition ───────────────────────────────────────────────────
   getCurrentPosition(): Promise<LatLng> {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
-        console.warn('[mapService] Geolocalização não suportada. A usar centro de Luanda.');
-        resolve({ lat: -8.8368, lng: 13.2343 });
+        reject(new Error('O teu browser não suporta GPS. Tenta no Chrome ou Firefox.'));
         return;
       }
       navigator.geolocation.getCurrentPosition(
         (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
         (err) => {
-          console.warn('[mapService.getCurrentPosition] GPS falhou:', err.message, '— a usar centro de Luanda.');
-          resolve({ lat: -8.8368, lng: 13.2343 });
+          const msgs: Record<number, string> = {
+            1: 'Permissão de localização negada. Vá às definições do browser → Permissões → Localização → Permitir para este site.',
+            2: 'GPS indisponível. Verifica se o GPS do telemóvel está activo.',
+            3: 'GPS demorou demasiado. Verifica a tua ligação e tenta de novo.',
+          };
+          reject(new Error(msgs[err.code] ?? 'GPS falhou.'));
         },
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
+        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
       );
     });
   },
 
-  // ── watchPosition (c/ Throttle) ─────────────────────────────────────────────
+  // ── watchPosition (c/ Throttle + Retry automático) ────────────────────────
   watchPosition(onUpdate: (coords: LatLng, heading?: number) => void): () => void {
     if (!navigator.geolocation) {
       console.warn('[mapService.watchPosition] Geolocalização não disponível.');
       return () => {};
     }
-    
-    let lastUpdateTime = 0;
-    let lastLat = 0;
-    let lastLng = 0;
-    const GPS_THROTTLE_MS = 5000;
-    const GPS_THROTTLE_M = 50;
 
-    const watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        const { latitude: lat, longitude: lng, heading } = pos.coords;
-        const now = Date.now();
-        
-        // Bloquear coords fora de Angola
-        if (lat < -18 || lat > -4.5 || lng < 11.5 || lng > 24.1) return;
+    let lastTime   = 0;
+    let lastLat    = 0;
+    let lastLng    = 0;
+    let retryCount = 0;
+    let watchId: number;
+    const MIN_MS   = 5000; // 5 segundos mínimo entre updates
+    const MIN_M    = 10;   // 10 metros — sensível a trânsito lento de Luanda
 
-        // Throttle por tempo
-        if (now - lastUpdateTime < GPS_THROTTLE_MS) return;
+    const haversineM = (la1: number, lo1: number, la2: number, lo2: number) => {
+      const R    = 6371000;
+      const dLat = (la2 - la1) * Math.PI / 180;
+      const dLng = (lo2 - lo1) * Math.PI / 180;
+      const a    = Math.sin(dLat/2)**2 +
+                   Math.cos(la1 * Math.PI / 180) * Math.cos(la2 * Math.PI / 180) * Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    };
 
-        // Throttle por distância
-        if (lastLat !== 0) {
-          const dist = mapService.calculateDistance({ lat: lastLat, lng: lastLng }, { lat, lng }) * 1000;
-          if (dist < GPS_THROTTLE_M) return;
-        }
+    const startWatch = () => {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const { latitude: lat, longitude: lng } = pos.coords;
+          const now = Date.now();
+          retryCount = 0;
 
-        lastUpdateTime = now;
-        lastLat = lat;
-        lastLng = lng;
+          // Validar bounds de Angola
+          if (lat < -18 || lat > -4.5 || lng < 11.5 || lng > 24.1) {
+            console.warn('[GPS] Coordenadas fora de Angola:', { lat, lng });
+            return;
+          }
 
-        onUpdate({ lat, lng }, heading ?? undefined);
-      },
-      (err) => console.warn('[mapService.watchPosition]', err.message),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
-    );
+          if (now - lastTime < MIN_MS) return;
+          if (lastLat !== 0 && haversineM(lastLat, lastLng, lat, lng) < MIN_M) return;
+
+          lastTime = now; lastLat = lat; lastLng = lng;
+          onUpdate({ lat, lng }, pos.coords.heading ?? undefined);
+        },
+        (err) => {
+          console.warn('[mapService.watchPosition]', err.message);
+          // Reconectar automaticamente — até 3 tentativas com 3s de intervalo
+          if (retryCount < 3) {
+            retryCount++;
+            setTimeout(() => {
+              navigator.geolocation.clearWatch(watchId);
+              startWatch();
+            }, 3000);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
+      );
+    };
+
+    startWatch();
     return () => navigator.geolocation.clearWatch(watchId);
   },
 };

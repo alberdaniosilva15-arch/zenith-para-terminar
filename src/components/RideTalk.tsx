@@ -68,7 +68,10 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
   const [sending,     setSending]     = useState(false);
   const [loading,     setLoading]     = useState(true);
   const [isRecording, setIsRecording] = useState(false);
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const channelRef       = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef   = useRef<Blob[]>([]);
+  const streamRef        = useRef<MediaStream | null>(null);
 
   // ── Carregar + subscrever ────────────────────────────────────────────────────
   useEffect(() => {
@@ -77,9 +80,11 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
     const load = async () => {
       setLoading(true);
       // FIX: usar join manual em vez de foreign key sintax que dá 400
+    const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const { data, error } = await supabase
         .from('posts')
-        .select('id, content, post_type, location, likes, created_at, user_id')
+        .select('id, content, post_type, location, likes, audio_url, created_at, user_id')
+        .gte('created_at', cutoff24h)
         .order('created_at', { ascending: false })
         .limit(40);
 
@@ -118,9 +123,9 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
 
     load();
 
-    // FIX: .on() ANTES de .subscribe()
+    // Canal fixo sem Date.now() — evita canais duplicados a cada re-render
     channelRef.current = supabase
-      .channel(`ridetalk_${zone}_${Date.now()}`)
+      .channel(`ridetalk_zone_${zone}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, async (payload) => {
         if (!mounted) return;
         const n = payload.new as any;
@@ -150,6 +155,14 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
 
     return () => {
       mounted = false;
+      // Parar gravação se activa
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
@@ -195,16 +208,64 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
       .eq('id', msg.id);
   };
 
+  // ── Gravação de voz real com MediaRecorder ───────────────────────────────────
+  const sendVoiceMessage = async (blob: Blob, mimeType: string) => {
+    if (!profile) return;
+    setSending(true);
+    try {
+      const ext      = mimeType.includes('webm') ? 'webm' : 'ogg';
+      const filename = `voice/${profile.user_id}/${Date.now()}.${ext}`;
+      const { error: uploadError } = await supabase.storage
+        .from('voice-messages')
+        .upload(filename, blob, { contentType: mimeType, cacheControl: '3600' });
+      if (uploadError) { console.error('[RideTalk] Erro upload:', uploadError); return; }
+      const { data: { publicUrl } } = supabase.storage.from('voice-messages').getPublicUrl(filename);
+      await supabase.from('posts').insert({
+        user_id:   profile.user_id,
+        content:   '🎙️ Mensagem de voz',
+        post_type: activeCat === 'all' ? 'status' : activeCat,
+        location:  zone !== 'Geral' ? zone : null,
+        audio_url: publicUrl,
+        likes:     0,
+      });
+    } catch (err) {
+      console.error('[RideTalk] Erro no envio de voz:', err);
+    } finally {
+      setSending(false);
+    }
+  };
+
   const handleVoiceRecord = async () => {
     if (!isRecording) {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        stream.getTracks().forEach(t => t.stop());
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 16000 },
+        });
+        streamRef.current      = stream;
+        audioChunksRef.current = [];
+        const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg';
+        const recorder = new MediaRecorder(stream, { mimeType });
+        mediaRecorderRef.current = recorder;
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+        };
+        recorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          streamRef.current = null;
+          const blob = new Blob(audioChunksRef.current, { type: mimeType });
+          if (blob.size > 0) await sendVoiceMessage(blob, mimeType);
+        };
+        recorder.start(250);
         setIsRecording(true);
-      } catch {
-        alert('Não foi possível aceder ao microfone. Verifica permissões do browser.');
+      } catch (err: unknown) {
+        const name = (err as { name?: string })?.name;
+        const msg = name === 'NotAllowedError'
+          ? 'Permissão de microfone negada. Vai às definições do browser e permite o microfone.'
+          : 'Microfone não disponível. Verifica se está ligado.';
+        alert(`🎙️ ${msg}`);
       }
     } else {
+      mediaRecorderRef.current?.stop();
       setIsRecording(false);
     }
   };
