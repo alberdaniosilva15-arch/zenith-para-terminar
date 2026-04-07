@@ -92,46 +92,88 @@ class RideService {
   private assignmentChannel: RealtimeChannel | null = null;
   private locationChannel:   RealtimeChannel | null = null;
 
-  // ── getDriversForAuction ──────────────────────────────────────────────────
-  async getDriversForAuction(pickupCoords: LatLng, radiusKm = 8.0): Promise<AuctionDriver[]> {
-    try {
-      console.log('[rideService.getDriversForAuction] Buscando motoristas em', pickupCoords, 'raio', radiusKm, 'km');
+  // ── getDriversForAuction — expansão dinâmica de raio + driver score ────────
+  // Raio padrão: 7km (uniformizado)
+  // Expansão automática: 5km → 7km → 12km se não houver motoristas
+  async getDriversForAuction(pickupCoords: LatLng, radiusKm = 7.0): Promise<AuctionDriver[]> {
+    // Raios a tentar por ordem crescente (zonas densas → periférico)
+    const radiiToTry = radiusKm !== 7.0 ? [radiusKm] : [5, 7, 12];
 
-      const { data, error } = await supabase.rpc('find_drivers_for_auction', {
-        p_lat: pickupCoords.lat,
-        p_lng: pickupCoords.lng,
-        p_radius_km: radiusKm,
-        p_limit: 8,
-      });
+    for (const radius of radiiToTry) {
+      try {
+        console.log(`[rideService.getDriversForAuction] Tentando raio ${radius}km em`, pickupCoords);
 
-      if (error) {
-        console.error('[rideService.getDriversForAuction] Erro RPC:', error.message);
-        // Fallback: tentar busca simples
-        return this._fallbackFindDrivers(pickupCoords);
+        const { data, error } = await supabase.rpc('find_drivers_for_auction', {
+          p_lat:       pickupCoords.lat,
+          p_lng:       pickupCoords.lng,
+          p_radius_km: radius,
+          p_limit:     8,
+        });
+
+        if (error) {
+          console.error('[rideService.getDriversForAuction] Erro RPC:', error.message);
+          // Só usa fallback na última tentativa
+          if (radius === radiiToTry[radiiToTry.length - 1]) {
+            return this._fallbackFindDrivers(pickupCoords);
+          }
+          continue;
+        }
+
+        if (!data || data.length === 0) {
+          console.log(`[rideService.getDriversForAuction] 0 motoristas em ${radius}km — expandindo raio`);
+          if (radius === radiiToTry[radiiToTry.length - 1]) break; // última tentativa
+          continue;
+        }
+
+        const rawDrivers = (data as Array<{
+          driver_id: string; driver_name: string; rating: number; distance_m: number;
+          avatar_url?: string | null; total_rides?: number; level?: string;
+          eta_min?: number; heading?: number | null;
+        }>);
+
+        // ── Driver Score: ordena por melhor match ─────────────────────────────
+        // Score = (distância_m * 0.5) + ((5 - rating) * 500 * 0.3) + BASE_CONSISTENCY * 0.2
+        // Quanto MENOR o score, MELHOR o motorista (fórmula de penalização)
+        const scored = rawDrivers.map(row => {
+          const rating      = typeof row.rating === 'number' ? row.rating : 5.0;
+          const distScore   = row.distance_m * 0.5;
+          const ratingScore = (5 - rating) * 500 * 0.3;
+          // Sem motogo_score do RPC — usar valor neutro (500/1000 = 50%)
+          const consistencyScore = (1 - 0.5) * 200 * 0.2;
+          const matchScore = distScore + ratingScore + consistencyScore;
+
+          return {
+            driver_id:   row.driver_id,
+            driver_name: row.driver_name,
+            avatar_url:  row.avatar_url  ?? null,
+            rating,
+            total_rides: row.total_rides ?? 0,
+            level:       (row.level ?? 'Novato') as AuctionDriver['level'],
+            distance_m:  row.distance_m,
+            // ETA: distância em metros / velocidade média Luanda (400m/min = 24km/h)
+            eta_min:     row.eta_min ?? Math.ceil(row.distance_m / 400),
+            heading:     row.heading ?? null,
+            _matchScore: matchScore,
+          };
+        });
+
+        // Ordenar por score crescente (melhor primeiro)
+        scored.sort((a, b) => a._matchScore - b._matchScore);
+
+        const drivers: AuctionDriver[] = scored.map(({ _matchScore: _, ...d }) => d);
+
+        console.log(`[rideService.getDriversForAuction] ${drivers.length} motoristas encontrados em ${radius}km`);
+        return drivers;
+
+      } catch (err) {
+        console.error(`[rideService.getDriversForAuction] Excepção no raio ${radius}km:`, err);
+        if (radius === radiiToTry[radiiToTry.length - 1]) return [];
       }
-
-      const drivers = ((data ?? []) as Array<{
-        driver_id: string; driver_name: string; rating: number; distance_m: number;
-        avatar_url?: string | null; total_rides?: number; level?: string;
-        eta_min?: number; heading?: number | null;
-      }>).map(row => ({
-        driver_id:   row.driver_id,
-        driver_name: row.driver_name,
-        avatar_url:  row.avatar_url  ?? null,
-        rating:      typeof row.rating === 'number' ? row.rating : 5.0,
-        total_rides: row.total_rides ?? 0,
-        level:       (row.level ?? 'Novato') as AuctionDriver['level'],
-        distance_m:  row.distance_m,
-        eta_min:     row.eta_min ?? Math.ceil(row.distance_m / 400),
-        heading:     row.heading ?? null,
-      }));
-
-      console.log(`[rideService.getDriversForAuction] ${drivers.length} motoristas encontrados`);
-      return drivers;
-    } catch (err) {
-      console.error('[rideService.getDriversForAuction] Excepção:', err);
-      return [];
     }
+
+    // Nenhum raio funcionou → fallback sem PostGIS
+    console.warn('[rideService.getDriversForAuction] Nenhum motorista em todos os raios — usando fallback');
+    return this._fallbackFindDrivers(pickupCoords);
   }
 
   // Fallback: busca motoristas disponíveis sem PostGIS
