@@ -1,4 +1,4 @@
-﻿# Dependências
+# Dependências
 node_modules/
 vendor/
 __pycache__/
@@ -14,9 +14,19 @@ secrets.yml
 .vscode/
 .idea/
 *.suo
+minhas-chaves-secretas/
 
 # Logs e temporários
 *.log
 *.tmp
 dist/
 build/
+
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+!.env.example
+

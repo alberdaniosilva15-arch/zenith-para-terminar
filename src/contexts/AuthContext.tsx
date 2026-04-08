@@ -33,6 +33,7 @@ interface AuthContextValue {
 
   // Acções
   signIn:      (email: string, password: string) => Promise<AppError | null>;
+  signInWithGoogle: (role: UserRole) => Promise<AppError | null>;
   signUp:      (email: string, password: string, name: string, role: UserRole) => Promise<AppError | null>;
   signOut:     () => Promise<void>;
   updateProfile: (data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone'>>) => Promise<AppError | null>;
@@ -66,16 +67,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.log(`[AuthContext] loadUserData attempt ${attempt} for ${userId}`);
       const [{ data: userRow, error: userErr }, { data: profileRow, error: profErr }] =
         await Promise.all([
-          supabase.from('users').select('*').eq('id', userId).single(),
-          supabase.from('profiles').select('*').eq('user_id', userId).single(),
+          supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+          supabase.from('profiles').select('*').eq('user_id', userId).maybeSingle(),
         ]);
 
       if (userErr)  throw userErr;
       if (profErr)  throw profErr;
 
-      setDbUser(userRow as DbUser);
+      // Google OAuth Role Intent Resolution
+      const intent = localStorage.getItem('oauth_role_intent');
+      let finalUserRow = userRow;
+      if (intent === 'driver' && finalUserRow && (finalUserRow as DbUser).role === 'passenger') {
+        console.log('[AuthContext] Promovendo passenger a driver via OAuth intent');
+        await supabase.rpc('set_my_role_driver');
+        localStorage.removeItem('oauth_role_intent');
+        
+        // Refresh the user row post-upgrade
+        const { data: updatedUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
+        if (updatedUser) finalUserRow = updatedUser;
+      }
+
+      setDbUser(finalUserRow as DbUser);
       setProfile(profileRow as DbProfile);
       setAuthError(null);
+      setLoading(false);
     } catch (err: any) {
       if (attempt < MAX_ATTEMPTS - 1) {
         const delay = BASE_DELAY_MS * Math.pow(2, attempt);
@@ -221,6 +236,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   // ------------------------------------------------------------------
+  // SIGN IN WITH GOOGLE
+  // ------------------------------------------------------------------
+  const signInWithGoogle = useCallback(async (role: UserRole): Promise<AppError | null> => {
+    try {
+      localStorage.setItem('oauth_role_intent', role);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          queryParams: { role },
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
+      return null;
+    } catch (e: any) {
+      return { code: 'google_auth_failed', message: translateAuthError(e.message) || 'Erro ao ligar com Google.' };
+    }
+  }, []);
+
+  // ------------------------------------------------------------------
   // SIGN UP
   // ------------------------------------------------------------------
   const signUp = useCallback(async (
@@ -234,7 +269,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       email,
       password,
       options: {
-        data: { name, role },  // passado para handle_new_user() trigger
+        data: { name },  // Role ignorado no cliente; servidor define
       },
     });
 
@@ -292,6 +327,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     authError,
     clearAuthError,
     signIn,
+    signInWithGoogle,
     signUp,
     signOut,
     updateProfile,

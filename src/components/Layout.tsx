@@ -7,26 +7,26 @@ import React from 'react';
 import { UserRole, TabType } from '../types';
 
 interface LayoutProps {
-  children:          React.ReactNode;
-  role:              UserRole;
-  activeTab:         TabType;
-  onTabChange:       (tab: TabType) => void;
-  dataSaver:         boolean;
+  children: React.ReactNode;
+  role: UserRole;
+  activeTab: TabType;
+  onTabChange: (tab: TabType) => void;
+  dataSaver: boolean;
   onDataSaverToggle: () => void;
-  kazeSilent:        boolean;
-  onKazeSilentToggle:() => void;
-  userName?:         string;
-  userRating?:       number;
+  kazeSilent: boolean;
+  onKazeSilentToggle: () => void;
+  userName?: string;
+  userRating?: number;
 }
 
 const TAB_ICONS: Record<TabType, string> = {
-  home:     'bolt',
-  social:   'explore',
+  home: 'bolt',
+  social: 'explore',
   contrato: 'description',
-  rides:    'route',
-  wallet:   'account_balance_wallet',
-  profile:  'person',
-  precos:   'price_check',
+  rides: 'route',
+  wallet: 'account_balance_wallet',
+  profile: 'person',
+  precos: 'price_check',
 };
 
 const Layout: React.FC<LayoutProps> = ({
@@ -35,7 +35,7 @@ const Layout: React.FC<LayoutProps> = ({
   userName, userRating,
 }) => {
   const isDriver = role === UserRole.DRIVER;
-  const isAdmin  = role === UserRole.ADMIN;
+  const isAdmin = role === UserRole.ADMIN;
 
   const tabs: TabType[] = isDriver
     ? ['home', 'social', 'rides', 'wallet', 'profile']
@@ -71,9 +71,8 @@ const Layout: React.FC<LayoutProps> = ({
           <button
             onClick={onDataSaverToggle}
             title={dataSaver ? 'Modo dados activo' : 'Activar modo dados'}
-            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all luxury-transition ${
-              dataSaver ? 'bg-primary/20 text-primary' : 'text-on-surface-variant'
-            }`}
+            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all luxury-transition ${dataSaver ? 'bg-primary/20 text-primary' : 'text-on-surface-variant'
+              }`}
           >
             <span className="material-symbols-outlined" style={{ fontSize: 16, fontVariationSettings: dataSaver ? "'FILL' 1" : "'FILL' 0" }}>
               signal_cellular_alt
@@ -84,9 +83,8 @@ const Layout: React.FC<LayoutProps> = ({
           <button
             onClick={onKazeSilentToggle}
             title={kazeSilent ? 'Kaze silenciado' : 'Kaze activo'}
-            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all luxury-transition ${
-              kazeSilent ? 'text-on-surface-variant/40' : 'text-primary'
-            }`}
+            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all luxury-transition ${kazeSilent ? 'text-on-surface-variant/40' : 'text-primary'
+              }`}
           >
             <span className="material-symbols-outlined" style={{ fontSize: 16, fontVariationSettings: kazeSilent ? "'FILL' 0" : "'FILL' 1" }}>
               smart_toy
@@ -109,9 +107,8 @@ const Layout: React.FC<LayoutProps> = ({
               <button
                 key={tab}
                 onClick={() => onTabChange(tab)}
-                className={`flex flex-col items-center justify-center gap-1 flex-1 py-2 luxury-transition relative ${
-                  active ? 'text-primary' : 'text-on-surface-variant/30 hover:text-on-surface-variant/60'
-                }`}
+                className={`flex flex-col items-center justify-center gap-1 flex-1 py-2 luxury-transition relative ${active ? 'text-primary' : 'text-on-surface-variant/30 hover:text-on-surface-variant/60'
+                  }`}
               >
                 <span
                   className="material-symbols-outlined"

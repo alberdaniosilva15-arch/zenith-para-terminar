@@ -11,7 +11,7 @@ import { UserRole } from '../types';
 type Screen = 'signin' | 'signup';
 
 const Login: React.FC = () => {
-  const { signIn, signUp } = useAuth();
+  const { signIn, signUp, signInWithGoogle } = useAuth();
 
   const [screen,   setScreen]   = useState<Screen>('signin');
   const [email,    setEmail]    = useState('');
@@ -48,12 +48,19 @@ const Login: React.FC = () => {
 
   const handleSubmit = async () => {
     if (screen === 'signin') {
-      // Signin flow: drivers use password, others use magic link
-      if (authRole === UserRole.DRIVER) return handleSignIn();
+      if (authRole === UserRole.DRIVER) return handleGoogleAuth(UserRole.DRIVER);
       return handleSendMagicLink();
     }
-    // Signup flow
+    
+    if (role === UserRole.DRIVER) return handleGoogleAuth(UserRole.DRIVER);
     return handleSignUp();
+  };
+
+  const handleGoogleAuth = async (targetRole: UserRole) => {
+    setLoading(true); reset();
+    const err = await signInWithGoogle(targetRole);
+    setLoading(false);
+    if (err) setError(err.message);
   };
 
   const handleSignUp = async () => {
@@ -81,15 +88,24 @@ const Login: React.FC = () => {
       return;
     }
 
-    // Driver signup requires password
-    if (!password) { setError('Preenche a palavra-passe.'); return; }
-    if (password.length < 6) { setError('A palavra-passe deve ter pelo menos 6 caracteres.'); return; }
-
+    // Se chegar aqui para signup, será passageiro com magic link (pois motoristas fazem bypass via google)
     setLoading(true); reset();
-    const err = await signUp(email, password, name, role);
-    setLoading(false);
-    if (err) { setError(err.message); }
-    else { setSuccess('Conta criada! Confirma o teu email para entrar.'); setScreen('signin'); }
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ 
+        email, 
+        options: { 
+          data: { name, role: 'passenger' }, 
+          emailRedirectTo: window.location.origin 
+        } 
+      });
+      if (error) setError(error.message);
+      else {
+        setSuccess('Link mágico enviado! Verifica o teu email (verifica spam).');
+        setScreen('signin');
+      }
+    } catch (e: any) {
+      setError(e.message ?? 'Erro ao enviar link.');
+    } finally { setLoading(false); }
   };
 
   return (
@@ -149,14 +165,14 @@ const Login: React.FC = () => {
 
         {/* Form */}
         <div className="w-full space-y-5">
-          {screen === 'signup' && (
-            <ZenithField label="Nome completo" type="text" value={name} onChange={setName} placeholder="Mário Bento" icon="person" />
-          )}
-          <ZenithField label="Email" type="email" value={email} onChange={setEmail} placeholder="exemplo@gmail.com" icon="mail" />
-
-          {/* Password field only shown for driver signup or driver signin */}
-          {((screen === 'signup' && role === UserRole.DRIVER) || (screen === 'signin' && authRole === UserRole.DRIVER)) && (
-            <ZenithField label="Chave de Acesso" type="password" value={password} onChange={setPassword} placeholder="••••••••" icon="lock" />
+          {/* Fields only for passengers or fallback */}
+          {((screen === 'signup' && role === UserRole.PASSENGER) || (screen === 'signin' && authRole === UserRole.PASSENGER) || authRole === null && role === UserRole.PASSENGER) && (
+            <>
+              {screen === 'signup' && (
+                <ZenithField label="Nome completo" type="text" value={name} onChange={setName} placeholder="Mário Bento" icon="person" />
+              )}
+              <ZenithField label="Email" type="email" value={email} onChange={setEmail} placeholder="exemplo@gmail.com" icon="mail" />
+            </>
           )}
 
           {screen === 'signup' && (
@@ -176,29 +192,62 @@ const Login: React.FC = () => {
         </div>
 
         {/* Submit */}
-        <button
-          onClick={handleSubmit}
-          disabled={loading}
-          className="w-full h-16 rounded-full font-label font-extrabold text-sm uppercase tracking-[0.2em] active:scale-95 transition-all duration-300 disabled:opacity-50"
-          style={{ background: 'linear-gradient(135deg, #C9A84C 0%, #E6C364 100%)', color: '#0B0B0B', boxShadow: '0 0 30px rgba(201,168,76,0.4)' }}
-        >
-          {loading ? (
-            <span className="flex items-center justify-center gap-3">
+        {((screen === 'signup' && role === UserRole.DRIVER) || (screen === 'signin' && authRole === UserRole.DRIVER)) ? (
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="w-full h-16 rounded-full flex items-center justify-center gap-3 font-label font-extrabold text-sm uppercase tracking-[0.2em] active:scale-95 transition-all duration-300 disabled:opacity-50"
+            style={{ background: '#FFFFFF', color: '#0B0B0B', boxShadow: '0 0 20px rgba(255,255,255,0.1)' }}
+          >
+            {loading ? (
               <span className="w-4 h-4 border-2 border-[#0B0B0B]/30 border-t-[#0B0B0B] rounded-full animate-spin" />
-              A processar...
-            </span>
-          ) : (screen === 'signin' ? (authRole === UserRole.DRIVER ? 'ENTRAR' : 'ENVIAR LINK MÁGICO') : 'CRIAR CONTA')}
-        </button>
+            ) : (
+              <>
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+                  <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+                  <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/>
+                  <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+                </svg>
+                CONTINUAR COM GOOGLE
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="w-full h-16 rounded-full font-label font-extrabold text-sm uppercase tracking-[0.2em] active:scale-95 transition-all duration-300 disabled:opacity-50"
+            style={{ background: 'linear-gradient(135deg, #C9A84C 0%, #E6C364 100%)', color: '#0B0B0B', boxShadow: '0 0 30px rgba(201,168,76,0.4)' }}
+          >
+            {loading ? (
+              <span className="flex items-center justify-center gap-3">
+                <span className="w-4 h-4 border-2 border-[#0B0B0B]/30 border-t-[#0B0B0B] rounded-full animate-spin" />
+                A processar...
+              </span>
+            ) : (screen === 'signin' ? 'ENVIAR LINK MÁGICO' : 'CRIAR CONTA')}
+          </button>
+        )}
 
-        {/* Quick role buttons (signin) */}
+        {/* Botões de acesso rápido por tipo de utilizador (signin) */}
         {screen === 'signin' && (
           <div className="w-full grid grid-cols-2 gap-4">
-            <QuickBtn icon="two_wheeler" label="MOTORISTA" />
-            <QuickBtn icon="shield" label="ADMIN" />
+            <QuickBtn
+              icon="person"
+              label="PASSAGEIRO"
+              onClick={() => { setAuthRole(null); setError(null); }}
+              active={authRole === null}
+            />
+            <QuickBtn
+              icon="two_wheeler"
+              label="MOTORISTA"
+              onClick={() => { setAuthRole(UserRole.DRIVER); setError(null); }}
+              active={authRole === UserRole.DRIVER}
+            />
           </div>
         )}
 
-        {screen === 'signin' && (
+        {screen === 'signin' && authRole !== UserRole.DRIVER && (
           <div className="w-full mt-3 flex gap-3">
             <button
               onClick={handleSendMagicLink}
@@ -258,9 +307,14 @@ const RoleBtn: React.FC<{ label: string; icon: string; active: boolean; onClick:
   </button>
 );
 
-const QuickBtn: React.FC<{ icon: string; label: string }> = ({ icon, label }) => (
-  <button className="flex items-center justify-center gap-2 py-4 rounded-xl font-label text-[11px] uppercase tracking-wider transition-all duration-300 active:scale-95"
-    style={{ border: '1px solid rgba(230,195,100,0.2)', background: 'transparent', color: 'rgba(230,195,100,0.5)' }}>
+const QuickBtn: React.FC<{ icon: string; label: string; onClick?: () => void; active?: boolean }> = ({ icon, label, onClick, active }) => (
+  <button onClick={onClick}
+    className="flex items-center justify-center gap-2 py-4 rounded-xl font-label text-[11px] uppercase tracking-wider transition-all duration-300 active:scale-95"
+    style={{
+      border: `1px solid ${active ? 'rgba(230,195,100,0.6)' : 'rgba(230,195,100,0.2)'}`,
+      background: active ? 'rgba(230,195,100,0.10)' : 'transparent',
+      color: active ? '#E6C364' : 'rgba(230,195,100,0.5)',
+    }}>
     <span className="material-symbols-outlined text-xl">{icon}</span>
     {label}
   </button>

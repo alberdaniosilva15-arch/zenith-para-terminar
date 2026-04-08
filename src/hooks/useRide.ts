@@ -49,6 +49,11 @@ export function useRide(): UseRideReturn {
   const unsubRef       = useRef<(() => void) | null>(null);
   const driverLocUnsub = useRef<(() => void) | null>(null);
   const prevStatusRef  = useRef<RideStatus>(RideStatus.IDLE);
+  // Ref para guardar distância e duração da corrida activa (para PostRideReview)
+  const rideDetailsRef = useRef<{ distanceKm: number | null; durationMin: number | null }>({
+    distanceKm:  null,
+    durationMin: null,
+  });
 
   // ── Carregar corrida activa ao iniciar sessão ────────────────────────────
   useEffect(() => {
@@ -80,6 +85,8 @@ export function useRide(): UseRideReturn {
           driverName:   ride.driverName ?? 'o motorista',
           driverRating: ride.driverRating ?? null,
           priceKz:      ride.priceKz ?? null,
+          distanceKm:   rideDetailsRef.current.distanceKm,
+          durationMin:  rideDetailsRef.current.durationMin,
         });
       }, 2000);
     }
@@ -88,6 +95,10 @@ export function useRide(): UseRideReturn {
 
   // ── applyDbRide ──────────────────────────────────────────────────────────
   const applyDbRide = useCallback((r: DbRide & { driver_name?: string; passenger_name?: string }) => {
+    rideDetailsRef.current = {
+      distanceKm:  r.distance_km  ?? null,
+      durationMin: r.duration_min ?? null,
+    };
     setRide({
       status:          r.status as RideStatus,
       rideId:          r.id,

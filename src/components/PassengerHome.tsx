@@ -20,6 +20,8 @@ import ZonePriceMap   from './ZonePriceMap';
 import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
 import { zonePriceService } from '../services/zonePrice';
 import { rideService } from '../services/rideService';
+import { routeService, RouteResult } from '../services/routeService';
+import { supabase } from '../lib/supabase';
 import type { RideState, AuctionState, AuctionDriver, LocationResult, LatLng } from '../types';
 import { RideStatus, UserRole } from '../types';
 
@@ -58,6 +60,17 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [routeInfo,    setRouteInfo]    = useState<RouteInfo | null>(null);
   const [loadingRide,  setLoadingRide]  = useState(false);
   const [nearbyCount,  setNearbyCount]  = useState<number | null>(null);
+  // Engine Pro: rota real + preço calculado no servidor
+  const [routeData,    setRouteData]    = useState<RouteResult | null>(null);
+  const [fareData, setFareData] = useState<{
+    fare_kz: number;
+    badges: string[];
+    surge_factor: number;
+    zone_multiplier: number;
+    traffic_multiplier: number;
+  } | null>(null);
+  const [calculating,  setCalculating]  = useState(false);
+  const [priceTimer,   setPriceTimer]   = useState<number>(0);
 
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -133,37 +146,89 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     setSearching(true);
     try {
       const coords  = await mapService.getCurrentPosition();
-      // FIX: mostra nome de bairro, não coordenadas
       const address = await mapService.reverseGeocode(coords);
       setPickupName(address);
       setPickupCoords(coords);
-    } catch {
-      setPickupName('A minha localização');
-      setPickupCoords({ lat: -8.8368, lng: 13.2343 });
-    } finally {
       setSelecting(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Não foi possível obter a localização.';
+      alert(`📍 ${msg}`);
+    } finally {
       setSearching(false);
     }
   };
 
-  // ── "VER MOTORISTAS" — pesquisa real de motoristas ──────────────────────────
+  // ── Calcular rota real (Google Routes API) + preço Engine Pro ───────────────
+  const handleConfirmRoute = async () => {
+    if (!pickupCoords || !destCoords) return;
+    setCalculating(true);
+    setFareData(null);
+    setRouteData(null);
+    routeService.clearCache();
+    try {
+      // 1. Rota real — chamada ÚNICA à Routes API
+      const route = await routeService.getRoute(pickupCoords, destCoords);
+      setRouteData(route);
+
+      // 2. Preço calculado no servidor (Engine Pro protegido)
+      const hour      = new Date().getHours();
+      const isNight   = hour >= 22 || hour < 6;
+      // Detectar aeroporto FAAN (lat -8.8577, lng 13.2312) no raio de 1km
+      const distToAirport = Math.sqrt(
+        Math.pow(destCoords.lat - (-8.8577), 2) +
+        Math.pow(destCoords.lng - 13.2312, 2)
+      ) * 111;
+      const isAirport = distToAirport < 1.0;
+
+      const { data: fare, error: fareError } = await supabase.rpc(
+        'calculate_fare_engine_pro',
+        {
+          p_distance_km:    route.distanceKm,
+          p_duration_min:   route.durationMin,
+          p_origin_lat:     pickupCoords.lat,
+          p_origin_lng:     pickupCoords.lng,
+          p_dest_lat:       destCoords.lat,
+          p_dest_lng:       destCoords.lng,
+          p_service_tier:   'standard',
+          p_demand_count:   5,
+          p_supply_count:   5,
+          p_is_night:       isNight,
+          p_is_airport:     isAirport,
+          p_traffic_factor: route.trafficFactor,
+        }
+      );
+
+      if (fareError) throw new Error('Erro ao calcular preço. O servidor não respondeu.');
+      setFareData(fare);
+      setPriceTimer(120); // 2 minutos de lock
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao calcular rota. Verifica a tua ligação.';
+      alert(`❌ ${msg}`);
+      setRouteData(null);
+      setFareData(null);
+    } finally {
+      setCalculating(false);
+    }
+  };
+
+  // ── "VER MOTORISTAS" — pesquisa real de motoristas ─────────────────────────────
   const handleShowDrivers = async () => {
     if (!pickupCoords || !destName) return;
-    // FIX: chama startAuction que vai ao Supabase buscar motoristas reais
     await onStartAuction(pickupCoords);
   };
 
   // ── "CHAMAR TÁXI" (fallback sem destino definido) ───────────────────────────
   const handleCallTaxi = async () => {
     if (!pickupCoords) {
-      // Tentar obter GPS primeiro
       setSearching(true);
-      const coords  = await mapService.getCurrentPosition();
-      const address = await mapService.reverseGeocode(coords);
-      setPickupName(address);
-      setPickupCoords(coords);
-      setSearching(false);
-      // Abrir selecção de destino
+      try {
+        const coords  = await mapService.getCurrentPosition();
+        const address = await mapService.reverseGeocode(coords);
+        setPickupName(address);
+        setPickupCoords(coords);
+      } catch { /* usar fallback se GPS falhar */ } finally {
+        setSearching(false);
+      }
       setSelecting('dest');
       handleSearch('');
       return;
@@ -176,7 +241,23 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     await handleShowDrivers();
   };
 
-  // ── Confirmar motorista escolhido ────────────────────────────────────────────
+  // ── Countdown do lock de preço (2 minutos) ────────────────────────────────
+  useEffect(() => {
+    if (priceTimer <= 0) return;
+    const interval = setInterval(() => {
+      setPriceTimer(prev => {
+        if (prev <= 1) {
+          setFareData(null);
+          setRouteData(null);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [priceTimer]);
+
+  // ── Confirmar motorista escolhido ───────────────────────────────────────────────
   const handleConfirmDriver = async () => {
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
@@ -402,7 +483,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                   {searching ? 'A consultar...' : `${results.length} locais`}
                 </p>
                 {results.map((res, i) => (
-                  <button key={i} onClick={() => selectLocation(res)}
+                  <button key={`location-${res.name}-${i}`} onClick={() => selectLocation(res)}
                     className="w-full flex items-center gap-4 p-4 hover:bg-surface-container-lowest rounded-2xl transition-colors text-left border border-transparent hover:border-outline-variant/20">
                     <div className="w-10 h-10 bg-surface-container-low rounded-xl flex items-center justify-center text-xl shrink-0">
                       {res.type === 'bairro' ? '🏘️' : res.type === 'hospital' ? '🏥' : res.type === 'servico' ? '🏪' : res.type === 'monumento' ? '🏛️' : '📍'}
@@ -445,31 +526,114 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               </>
             )}
 
-            {/* Botão principal */}
-            {ride.status === RideStatus.IDLE && (
-              <button
-                onClick={isReady ? handleShowDrivers : handleCallTaxi}
-                disabled={searching}
-                className={`w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-50 ${
-                  isReady
-                    ? 'bg-primary text-white shadow-[0_20px_50px_rgba(37,99,235,0.4)]'
-                    : 'bg-[#1a1a1a] text-white border border-white/10'
-                }`}
+            {/* Card de preço Engine Pro (aparece após calcular) */}
+            {ride.status === RideStatus.IDLE && fareData && (
+              <div
+                className="rounded-2xl p-5 space-y-3"
+                style={{
+                  background: 'linear-gradient(135deg, #0E0E0E 0%, #1A1600 100%)',
+                  border: '1px solid rgba(230,195,100,0.3)',
+                }}
               >
-                {searching ? (
-                  <span className="flex items-center justify-center gap-3">
-                    <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    A localizar...
-                  </span>
-                ) : isReady ? (
-                  <span className="flex items-center justify-center gap-3">
-                    🚖 VER MOTORISTAS
-                    {nearbyCount !== null && nearbyCount > 0 && (
-                      <span className="text-sm bg-white/20 px-2 py-0.5 rounded-full">{nearbyCount}</span>
+                {/* Preço principal + Countdown */}
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'rgba(230,195,100,0.5)' }}>
+                      Preço estimado
+                    </p>
+                    <p className="text-3xl font-black mt-1" style={{ color: '#E6C364' }}>
+                      {Number(fareData.fare_kz).toLocaleString('pt-AO')} Kz
+                    </p>
+                  </div>
+                  {priceTimer > 0 && (
+                    <div className="text-right">
+                      <p className="text-[9px] uppercase tracking-widest font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>
+                        Preço bloqueado
+                      </p>
+                      <p className="text-sm font-mono font-bold" style={{ color: 'rgba(230,195,100,0.7)' }}>
+                        {Math.floor(priceTimer / 60)}:{String(priceTimer % 60).padStart(2, '0')}
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Badges dinâmicos */}
+                {fareData.badges && (fareData.badges as string[]).length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {(fareData.badges as string[]).map((badge: string, i: number) => (
+                      <span
+                        key={i}
+                        className="px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-wider"
+                        style={{ background: 'rgba(230,195,100,0.12)', border: '1px solid rgba(230,195,100,0.3)', color: '#E6C364' }}
+                      >
+                        {badge}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Detalhes da rota */}
+                {routeData && (
+                  <div className="flex gap-4 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Distância</p>
+                      <p className="text-xs font-black text-white">{routeData.distanceKm.toFixed(1)} km</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Tempo</p>
+                      <p className="text-xs font-black text-white">~{Math.round(routeData.durationMin)} min</p>
+                    </div>
+                    {routeData.trafficFactor > 1.3 && (
+                      <div>
+                        <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Trânsito</p>
+                        <p className="text-xs font-black" style={{ color: '#ff6b35' }}>Intenso</p>
+                      </div>
                     )}
-                  </span>
-                ) : 'CHAMAR TÁXI'}
-              </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Botão principal — fluxo dinâmico */}
+            {ride.status === RideStatus.IDLE && (
+              !fareData ? (
+                // Botao para calcular o preço via Engine Pro
+                <button
+                  onClick={isReady ? handleConfirmRoute : handleCallTaxi}
+                  disabled={searching || calculating}
+                  className={`w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-50 ${
+                    isReady
+                      ? 'bg-primary text-white shadow-[0_20px_50px_rgba(37,99,235,0.4)]'
+                      : 'bg-[#1a1a1a] text-white border border-white/10'
+                  }`}
+                >
+                  {calculating ? (
+                    <span className="flex items-center justify-center gap-3">
+                      <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      A calcular rota...
+                    </span>
+                  ) : searching ? (
+                    <span className="flex items-center justify-center gap-3">
+                      <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      A localizar...
+                    </span>
+                  ) : isReady ? (
+                    <span className="flex items-center justify-center gap-3">
+                      💰 CALCULAR PREÇO
+                    </span>
+                  ) : 'CHAMAR TÁXI'}
+                </button>
+              ) : (
+                // Botão de pedir corrida com preço confirmado
+                <button
+                  onClick={handleShowDrivers}
+                  disabled={priceTimer === 0}
+                  className="w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-40"
+                  style={{ background: '#E6C364', color: '#050505', boxShadow: '0 20px 50px rgba(230,195,100,0.35)' }}
+                >
+                  🚖 PEDIR CORRIDA — {Number(fareData.fare_kz).toLocaleString('pt-AO')} Kz
+                </button>
+              )
             )}
 
             {/* SEARCHING */}
