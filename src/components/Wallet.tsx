@@ -43,7 +43,11 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
   const [topUpMsg,     setTopUpMsg]     = useState<{ text: string; ok: boolean } | null>(null);
 
   // Levantamento
-  const [withdrawing,  setWithdrawing]  = useState(false);
+  const [showWithdrawModal, setShowWithdrawModal] = useState(false);
+  const [withdrawAmount,    setWithdrawAmount]    = useState('');
+  const [withdrawError,     setWithdrawError]     = useState('');
+  const [withdrawLoading,   setWithdrawLoading]   = useState(false);
+
   // v3.0: tabs da carteira
   const [walletTab, setWalletTab] = useState<'transactions' | 'partners'>('transactions');
 
@@ -93,18 +97,15 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
     if (result.success) { setTopUpAmount(''); setTopUpPhone(''); setTimeout(() => setShowTopUp(false), 3000); }
   };
 
-  const handleWithdraw = async () => {
-    if (!wallet || wallet.balance < 1000) {
-      alert('Saldo mínimo para levantamento: 1.000 Kz');
-      return;
-    }
-    const amountStr = prompt(`Valor a levantar (saldo: ${wallet.balance.toLocaleString('pt-AO')} Kz):`);
-    if (!amountStr) return;
-    const amount = parseFloat(amountStr.replace(/\D/g, ''));
-    if (!amount || amount < 1000) { alert('Mínimo: 1.000 Kz'); return; }
-    if (amount > wallet.balance)  { alert('Saldo insuficiente.'); return; }
-    setWithdrawing(true);
-    // Chamar directamente multicaixa-pay withdrawal
+  const handleWithdrawClick   = () => { setWithdrawAmount(''); setWithdrawError(''); setShowWithdrawModal(true); };
+  
+  const handleWithdrawConfirm = async () => {
+    const amount = Number(withdrawAmount);
+    if (!Number.isFinite(amount) || amount < 500)    { setWithdrawError('Montante mínimo: 500 Kz'); return; }
+    if (amount > 500000)                              { setWithdrawError('Montante máximo: 500.000 Kz'); return; }
+    if (wallet && amount > wallet.balance)            { setWithdrawError('Saldo insuficiente.'); return; }
+    
+    setWithdrawLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/multicaixa-pay`, {
@@ -113,12 +114,16 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
         body: JSON.stringify({ action: 'withdrawal', amount_kz: amount }),
       });
       const data = await res.json();
+      if (!data.success) throw new Error(data.message ?? 'Falha no processamento.');
+      
+      setShowWithdrawModal(false);
+      loadData(0);
       alert(data.message ?? 'Levantamento submetido.');
-      if (data.success) loadData(0);
-    } catch {
-      alert('Erro de rede. Tenta de novo.');
+    } catch (err: any) {
+      setWithdrawError(err?.message ?? 'Erro ao processar. Tenta de novo.');
+    } finally {
+      setWithdrawLoading(false);
     }
-    setWithdrawing(false);
   };
 
   if (loading) return (
@@ -146,11 +151,11 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
         </p>
         <div className="flex gap-3">
           <button
-            onClick={isDriver ? handleWithdraw : () => setShowTopUp(true)}
-            disabled={withdrawing}
+            onClick={isDriver ? handleWithdrawClick : () => setShowTopUp(true)}
+            disabled={withdrawLoading || topUpLoading}
             className={`flex-1 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-60 ${isDriver ? 'bg-red-600 hover:bg-error-container/200' : 'bg-primary hover:bg-primary'}`}
           >
-            {withdrawing ? 'A processar...' : isDriver ? 'LEVANTAR' : 'CARREGAR'}
+            {withdrawLoading ? 'A processar...' : isDriver ? 'LEVANTAR' : 'CARREGAR'}
           </button>
           <button onClick={() => loadData(0)}
             className="flex-1 bg-surface-container-low/10 hover:bg-surface-container-low/20 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest border border-white/5 transition-all">

@@ -1,11 +1,12 @@
 // =============================================================================
-// MOTOGO AI v2.0 — Edge Function: match-driver
+// MOTOGO AI v2.1 — Edge Function: match-driver
 // Ficheiro: supabase/functions/match-driver/index.ts
 //
-// Algoritmo de matching motorista/passageiro:
-// Score = (distância * 0.7) + ((5 - rating) * 500 * 0.3)
-// Favorece motoristas próximos E com bom rating
-// Usa função PostGIS do schema (find_nearby_drivers)
+// ✅ FIX: Raio uniformizado de 8km → 7km
+// ✅ FIX: Substituído channel.send() (broadcast perdido) por INSERT driver_notifications
+//         → resolve corridas sem motorista silenciosas quando driver está offline
+// Algoritmo de matching:
+//   Score = (distância * 0.5) + ((5 - rating) * 500 * 0.3) + (consistência * 0.2)
 // =============================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
@@ -18,7 +19,12 @@ const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
-      headers: { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Access-Control-Allow-Headers': 'authorization, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' },
+      headers: {
+        'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
+        'Access-Control-Allow-Headers': 'authorization, content-type',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Vary': 'Origin',
+      },
     });
   }
 
@@ -34,11 +40,11 @@ Deno.serve(async (req: Request) => {
     const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
     if (authErr || !user) return jsonError('Token inválido.', 401);
 
-    // ── Rate limiting simples por user_id ──────────────────────────────────────
-    const supabaseRateLimit = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    // ── Rate limiting simples por user_id ─────────────────────────────────────
+    const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
     const rlWindow = new Date(Math.floor(Date.now() / 60000) * 60000).toISOString();
 
-    const { data: rlRow } = await supabaseRateLimit
+    const { data: rlRow } = await supabaseAdmin
       .from('ai_usage_logs')
       .select('request_count')
       .eq('user_id', user.id)
@@ -50,18 +56,15 @@ Deno.serve(async (req: Request) => {
       return jsonError('Demasiados pedidos de matching. Aguarda 1 minuto.', 429);
     }
 
-    supabaseRateLimit.from('ai_usage_logs').insert({
+    supabaseAdmin.from('ai_usage_logs').insert({
       user_id: user.id,
       action: 'match_driver',
       tokens_used: 0,
     }).then(() => {}).catch(() => {});
-    // ── Fim rate limiting ───────────────────────────────────────────────────────
+    // ── Fim rate limiting ─────────────────────────────────────────────────────
 
     const { ride_id } = await req.json() as { ride_id: string };
     if (!ride_id) return jsonError('ride_id em falta.', 400);
-
-    // Usar service role para ler dados sem RLS (matching é operação de sistema)
-    const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
     // ------------------------------------------------------------------
     // 1. Buscar a corrida
@@ -80,14 +83,15 @@ Deno.serve(async (req: Request) => {
 
     // ------------------------------------------------------------------
     // 2. Encontrar motoristas próximos via PostGIS
+    //    Raio: 7km (uniformizado — era 8km)
     // ------------------------------------------------------------------
     const { data: drivers, error: driversErr } = await supabaseAdmin.rpc(
       'find_nearby_drivers',
       {
         p_lat:       ride.origin_lat,
         p_lng:       ride.origin_lng,
-        p_radius_km: 8.0,   // raio de 8km — adequado para Luanda
-        p_limit:     5,
+        p_radius_km: 7.0,   // ✅ Uniformizado para 7km
+        p_limit:     8,
       }
     );
 
@@ -105,46 +109,80 @@ Deno.serve(async (req: Request) => {
     }
 
     // ------------------------------------------------------------------
-    // 3. Retornar lista de motoristas (o passageiro pode ver quem está próximo)
-    // A aceitação real é feita pelo motorista (acceptRide no rideService)
+    // 3. Calcular score de matching e ordenar
+    //    Score = (distância_m * 0.5) + ((5-rating) * 500 * 0.3) + 20 (consistência neutra)
+    //    Motoristas com menor score aparecem primeiro
     // ------------------------------------------------------------------
-    const matchedDrivers = drivers.map((d: {
-      driver_id: string;
+    type RawDriver = {
+      driver_id:   string;
       driver_name: string;
-      rating: number;
-      distance_m: number;
-      heading: number | null;
-    }) => ({
-      driver_id:    d.driver_id,
-      driver_name:  d.driver_name,
-      rating:       d.rating,
-      distance_m:   Math.round(d.distance_m),
-      eta_min:      Math.round(d.distance_m / 1000 / 25 * 60),  // ~25km/h média Luanda
+      rating:      number;
+      distance_m:  number;
+      heading:     number | null;
+    };
+
+    const scoredDrivers = (drivers as RawDriver[])
+      .map(d => ({
+        ...d,
+        eta_min:     Math.round(d.distance_m / 1000 / 25 * 60),
+        _score:      (d.distance_m * 0.5) + ((5 - d.rating) * 500 * 0.3) + 20,
+      }))
+      .sort((a, b) => a._score - b._score);
+
+    const matchedDrivers = scoredDrivers.map(d => ({
+      driver_id:   d.driver_id,
+      driver_name: d.driver_name,
+      rating:      d.rating,
+      distance_m:  Math.round(d.distance_m),
+      eta_min:     d.eta_min,
     }));
 
     // ------------------------------------------------------------------
-    // 4. Opcional: notificar motoristas automaticamente via broadcast Supabase
-    // Use o `supabaseAdmin` já existente (service role) em vez de criar
-    // um novo cliente. Note que broadcasts não garantem entrega sem
-    // subscrições ativas no cliente — o frontend deve verificar subscrição.
-    // Enviar em paralelo e registar falhas para análise.
-    await Promise.all(matchedDrivers.slice(0, 3).map(async (driver) => {
+    // 4. ✅ CORRIGIDO: INSERT em driver_notifications em vez de broadcast
+    //    O broadcast perdia-se quando o motorista estava offline.
+    //    Agora persiste em BD — mesmo que o motorista reconecte mais tarde.
+    // ------------------------------------------------------------------
+    const notificationPayload = {
+      ride_id:        ride.id,
+      origin_address: ride.origin_address,
+      dest_address:   ride.dest_address,
+      price_kz:       ride.price_kz,
+      distance_km:    ride.distance_km,
+    };
+
+    const topDrivers = matchedDrivers.slice(0, 3);
+
+    await Promise.all(topDrivers.map(async (driver) => {
       try {
-        await supabaseAdmin
-          .channel(`driver:${driver.driver_id}`)
-          .send({
-            type:    'broadcast',
-            event:   'new_ride_nearby',
-            payload: {
-              ride_id:        ride.id,
-              origin_address: ride.origin_address,
-              dest_address:   ride.dest_address,
-              price_kz:       ride.price_kz,
-              distance_km:    ride.distance_km,
-            },
+        const { error: notifErr } = await supabaseAdmin
+          .from('driver_notifications')
+          .insert({
+            driver_id: driver.driver_id,
+            ride_id:   ride.id,
+            type:      'new_ride',
+            payload:   notificationPayload,
           });
-      } catch (sendErr) {
-        console.warn(`[match-driver] broadcast falhou para ${driver.driver_id}:`, sendErr);
+
+        if (notifErr) {
+          // Se a tabela ainda não existir, tentar broadcast como fallback
+          console.warn(`[match-driver] INSERT driver_notifications falhou para ${driver.driver_id}:`, notifErr.message);
+          // Fallback: broadcast (pode perder-se se offline)
+          try {
+            await supabaseAdmin
+              .channel(`driver:${driver.driver_id}`)
+              .send({
+                type:    'broadcast',
+                event:   'new_ride_nearby',
+                payload: notificationPayload,
+              });
+          } catch (broadcastErr) {
+            console.warn(`[match-driver] broadcast fallback também falhou:`, broadcastErr);
+          }
+        } else {
+          console.log(`[match-driver] Notificação persistida para driver ${driver.driver_id}`);
+        }
+      } catch (err) {
+        console.warn(`[match-driver] Erro ao notificar ${driver.driver_id}:`, err);
       }
     }));
 
@@ -163,13 +201,21 @@ Deno.serve(async (req: Request) => {
 function jsonOk(data: unknown): Response {
   return new Response(JSON.stringify(data), {
     status: 200,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
+      'Vary': 'Origin',
+    },
   });
 }
 
 function jsonError(message: string, status: number): Response {
   return new Response(JSON.stringify({ error: true, message }), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
+      'Vary': 'Origin',
+    },
   });
 }

@@ -62,8 +62,8 @@ const AppInner: React.FC = () => {
     };
 
     runVigilante();
-    const timer = setInterval(runVigilante, 120_000);
-    return () => clearInterval(timer);
+    // O setInterval foi removido para evitar exceder quotas do Gemini API (150 requests/h por admin).
+    // O admin pode clicar num botão de Refresh no dashboard se precisar de nova avaliação.
   }, [role, dbUser, ride.status]);
 
   // ------------------------------------------------------------------

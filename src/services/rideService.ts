@@ -15,27 +15,50 @@ import { supabase, edgeFunctionUrl } from '../lib/supabase';
 import type { DbRide, AuctionDriver, NearbyDriver, PriceEstimate, AppError, LatLng } from '../types';
 import { RideStatus } from '../types';
 
-// ─── WKB Parser (formato que o Supabase Realtime envia para colunas geography) ─
-function hexToDouble(hex: string): number {
-  const bytes = new Uint8Array(8);
-  for (let i = 0; i < 8; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return new DataView(bytes.buffer).getFloat64(0, true);
-}
-
-function parseSupabasePoint(wkbHex: unknown): LatLng | null {
-  if (!wkbHex || typeof wkbHex !== 'string') return null;
-  try {
-    const hex = wkbHex.replace(/\s/g, '');
-    if (hex.length < 18) return null;
-    const hasSrid = hex.length >= 50;
-    const xOffset = hasSrid ? 18 : 10;
-    const lng = hexToDouble(hex.slice(xOffset, xOffset + 16));
-    const lat = hexToDouble(hex.slice(xOffset + 16, xOffset + 32));
-    if (isNaN(lat) || isNaN(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
-    return { lat, lng };
-  } catch {
-    return null;
+// ─── Geo Parser (Robusto) ───────────────────────────────────────────────────
+function parseSupabasePoint(val: unknown): LatLng | null {
+  if (!val) return null;
+  
+  // 1. Já é objecto JSON? { coordinates: [lng, lat] }
+  if (typeof val === 'object' && val !== null) {
+    const obj = val as Record<string, unknown>;
+    if (Array.isArray(obj.coordinates) && obj.coordinates.length >= 2) {
+      return { lng: Number(obj.coordinates[0]), lat: Number(obj.coordinates[1]) };
+    }
   }
+
+  if (typeof val !== 'string') return null;
+
+  // 2. É string POINT(lng lat)?
+  if (val.startsWith('POINT')) {
+    const match = val.match(/POINT\(([^ ]+)\s+([^ ]+)\)/);
+    if (match) return { lng: parseFloat(match[1]), lat: parseFloat(match[2]) };
+  }
+
+  // 3. É formato WKB Hex do realtime?
+  try {
+    const hex = val.replace(/\s/g, '');
+    if (hex.length >= 42) {
+      const hasSrid = hex.length >= 50;
+      const xOffset = hasSrid ? 18 : 10;
+      
+      const lngBytes = new Uint8Array(8);
+      for (let i = 0; i < 8; i++) lngBytes[i] = parseInt(hex.slice(xOffset + i * 2, xOffset + i * 2 + 2), 16);
+      const lng = new DataView(lngBytes.buffer).getFloat64(0, true);
+
+      const latBytes = new Uint8Array(8);
+      for (let i = 0; i < 8; i++) latBytes[i] = parseInt(hex.slice(xOffset + 16 + i * 2, xOffset + 16 + i * 2 + 2), 16);
+      const lat = new DataView(latBytes.buffer).getFloat64(0, true);
+
+      if (!isNaN(lat) && !isNaN(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        return { lat, lng };
+      }
+    }
+  } catch (e) {
+    console.warn('[rideService.parseSupabasePoint] WKB parse error:', e);
+  }
+
+  return null;
 }
 
 // ─── Tipos Internos ───────────────────────────────────────────────────────────
@@ -52,6 +75,16 @@ interface CreateRideInput {
 
 interface RideUpdateResult { data: DbRide | null; error: AppError | null; }
 
+const rideRateTracker = new Map<string, number[]>();
+
+function checkRideRateLimit(userId: string): boolean {
+  const now        = Date.now();
+  const timestamps = (rideRateTracker.get(userId) ?? []).filter(ts => now - ts < 60_000);
+  if (timestamps.length >= 5) return false;
+  rideRateTracker.set(userId, [...timestamps, now]);
+  return true;
+}
+
 // ─── Classe Principal ─────────────────────────────────────────────────────────
 class RideService {
   private rideChannel:       RealtimeChannel | null = null;
@@ -59,46 +92,88 @@ class RideService {
   private assignmentChannel: RealtimeChannel | null = null;
   private locationChannel:   RealtimeChannel | null = null;
 
-  // ── getDriversForAuction ──────────────────────────────────────────────────
-  async getDriversForAuction(pickupCoords: LatLng, radiusKm = 8.0): Promise<AuctionDriver[]> {
-    try {
-      console.log('[rideService.getDriversForAuction] Buscando motoristas em', pickupCoords, 'raio', radiusKm, 'km');
+  // ── getDriversForAuction — expansão dinâmica de raio + driver score ────────
+  // Raio padrão: 7km (uniformizado)
+  // Expansão automática: 5km → 7km → 12km se não houver motoristas
+  async getDriversForAuction(pickupCoords: LatLng, radiusKm = 7.0): Promise<AuctionDriver[]> {
+    // Raios a tentar por ordem crescente (zonas densas → periférico)
+    const radiiToTry = radiusKm !== 7.0 ? [radiusKm] : [5, 7, 12];
 
-      const { data, error } = await supabase.rpc('find_drivers_for_auction', {
-        p_lat: pickupCoords.lat,
-        p_lng: pickupCoords.lng,
-        p_radius_km: radiusKm,
-        p_limit: 8,
-      });
+    for (const radius of radiiToTry) {
+      try {
+        console.log(`[rideService.getDriversForAuction] Tentando raio ${radius}km em`, pickupCoords);
 
-      if (error) {
-        console.error('[rideService.getDriversForAuction] Erro RPC:', error.message);
-        // Fallback: tentar busca simples
-        return this._fallbackFindDrivers(pickupCoords);
+        const { data, error } = await supabase.rpc('find_drivers_for_auction', {
+          p_lat:       pickupCoords.lat,
+          p_lng:       pickupCoords.lng,
+          p_radius_km: radius,
+          p_limit:     8,
+        });
+
+        if (error) {
+          console.error('[rideService.getDriversForAuction] Erro RPC:', error.message);
+          // Só usa fallback na última tentativa
+          if (radius === radiiToTry[radiiToTry.length - 1]) {
+            return this._fallbackFindDrivers(pickupCoords);
+          }
+          continue;
+        }
+
+        if (!data || data.length === 0) {
+          console.log(`[rideService.getDriversForAuction] 0 motoristas em ${radius}km — expandindo raio`);
+          if (radius === radiiToTry[radiiToTry.length - 1]) break; // última tentativa
+          continue;
+        }
+
+        const rawDrivers = (data as Array<{
+          driver_id: string; driver_name: string; rating: number; distance_m: number;
+          avatar_url?: string | null; total_rides?: number; level?: string;
+          eta_min?: number; heading?: number | null;
+        }>);
+
+        // ── Driver Score: ordena por melhor match ─────────────────────────────
+        // Score = (distância_m * 0.5) + ((5 - rating) * 500 * 0.3) + BASE_CONSISTENCY * 0.2
+        // Quanto MENOR o score, MELHOR o motorista (fórmula de penalização)
+        const scored = rawDrivers.map(row => {
+          const rating      = typeof row.rating === 'number' ? row.rating : 5.0;
+          const distScore   = row.distance_m * 0.5;
+          const ratingScore = (5 - rating) * 500 * 0.3;
+          // Sem motogo_score do RPC — usar valor neutro (500/1000 = 50%)
+          const consistencyScore = (1 - 0.5) * 200 * 0.2;
+          const matchScore = distScore + ratingScore + consistencyScore;
+
+          return {
+            driver_id:   row.driver_id,
+            driver_name: row.driver_name,
+            avatar_url:  row.avatar_url  ?? null,
+            rating,
+            total_rides: row.total_rides ?? 0,
+            level:       (row.level ?? 'Novato') as AuctionDriver['level'],
+            distance_m:  row.distance_m,
+            // ETA: distância em metros / velocidade média Luanda (400m/min = 24km/h)
+            eta_min:     row.eta_min ?? Math.ceil(row.distance_m / 400),
+            heading:     row.heading ?? null,
+            _matchScore: matchScore,
+          };
+        });
+
+        // Ordenar por score crescente (melhor primeiro)
+        scored.sort((a, b) => a._matchScore - b._matchScore);
+
+        const drivers: AuctionDriver[] = scored.map(({ _matchScore: _, ...d }) => d);
+
+        console.log(`[rideService.getDriversForAuction] ${drivers.length} motoristas encontrados em ${radius}km`);
+        return drivers;
+
+      } catch (err) {
+        console.error(`[rideService.getDriversForAuction] Excepção no raio ${radius}km:`, err);
+        if (radius === radiiToTry[radiiToTry.length - 1]) return [];
       }
-
-      const drivers = ((data ?? []) as Array<{
-        driver_id: string; driver_name: string; rating: number; distance_m: number;
-        avatar_url?: string | null; total_rides?: number; level?: string;
-        eta_min?: number; heading?: number | null;
-      }>).map(row => ({
-        driver_id:   row.driver_id,
-        driver_name: row.driver_name,
-        avatar_url:  row.avatar_url  ?? null,
-        rating:      typeof row.rating === 'number' ? row.rating : 5.0,
-        total_rides: row.total_rides ?? 0,
-        level:       (row.level ?? 'Novato') as AuctionDriver['level'],
-        distance_m:  row.distance_m,
-        eta_min:     row.eta_min ?? Math.ceil(row.distance_m / 400),
-        heading:     row.heading ?? null,
-      }));
-
-      console.log(`[rideService.getDriversForAuction] ${drivers.length} motoristas encontrados`);
-      return drivers;
-    } catch (err) {
-      console.error('[rideService.getDriversForAuction] Excepção:', err);
-      return [];
     }
+
+    // Nenhum raio funcionou → fallback sem PostGIS
+    console.warn('[rideService.getDriversForAuction] Nenhum motorista em todos os raios — usando fallback');
+    return this._fallbackFindDrivers(pickupCoords);
   }
 
   // Fallback: busca motoristas disponíveis sem PostGIS
@@ -134,6 +209,11 @@ class RideService {
 
   // ── createRide ────────────────────────────────────────────────────────────
   async createRide(input: CreateRideInput): Promise<RideUpdateResult> {
+    // Rate limit
+    if (!checkRideRateLimit(input.passenger_id)) {
+      return { data: null, error: { code: 'rate_limit', message: 'Demasiados pedidos de corrida. Aguarda 1 minuto antes de tentar de novo.' } };
+    }
+
     // Validação básica
     if (!input.passenger_id) return { data: null, error: { code: 'validation', message: 'ID de passageiro em falta.' } };
     if (!input.origin_address || !input.dest_address) return { data: null, error: { code: 'validation', message: 'Origem ou destino em falta.' } };
@@ -238,34 +318,45 @@ class RideService {
     }
   }
 
-  // ── acceptRide (modo searching — motorista aceita no mercado aberto) ───────
+  // ── acceptRide (atómico) ───────
   async acceptRide(rideId: string, driverId: string): Promise<RideUpdateResult> {
     try {
-      // Optimistic locking: só aceita se ainda estiver sem motorista e em searching
-      const { data, error } = await supabase.from('rides')
-        .update({
-          driver_id:        driverId,
-          status:           RideStatus.ACCEPTED,
-          accepted_at:      new Date().toISOString(),
-          driver_confirmed: true,
-        })
-        .eq('id', rideId)
-        .eq('status', RideStatus.SEARCHING)
-        .is('driver_id', null)
-        .select().single();
+      const { data, error } = await supabase.rpc('accept_ride_atomic', {
+        p_ride_id: rideId,
+        p_driver_id: driverId,
+      });
 
       if (error) {
-        console.error('[rideService.acceptRide]', error);
-        return { data: null, error: { code: error.code, message: 'Esta corrida já foi aceite por outro motorista.' } };
+        console.error('[rideService.acceptRide] RPC error:', error);
+        return { data: null, error: { code: error.code, message: 'Erro ao aceitar corrida.' } };
       }
 
-      // Marcar motorista como busy
-      await supabase.from('driver_locations').update({ status: 'busy' }).eq('driver_id', driverId);
+      if (!data.success) {
+        const messages: Record<string, string> = {
+          ride_not_found:      'Corrida não encontrada',
+          ride_not_searching:  'Esta corrida já foi aceite (já não está à espera)',
+          already_accepted:    'Corrida já aceite',
+          driver_not_available:'O teu estado não permite aceitar corridas agora',
+          race_condition_lost: 'Outro motorista aceitou primeiro. Tenta outra corrida!',
+        };
+        const msg = messages[data.reason] || 'Não foi possível aceitar a corrida';
+        return { data: null, error: { code: data.reason, message: msg } };
+      }
 
-      return { data: data as DbRide, error: null };
+      // Actualizar a flag driver_confirmed (já que a rpc não o fez directamente) e ler a corrida
+      const { data: rideData, error: rideError } = await supabase.from('rides')
+        .update({ driver_confirmed: true })
+        .eq('id', rideId)
+        .select().single();
+
+      if (rideError) {
+        return { data: null, error: { code: rideError.code, message: 'Corrida aceite, mas erro ao ler dados.' } };
+      }
+
+      return { data: rideData as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.acceptRide] Excepção:', err);
-      return { data: null, error: { code: 'unknown', message: 'Erro ao aceitar corrida.' } };
+      return { data: null, error: { code: 'unknown', message: 'Erro crítico ao aceitar corrida.' } };
     }
   }
 
@@ -306,12 +397,47 @@ class RideService {
         if (updated?.driver_id) {
           await supabase.from('driver_locations').update({ status: 'available' }).eq('driver_id', updated.driver_id);
         }
+        
+        // FASE 11: Gamificação - Perk dos 70km (apenas para completed)
+        if (status === RideStatus.COMPLETED && updated?.passenger_id) {
+          const distKm = (updated as any).route_distance_km ?? updated.distance_km ?? 0;
+          if (distKm > 0) {
+            this._updateKmPerk(updated.passenger_id, distKm).catch(e => console.error('[rideService.Gamification]', e));
+          }
+        }
       }
 
       return { data: data as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.updateRideStatus] Excepção:', err);
       return { data: null, error: { code: 'unknown', message: 'Erro ao actualizar corrida.' } };
+    }
+  }
+
+  // ── Gamificação ───────────────────────────────────────────────────────────
+  private async _updateKmPerk(userId: string, rideDistanceKm: number) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('km_total, km_to_next_perk, free_km_available')
+      .eq('user_id', userId)
+      .single();
+  
+    if (!profile) return;
+  
+    const newTotal  = (profile.km_total       ?? 0)  + rideDistanceKm;
+    const newToNext = (profile.km_to_next_perk ?? 70) - rideDistanceKm;
+  
+    if (newToNext <= 0) {
+      await supabase.from('profiles').update({
+        km_total:          newTotal,
+        km_to_next_perk:   70,
+        free_km_available: (profile.free_km_available ?? 0) + 7,
+      }).eq('user_id', userId);
+    } else {
+      await supabase.from('profiles').update({
+        km_total:        newTotal,
+        km_to_next_perk: newToNext,
+      }).eq('user_id', userId);
     }
   }
 
@@ -333,6 +459,12 @@ class RideService {
 
       // Fallback: UPDATE directo
       console.warn('[rideService.cancelRide] RPC falhou, usando fallback directo:', error.message);
+      
+      // Validação básica UUID para evitar SQL string injection
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+         return { code: 'invalid_user', message: 'ID malformado' };
+      }
+
       const { error: updateErr } = await supabase.from('rides')
         .update({
           status:       RideStatus.CANCELLED,
@@ -367,35 +499,19 @@ class RideService {
   // ── getActiveRide ─────────────────────────────────────────────────────────
   async getActiveRide(userId: string): Promise<(DbRide & { driver_name?: string; passenger_name?: string }) | null> {
     try {
-      const terminalStatuses = [RideStatus.COMPLETED, RideStatus.CANCELLED];
-      const { data, error } = await supabase.from('rides')
-        .select('*')
-        .or(`passenger_id.eq.${userId},driver_id.eq.${userId}`)
-        .not('status', 'in', `(${terminalStatuses.join(',')})`)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data, error } = await supabase.rpc('get_active_ride', {
+        p_user_id: userId
+      });
 
-      if (error) { console.error('[rideService.getActiveRide]', error); return null; }
+      if (error) { 
+         console.error('[rideService.getActiveRide]', error); 
+         return null; 
+      }
+      
       if (!data) return null;
 
-      const rideRow = data as DbRide;
-
-      // Buscar nomes em paralelo
-      const [driverRes, passengerRes] = await Promise.all([
-        rideRow.driver_id
-          ? supabase.from('profiles').select('name').eq('user_id', rideRow.driver_id).single()
-          : Promise.resolve({ data: null }),
-        rideRow.passenger_id
-          ? supabase.from('profiles').select('name').eq('user_id', rideRow.passenger_id).single()
-          : Promise.resolve({ data: null }),
-      ]);
-
-      return {
-        ...rideRow,
-        driver_name:    (driverRes as any)?.data?.name ?? undefined,
-        passenger_name: (passengerRes as any)?.data?.name ?? undefined,
-      };
+      // JSONB do RPC vem formatado certinho
+      return data as DbRide & { driver_name?: string; passenger_name?: string };
     } catch (err) {
       console.error('[rideService.getActiveRide] Excepção:', err);
       return null;
@@ -615,18 +731,22 @@ class RideService {
   }
 
   // ── setDriverStatus ───────────────────────────────────────────────────────
-  async setDriverStatus(driverId: string, status: 'offline' | 'available' | 'busy'): Promise<void> {
-    try {
-      await supabase.from('driver_locations').upsert({
-        driver_id: driverId,
-        status,
-        updated_at: new Date().toISOString(),
-        // Localização placeholder para satisfazer constraint NOT NULL (será actualizada pelo GPS)
-        location: 'POINT(13.2343 -8.8368)',
-      });
-    } catch (err) {
-      console.error('[rideService.setDriverStatus] Erro:', err);
+  async setDriverStatus(
+    driverId: string,
+    status: 'available' | 'offline' | 'busy' | 'on_trip',
+    coords?: { lat: number; lng: number }
+  ): Promise<void> {
+    const updateData: Record<string, unknown> = {
+      driver_id: driverId, status, updated_at: new Date().toISOString(),
+    };
+    // PostGIS: ordem SEMPRE (Longitude, Latitude)
+    if (coords?.lat && coords?.lng) {
+      updateData.location = `POINT(${coords.lng} ${coords.lat})`;
     }
+    const { error } = await supabase
+      .from('driver_locations')
+      .upsert(updateData, { onConflict: 'driver_id' });
+    if (error) console.error('[rideService.setDriverStatus]', error);
   }
 
   // ── findNearbyDrivers ─────────────────────────────────────────────────────
@@ -674,6 +794,8 @@ class RideService {
               Math.cos(dest.lat * Math.PI/180) * Math.sin(dLng/2)**2;
     const distanceKm = Math.max(0.5, R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
     const durationMin = Math.ceil((distanceKm / 25) * 60);
+    // Tarifário Provisório (Fallback) - Baseado nos preços de mercado actuais em Luanda (Táxi/Moto-táxi)
+    // Custo base: 150 KZ (Abertura de viagem) | Custo por Km: ~200 KZ
     const base_kz = 150;
     const per_km_kz = Math.ceil(distanceKm * 200);
     const total_kz = Math.ceil(base_kz + per_km_kz);
