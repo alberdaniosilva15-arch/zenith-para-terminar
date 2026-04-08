@@ -62,7 +62,13 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [nearbyCount,  setNearbyCount]  = useState<number | null>(null);
   // Engine Pro: rota real + preço calculado no servidor
   const [routeData,    setRouteData]    = useState<RouteResult | null>(null);
-  const [fareData,     setFareData]     = useState<any>(null);
+  const [fareData, setFareData] = useState<{
+    fare_kz: number;
+    badges: string[];
+    surge_factor: number;
+    zone_multiplier: number;
+    traffic_multiplier: number;
+  } | null>(null);
   const [calculating,  setCalculating]  = useState(false);
   const [priceTimer,   setPriceTimer]   = useState<number>(0);
 
