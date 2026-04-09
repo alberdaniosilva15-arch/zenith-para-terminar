@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v3.0 — Edge Function: agora-token
+// ZENITH RIDE v3.0 — Edge Function: agora-token
 // Gera tokens de autenticação seguros para o Agora.io
 // App Certificate NUNCA sai desta função
 //

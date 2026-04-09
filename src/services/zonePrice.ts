@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — src/services/zonePrice.ts
+// ZENITH RIDE v3.0 — src/services/zonePrice.ts
 // Preços fixos por zona — a arma secreta contra o surge pricing percebido
 //
 // Estratégia de negócio:

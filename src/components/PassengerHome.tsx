@@ -9,11 +9,16 @@
 //   6. Estados completos: IDLE / BROWSING / SEARCHING / ACCEPTED / IN_PROGRESS
 // =============================================================================
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, Suspense } from 'react';
 import { Megaphone } from 'lucide-react';
 import RideTalk from './RideTalk';
-import Map3D from './Map3D';
-import AgoraCall from './AgoraCall';
+import LocationSearch from './passenger/LocationSearch';
+import RoutePreview from './passenger/RoutePreview';
+import AuctionList from './passenger/AuctionList';
+import RideRequestForm from './passenger/RideRequestForm';
+import ActiveRideCard from './passenger/ActiveRideCard';
+const Map3D = React.lazy(() => import('./Map3D'));
+const AgoraCall = React.lazy(() => import('./AgoraCall'));
 import KazePreditivo  from './KazePreditivo';
 import FreePerkBanner from './FreePerkBanner';
 import ZonePriceMap   from './ZonePriceMap';
@@ -314,39 +319,13 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           )}
         </div>
 
-        {/* Loading */}
-        {auction.loading && (
-          <div className="flex flex-col items-center py-16 gap-4">
-            <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-            <p className="text-[10px] font-black text-on-surface-variant/70 uppercase tracking-widest">A procurar motoristas...</p>
-          </div>
-        )}
-
-        {/* Erro */}
-        {auction.error && !auction.loading && (
-          <div className="m-4 bg-primary/8 border border-primary/20 rounded-[2rem] p-6 text-center">
-            <p className="text-2xl mb-2">🔍</p>
-            <p className="font-black text-on-surface text-sm">{auction.error}</p>
-            <button onClick={onCancelAuction} className="mt-4 text-[10px] font-black text-primary/80 uppercase tracking-widest">
-              Voltar
-            </button>
-          </div>
-        )}
-
-        {/* Lista de motoristas */}
-        {!auction.loading && !auction.error && auction.drivers.length > 0 && (
-          <div className="p-4 space-y-3">
-            {auction.drivers.map((driver) => (
-              <DriverAuctionCard
-                key={driver.driver_id}
-                driver={driver}
-                selected={auction.selectedDriver?.driver_id === driver.driver_id}
-                onSelect={() => onSelectDriver(driver)}
-                priceKz={zonePrice ?? ride.priceKz ?? null}
-              />
-            ))}
-          </div>
-        )}
+        <AuctionList
+          auction={auction}
+          onSelectDriver={onSelectDriver}
+          onCancelAuction={onCancelAuction}
+          zonePrice={zonePrice}
+          priceKz={ride.priceKz ?? null}
+        />
 
         {/* Botão confirmar */}
         {auction.selectedDriver && (
@@ -377,129 +356,44 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   return (
     <div className="relative min-h-full flex flex-col bg-[#050912]">
       <div className="absolute inset-0 z-0">
-        <Map3D
-          pickup={pickupCoords ?? undefined}
-          destination={destCoords ?? undefined}
-          status={ride.status}
-          carLocation={ride.carLocation}
-          dataSaver={dataSaver}
-        />
+        <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-[#050912] text-white/50 text-xs">A carregar mapa...</div>}>
+          <Map3D
+            pickup={pickupCoords ?? undefined}
+            destination={destCoords ?? undefined}
+            status={ride.status}
+            carLocation={ride.carLocation}
+            dataSaver={dataSaver}
+          />
+        </Suspense>
       </div>
 
       <div className="relative z-10 p-4 space-y-4 flex-1 flex flex-col">
 
         {/* Card de rota */}
-        <div className={`bg-surface-container-low rounded-[2rem] shadow-2xl p-6 space-y-4 border border-white/40 transition-all duration-500 ${
-          selecting ? 'opacity-0 pointer-events-none -translate-y-4' : 'opacity-100 translate-y-0'
-        }`}>
-          <div className="flex justify-between items-center">
-            <span className="text-[9px] font-black text-on-surface-variant/70 uppercase tracking-widest">Trajecto Inteligente</span>
-            {nearbyCount !== null && nearbyCount > 0 && (
-              <span className="text-[8px] font-black uppercase text-primary bg-primary/10 px-3 py-1 rounded-full flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
-                {nearbyCount} motoristas próximos
-              </span>
-            )}
-          </div>
-
-          <div className="space-y-2">
-            {/* Pickup */}
-            <div
-              onClick={() => { setSelecting('pickup'); handleSearch(''); }}
-              className="flex gap-4 items-center cursor-pointer bg-surface-container-lowest p-4 rounded-2xl border border-outline-variant/20 hover:bg-surface-container-low transition-all"
-            >
-              <div className="w-2.5 h-2.5 rounded-full bg-primary shrink-0" />
-              <p className={`text-xs font-black truncate ${pickupName ? 'text-on-surface' : 'text-on-surface-variant/70'}`}>
-                {pickupName || 'Onde estás agora?'}
-              </p>
-            </div>
-
-            {/* Linha de distância */}
-            {routeInfo && (
-              <div className="flex items-center gap-2 pl-5">
-                <div className="w-px h-4 bg-outline-variant/40" />
-                <span className="text-[9px] font-bold text-primary/70 bg-primary/8 px-3 py-1 rounded-full">
-                  📏 {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min de trajecto
-                </span>
-              </div>
-            )}
-
-            {/* Destination */}
-            <div
-              onClick={() => { setSelecting('dest'); handleSearch(''); }}
-              className="flex gap-4 items-center cursor-pointer bg-surface-container-lowest p-4 rounded-2xl border border-outline-variant/20 hover:bg-surface-container-low transition-all"
-            >
-              <div className="w-2.5 h-2.5 rounded-full bg-red-600 shrink-0" />
-              <p className={`text-xs font-black truncate ${destName ? 'text-on-surface' : 'text-on-surface-variant/70'}`}>
-                {destName || 'Para onde queres ir?'}
-              </p>
-            </div>
-          </div>
-
-          {/* Preço fixo por zona */}
-          {zonePrice && zoneNames && (
-            <div className="flex items-center justify-between pt-2 border-t border-outline-variant/20">
-              <div className="flex items-center gap-2">
-                <span className="text-[8px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-black">✓ PREÇO FIXO</span>
-                <span className="text-[8px] text-on-surface-variant/70 font-bold">{zoneNames.origin} → {zoneNames.dest}</span>
-              </div>
-              <span className="font-black text-primary text-sm">{Math.round(zonePrice).toLocaleString('pt-AO')} Kz</span>
-            </div>
-          )}
-        </div>
+        <RoutePreview
+          selecting={selecting}
+          nearbyCount={nearbyCount}
+          pickupName={pickupName}
+          destName={destName}
+          routeInfo={routeInfo}
+          zonePrice={zonePrice}
+          zoneNames={zoneNames}
+          onSelectPickup={() => { setSelecting('pickup'); handleSearch(''); }}
+          onSelectDest={() => { setSelecting('dest'); handleSearch(''); }}
+        />
 
         {/* Overlay de pesquisa */}
         {selecting && (
-          <div className="absolute inset-x-4 top-4 z-[100] animate-in slide-in-from-top duration-300 flex flex-col max-h-[85vh]">
-            <div className="bg-surface-container-low rounded-[2.5rem] overflow-hidden border border-outline-variant/20 flex flex-col shadow-2xl">
-              <div className="p-5 border-b border-outline-variant/10 flex items-center gap-4 sticky top-0 bg-surface-container-low z-10">
-                <button
-                  onClick={() => { setSelecting(null); setSearchQuery(''); setResults([]); }}
-                  className="w-10 h-10 flex items-center justify-center bg-surface-container-lowest rounded-full text-outline font-black"
-                >✕</button>
-                <input
-                  autoFocus
-                  type="text"
-                  placeholder={selecting === 'pickup' ? 'De onde partes?' : 'Para onde vais?'}
-                  className="flex-1 bg-surface-container-lowest p-4 rounded-2xl outline-none font-black text-sm text-on-surface"
-                  value={searchQuery}
-                  onChange={(e) => handleSearch(e.target.value)}
-                />
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-2">
-                {selecting === 'pickup' && (
-                  <button onClick={useGPS} disabled={searching}
-                    className="w-full flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/20 mb-2 text-left disabled:opacity-60">
-                    <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center text-white text-lg">
-                      {searching ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : '📍'}
-                    </div>
-                    <div>
-                      <p className="font-black text-on-surface text-sm">Usar a minha localização</p>
-                      <p className="text-[9px] text-primary font-bold uppercase">GPS automático · Nome do bairro</p>
-                    </div>
-                  </button>
-                )}
-                <p className="px-4 text-[8px] font-black text-on-surface-variant/70 uppercase tracking-widest mb-2">
-                  {searching ? 'A consultar...' : `${results.length} locais`}
-                </p>
-                {results.map((res, i) => (
-                  <button key={`location-${res.name}-${i}`} onClick={() => selectLocation(res)}
-                    className="w-full flex items-center gap-4 p-4 hover:bg-surface-container-lowest rounded-2xl transition-colors text-left border border-transparent hover:border-outline-variant/20">
-                    <div className="w-10 h-10 bg-surface-container-low rounded-xl flex items-center justify-center text-xl shrink-0">
-                      {res.type === 'bairro' ? '🏘️' : res.type === 'hospital' ? '🏥' : res.type === 'servico' ? '🏪' : res.type === 'monumento' ? '🏛️' : '📍'}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-black text-on-surface text-sm truncate">{res.name}</p>
-                      <p className="text-[9px] font-bold text-on-surface-variant/70 uppercase">{res.description}</p>
-                    </div>
-                    {res.isPopular && (
-                      <span className="text-[8px] bg-primary/15 text-primary px-2 py-1 rounded-full font-black shrink-0">Popular</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+          <LocationSearch
+            selecting={selecting}
+            searchQuery={searchQuery}
+            results={results}
+            searching={searching}
+            onSearchChange={handleSearch}
+            onClose={() => { setSelecting(null); setSearchQuery(''); setResults([]); }}
+            onUseGPS={useGPS}
+            onSelectLocation={selectLocation}
+          />
         )}
 
         <div className="flex-1" />
@@ -526,210 +420,25 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               </>
             )}
 
-            {/* Card de preço Engine Pro (aparece após calcular) */}
-            {ride.status === RideStatus.IDLE && fareData && (
-              <div
-                className="rounded-2xl p-5 space-y-3"
-                style={{
-                  background: 'linear-gradient(135deg, #0E0E0E 0%, #1A1600 100%)',
-                  border: '1px solid rgba(230,195,100,0.3)',
-                }}
-              >
-                {/* Preço principal + Countdown */}
-                <div className="flex items-end justify-between">
-                  <div>
-                    <p className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'rgba(230,195,100,0.5)' }}>
-                      Preço estimado
-                    </p>
-                    <p className="text-3xl font-black mt-1" style={{ color: '#E6C364' }}>
-                      {Number(fareData.fare_kz).toLocaleString('pt-AO')} Kz
-                    </p>
-                  </div>
-                  {priceTimer > 0 && (
-                    <div className="text-right">
-                      <p className="text-[9px] uppercase tracking-widest font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>
-                        Preço bloqueado
-                      </p>
-                      <p className="text-sm font-mono font-bold" style={{ color: 'rgba(230,195,100,0.7)' }}>
-                        {Math.floor(priceTimer / 60)}:{String(priceTimer % 60).padStart(2, '0')}
-                      </p>
-                    </div>
-                  )}
-                </div>
+            <RideRequestForm
+              rideStatus={ride.status}
+              fareData={fareData}
+              routeData={routeData}
+              priceTimer={priceTimer}
+              isReady={isReady}
+              searching={searching}
+              calculating={calculating}
+              onCalculatePrice={handleConfirmRoute}
+              onCallTaxi={handleCallTaxi}
+              onConfirmRideRequest={handleShowDrivers}
+            />
 
-                {/* Badges dinâmicos */}
-                {fareData.badges && (fareData.badges as string[]).length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {(fareData.badges as string[]).map((badge: string, i: number) => (
-                      <span
-                        key={i}
-                        className="px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-wider"
-                        style={{ background: 'rgba(230,195,100,0.12)', border: '1px solid rgba(230,195,100,0.3)', color: '#E6C364' }}
-                      >
-                        {badge}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                {/* Detalhes da rota */}
-                {routeData && (
-                  <div className="flex gap-4 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-                    <div>
-                      <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Distância</p>
-                      <p className="text-xs font-black text-white">{routeData.distanceKm.toFixed(1)} km</p>
-                    </div>
-                    <div>
-                      <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Tempo</p>
-                      <p className="text-xs font-black text-white">~{Math.round(routeData.durationMin)} min</p>
-                    </div>
-                    {routeData.trafficFactor > 1.3 && (
-                      <div>
-                        <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Trânsito</p>
-                        <p className="text-xs font-black" style={{ color: '#ff6b35' }}>Intenso</p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Botão principal — fluxo dinâmico */}
-            {ride.status === RideStatus.IDLE && (
-              !fareData ? (
-                // Botao para calcular o preço via Engine Pro
-                <button
-                  onClick={isReady ? handleConfirmRoute : handleCallTaxi}
-                  disabled={searching || calculating}
-                  className={`w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-50 ${
-                    isReady
-                      ? 'bg-primary text-white shadow-[0_20px_50px_rgba(37,99,235,0.4)]'
-                      : 'bg-[#1a1a1a] text-white border border-white/10'
-                  }`}
-                >
-                  {calculating ? (
-                    <span className="flex items-center justify-center gap-3">
-                      <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      A calcular rota...
-                    </span>
-                  ) : searching ? (
-                    <span className="flex items-center justify-center gap-3">
-                      <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      A localizar...
-                    </span>
-                  ) : isReady ? (
-                    <span className="flex items-center justify-center gap-3">
-                      💰 CALCULAR PREÇO
-                    </span>
-                  ) : 'CHAMAR TÁXI'}
-                </button>
-              ) : (
-                // Botão de pedir corrida com preço confirmado
-                <button
-                  onClick={handleShowDrivers}
-                  disabled={priceTimer === 0}
-                  className="w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-40"
-                  style={{ background: '#E6C364', color: '#050505', boxShadow: '0 20px 50px rgba(230,195,100,0.35)' }}
-                >
-                  🚖 PEDIR CORRIDA — {Number(fareData.fare_kz).toLocaleString('pt-AO')} Kz
-                </button>
-              )
-            )}
-
-            {/* SEARCHING */}
-            {ride.status === RideStatus.SEARCHING && (
-              <div className="bg-surface-container-low p-6 rounded-[2.5rem] shadow-2xl border border-outline-variant/20">
-                <div className="flex flex-col items-center gap-4">
-                  <div className="relative">
-                    <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-                    <span className="absolute inset-0 flex items-center justify-center text-2xl">🚖</span>
-                  </div>
-                  <p className="font-black text-on-surface uppercase tracking-widest text-sm">À procura de motorista</p>
-                  <p className="text-[10px] text-on-surface-variant/70 font-bold text-center">
-                    Nenhum motorista aceitou ainda. O pedido está activo e será notificado quando houver disponibilidade.
-                  </p>
-                  <button
-                    onClick={() => onCancelRide('Cancelado pelo passageiro')}
-                    className="text-[10px] font-black text-red-500 uppercase hover:bg-red-500/10 px-6 py-2 rounded-full transition-all"
-                  >
-                    Cancelar pedido
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* ACCEPTED — aguardar confirmação */}
-            {ride.status === RideStatus.ACCEPTED && !ride.driverConfirmed && (
-              <div className="bg-surface-container-low p-6 rounded-[2.5rem] shadow-2xl border-2 border-primary/30">
-                <div className="flex flex-col items-center gap-3">
-                  <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-                  <p className="font-black text-on-surface text-sm">
-                    A aguardar confirmação de {ride.driverName ?? 'motorista'}...
-                  </p>
-                  <p className="text-[9px] text-on-surface-variant/60 font-bold text-center">
-                    O motorista foi notificado. A aguardar resposta.
-                  </p>
-                  <button
-                    onClick={() => onCancelRide('Cancelado antes de confirmação')}
-                    className="text-[10px] font-black text-red-500 uppercase hover:bg-red-500/10 px-6 py-2 rounded-full transition-all"
-                  >
-                    Cancelar
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* ACCEPTED — motorista confirmado, a caminho */}
-            {ride.status === RideStatus.ACCEPTED && ride.driverConfirmed && (
-              <div className="bg-surface-container-low border border-primary/20 p-6 rounded-[2.5rem] vault-shadow space-y-4">
-                <div className="flex items-center gap-3 mb-2">
-                  <div className="w-12 h-12 golden-gradient rounded-2xl flex items-center justify-center text-2xl font-headline font-bold vault-shadow">
-                    {(ride.driverName ?? 'M').charAt(0)}
-                  </div>
-                  <div>
-                    <p className="font-black text-on-surface text-sm">{ride.driverName ?? 'Motorista'} a caminho</p>
-                    <p className="text-[10px] font-label text-primary/70 uppercase tracking-widest">Confirmado · Em rota</p>
-                  </div>
-                </div>
-                <div className="vault-indicator-track">
-                  <div className="vault-indicator-fill w-1/3" />
-                </div>
-                {ride.rideId && (
-                  <AgoraCall
-                    corridaId={ride.rideId}
-                    userId={userId}
-                    peerName={ride.driverName ?? 'Motorista'}
-                    onEndCall={() => {}}
-                  />
-                )}
-              </div>
-            )}
-
-            {/* IN_PROGRESS */}
-            {ride.status === RideStatus.IN_PROGRESS && (
-              <div className="bg-surface-container-lowest border border-primary/20 p-5 rounded-[2.5rem] vault-shadow space-y-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-primary rounded-full animate-pulse-gold" />
-                  <div>
-                    <p className="font-black text-on-surface text-sm uppercase tracking-widest">Em corrida</p>
-                    <p className="text-on-surface-variant text-xs font-label">{ride.pickup} → {ride.destination}</p>
-                    {routeInfo && (
-                      <p className="text-[9px] text-primary/70 font-bold mt-0.5">
-                        📏 {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
-                      </p>
-                    )}
-                  </div>
-                </div>
-                {ride.rideId && (
-                  <AgoraCall
-                    corridaId={ride.rideId}
-                    userId={userId}
-                    peerName={ride.driverName ?? 'Motorista'}
-                    onEndCall={() => {}}
-                  />
-                )}
-              </div>
-            )}
+            <ActiveRideCard
+              ride={ride}
+              userId={userId}
+              routeInfo={routeInfo}
+              onCancelRide={onCancelRide}
+            />
 
             <RideTalk zone="Geral" role={UserRole.PASSENGER} />
           </div>
@@ -756,58 +465,6 @@ const RouteRow: React.FC<{ dot: string; value: string }> = ({ dot, value }) => (
     <div className={`w-2 h-2 rounded-full ${dot} shrink-0`} />
     <p className="text-xs font-black text-on-surface-variant truncate">{value}</p>
   </div>
-);
-
-const DriverAuctionCard: React.FC<{
-  driver: AuctionDriver; selected: boolean; onSelect: () => void; priceKz: number | null;
-}> = ({ driver, selected, onSelect, priceKz }) => (
-  <button
-    onClick={onSelect}
-    className={`w-full text-left p-5 rounded-[2rem] border-2 transition-all active:scale-98 ${
-      selected
-        ? 'border-primary bg-primary/10 shadow-[0_10px_30px_rgba(37,99,235,0.2)]'
-        : 'border-outline-variant/20 bg-surface-container-low hover:border-outline-variant/40 shadow-sm'
-    }`}
-  >
-    <div className="flex items-center gap-4">
-      <div className="w-14 h-14 rounded-2xl overflow-hidden bg-surface-container-low shrink-0">
-        <img
-          src={driver.avatar_url ?? `https://api.dicebear.com/7.x/bottts/svg?seed=${driver.driver_id}`}
-          alt={driver.driver_name}
-          className="w-full h-full object-cover"
-        />
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <p className="font-black text-on-surface text-sm truncate">{driver.driver_name}</p>
-          {selected && <span className="text-[8px] bg-primary text-white px-2 py-0.5 rounded-full font-black shrink-0">SELECCIONADO</span>}
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-[9px] font-bold text-primary/80">⭐ {driver.rating.toFixed(1)}</span>
-          <span className="text-[9px] font-bold text-on-surface-variant/70">{driver.total_rides} corridas</span>
-          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${
-            driver.level === 'Diamante' ? 'bg-primary text-white' :
-            driver.level === 'Ouro'     ? 'bg-yellow-100 text-yellow-800' :
-            driver.level === 'Prata'    ? 'bg-surface-container text-on-surface-variant' :
-            driver.level === 'Bronze'   ? 'bg-orange-100 text-orange-700' :
-                                          'bg-surface-container-low text-outline'
-          }`}>
-            {driver.level === 'Diamante' ? '💎' : driver.level === 'Ouro' ? '⭐' : driver.level === 'Prata' ? '🥈' : driver.level === 'Bronze' ? '🥉' : ''}
-            {' '}{driver.level}
-          </span>
-        </div>
-        {priceKz && (
-          <p className={`text-[10px] font-black mt-1 ${selected ? 'text-primary' : 'text-on-surface-variant'}`}>
-            ~{Math.round(priceKz).toLocaleString('pt-AO')} Kz
-          </p>
-        )}
-      </div>
-      <div className="text-right shrink-0">
-        <p className="font-black text-on-surface text-sm">{driver.eta_min} min</p>
-        <p className="text-[9px] text-on-surface-variant/70 font-bold">{(driver.distance_m / 1000).toFixed(1)} km</p>
-      </div>
-    </div>
-  </button>
 );
 
 export default PassengerHome;

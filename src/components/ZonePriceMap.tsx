@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — src/components/ZonePriceMap.tsx
+// ZENITH RIDE v3.0 — src/components/ZonePriceMap.tsx
 //
 // Tabela de preços fixos por zona — visível para passageiros E motoristas.
 // Elimina a percepção de surge pricing arbitrário.

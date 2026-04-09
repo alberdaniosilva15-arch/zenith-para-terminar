@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — App.tsx
+// ZENITH RIDE v3.0 — App.tsx
 // Actualizado para suportar:
 // - Leilão de motoristas (auction flow)
 // - PostRideReview (avaliação pós-corrida)
@@ -8,26 +8,46 @@
 // - IA condicional: Kaze silencioso quando ride.status === IDLE
 // =============================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useRide } from './hooks/useRide';
 import Layout from './components/Layout';
 import { UserRole, RideStatus, TabType, AutonomousCommand } from './types';
 import PassengerHome from './components/PassengerHome';
 import DriverHome from './components/DriverHome';
-import AdminDashboard from './components/AdminDashboard';
 import RidesHistory from './components/RidesHistory';
 import Wallet from './components/Wallet';
 import Profile from './components/Profile';
 import KazeMascot from './components/KazeMascot';
 import Contract from './components/Contract';
 import Login from './components/Login';
-import SocialFeed from './components/SocialFeed';
+const SocialFeed = React.lazy(() => import('./components/SocialFeed'));
 import PostRideReview from './components/PostRideReview';
 import ZonePriceMap from './components/ZonePriceMap';
 import ParentTrackingPage from './components/ParentTrackingPage';
 import { geminiService } from './services/geminiService';
 import Toast from './components/Toast';
+
+// =============================================================================
+// LAZY COMPONENTS (FASE 2)
+// =============================================================================
+const AdminDashboard = React.lazy(() => import('./components/AdminDashboard'));
+
+// =============================================================================
+// PREPARATION ROUTE (FASE 2)
+// =============================================================================
+const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
+  const { dbUser, loading } = useAuth();
+  if (loading) return (
+    <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6">
+      <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      <p className="text-white/60 text-xs font-black uppercase tracking-widest">Zenith Ride</p>
+    </div>
+  );
+  if (!dbUser) return <Navigate to="/login" replace />;
+  return <>{children}</>;
+};
 
 // =============================================================================
 // APP INTERNO (dentro do AuthProvider)
@@ -43,7 +63,6 @@ const AppInner: React.FC = () => {
     submitReview, dismissPostRide,
   } = useRide();
 
-  const [activeTab,   setActiveTab]   = useState<TabType>('home');
   const [dataSaver,   setDataSaver]   = useState(false);
   const [kazeSilent,  setKazeSilent]  = useState(false);
   const [lastCommand, setLastCommand] = useState<AutonomousCommand | null>(null);
@@ -62,13 +81,8 @@ const AppInner: React.FC = () => {
     };
 
     runVigilante();
-    // O setInterval foi removido para evitar exceder quotas do Gemini API (150 requests/h por admin).
-    // O admin pode clicar num botão de Refresh no dashboard se precisar de nova avaliação.
   }, [role, dbUser, ride.status]);
 
-  // ------------------------------------------------------------------
-  // Loading screen
-  // ------------------------------------------------------------------
   if (authLoading) {
     return (
       <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6">
@@ -78,122 +92,100 @@ const AppInner: React.FC = () => {
     );
   }
 
-  // ------------------------------------------------------------------
-  // Login / awaiting setup screen
-  // If we have a valid session but the DB user row hasn't been created
-  // yet (trigger latency), show a finalizing message instead of the
-  // login form so the user sees progress after clicking the magic link.
-  // ------------------------------------------------------------------
-  if (!dbUser) {
-    if (session) {
-      return (
-        <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6 p-6">
-          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-          <p className="text-white/80 font-bold">Conta autenticada — a finalizar registo...</p>
-          <p className="text-white/50 text-sm max-w-lg text-center mt-2">Estamos a concluir a criação do teu perfil. Se isto não avançar em alguns segundos, confirma que o teu projeto Supabase tem o trigger <code>handle_new_user</code> e as tabelas do schema.</p>
-        </div>
-      );
-    }
-
-    return <Login />;
-  }
-
-  // ------------------------------------------------------------------
-  // App principal
-  // ------------------------------------------------------------------
-  const renderContent = () => {
-    if (role === UserRole.ADMIN) {
-      return <AdminDashboard lastCommand={lastCommand} />;
-    }
-
-    switch (activeTab) {
-      case 'home':
-        if (role === UserRole.PASSENGER) {
-          return (
-            <PassengerHome
-              ride={ride}
-              auction={auction}
-              userId={dbUser.id}
-              onStartAuction={startAuction}
-              onSelectDriver={selectDriver}
-              onCancelAuction={cancelAuction}
-              onRequestRide={requestRide}
-              onCancelRide={cancelRide}
-              dataSaver={dataSaver}
-            />
-          );
-        }
-        return (
-          <DriverHome
-            ride={ride}
-            onAcceptRide={acceptRide}
-            onConfirmRide={confirmRide}
-            onDeclineRide={declineRide}
-            onAdvanceStatus={advanceStatus}
-            driverId={dbUser.id}
-          />
-        );
-
-      case 'rides':
-        return <RidesHistory userId={dbUser.id} />;
-
-      case 'wallet':
-        return <Wallet userId={dbUser.id} />;
-
-      case 'profile':
-        return <Profile dbUser={dbUser} profile={profile} onSignOut={signOut} />;
-
-      case 'social':
-        return <SocialFeed userId={dbUser.id} userName={profile?.name ?? ''} role={role} />;
-
-      case 'contrato':
-        return <Contract />;
-
-      case 'precos':
-        return <ZonePriceMap />;
-
-      default:
-        return null;
-    }
-  };
-
-  // Kaze sempre disponível (chat + explore), pensamentos espontâneos só durante corridas
   const kazeActive = !kazeSilent;
 
   return (
-    <Layout
-      role={role}
-      activeTab={activeTab}
-      onTabChange={setActiveTab}
-      dataSaver={dataSaver}
-      onDataSaverToggle={() => setDataSaver(v => !v)}
-      kazeSilent={kazeSilent}
-      onKazeSilentToggle={() => setKazeSilent(v => !v)}
-      userName={profile?.name}
-      userRating={profile?.rating}
-    >
-      {renderContent()}
-
-      {/* Kaze — sempre disponível para chat e assistência */}
-      {kazeActive && (
-        <KazeMascot
-          role={role}
-          rideStatus={ride.status}
-          dataSaver={dataSaver}
-          userName={profile?.name}
-        />
-      )}
-
-      {/* PostRideReview — aparece automaticamente após corrida concluída */}
-      <PostRideReview
-        postRide={postRide}
-        onSubmit={submitReview}
-        onDismiss={dismissPostRide}
+    <Routes>
+      <Route 
+        path="/login" 
+        element={
+          dbUser ? <Navigate to="/" replace /> : (
+            session ? (
+              <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6 p-6">
+                <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+                <p className="text-white/80 font-bold">Conta autenticada — a finalizar registo...</p>
+                <p className="text-white/50 text-sm max-w-lg text-center mt-2">Estamos a concluir a criação do teu perfil. Se isto não avançar em alguns segundos, confirma que o teu projeto Supabase tem o trigger <code>handle_new_user</code> e as tabelas do schema.</p>
+              </div>
+            ) : <Login />
+          )
+        } 
       />
+      
+      <Route path="*" element={
+        <ProtectedRoute>
+          <Layout
+            role={role}
+            dataSaver={dataSaver}
+            onDataSaverToggle={() => setDataSaver(v => !v)}
+            kazeSilent={kazeSilent}
+            onKazeSilentToggle={() => setKazeSilent(v => !v)}
+            userName={profile?.name}
+            userRating={profile?.rating}
+          >
+            <Routes>
+              {role === UserRole.ADMIN ? (
+                <Route path="*" element={
+                  <Suspense fallback={<div className="flex items-center justify-center p-8 text-white"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>}>
+                    <AdminDashboard lastCommand={lastCommand} />
+                  </Suspense>
+                } />
+              ) : (
+                <>
+                  <Route path="/" element={
+                    role === UserRole.PASSENGER ? (
+                      <PassengerHome
+                        ride={ride}
+                        auction={auction}
+                        userId={dbUser?.id ?? ''}
+                        onStartAuction={startAuction}
+                        onSelectDriver={selectDriver}
+                        onCancelAuction={cancelAuction}
+                        onRequestRide={requestRide}
+                        onCancelRide={cancelRide}
+                        dataSaver={dataSaver}
+                      />
+                    ) : (
+                      <DriverHome
+                        ride={ride}
+                        onAcceptRide={acceptRide}
+                        onConfirmRide={confirmRide}
+                        onDeclineRide={declineRide}
+                        onAdvanceStatus={advanceStatus}
+                        driverId={dbUser?.id ?? ''}
+                      />
+                    )
+                  } />
+                  <Route path="/rides" element={<RidesHistory userId={dbUser?.id ?? ''} />} />
+                  <Route path="/wallet" element={<Wallet userId={dbUser?.id ?? ''} />} />
+                  <Route path="/profile" element={dbUser ? <Profile dbUser={dbUser} profile={profile} onSignOut={signOut} /> : <></>} />
+                  <Route path="/social" element={<Suspense fallback={<div className="flex justify-center p-4 text-white/50"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}><SocialFeed userId={dbUser?.id ?? ''} userName={profile?.name ?? ''} role={role} /></Suspense>} />
+                  <Route path="/contrato" element={<Contract />} />
+                  <Route path="/precos" element={<ZonePriceMap />} />
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </>
+              )}
+            </Routes>
 
-      {/* Toast — notificações globais de sistema */}
-      <Toast />
-    </Layout>
+            {kazeActive && (
+              <KazeMascot
+                role={role}
+                rideStatus={ride.status}
+                dataSaver={dataSaver}
+                userName={profile?.name}
+              />
+            )}
+
+            <PostRideReview
+              postRide={postRide}
+              onSubmit={submitReview}
+              onDismiss={dismissPostRide}
+            />
+
+            <Toast />
+          </Layout>
+        </ProtectedRoute>
+      } />
+    </Routes>
   );
 };
 
@@ -207,10 +199,13 @@ const App: React.FC = () => {
     return <ParentTrackingPage token={pathMatch[1]} />;
   }
 
+  // Envolver com BrowserRouter de forma segura para migração progressiva
   return (
-    <AuthProvider>
-      <AppInner />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppInner />
+      </AuthProvider>
+    </BrowserRouter>
   );
 };
 

@@ -4,13 +4,12 @@
 // =============================================================================
 
 import React from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { UserRole, TabType } from '../types';
 
 interface LayoutProps {
   children: React.ReactNode;
   role: UserRole;
-  activeTab: TabType;
-  onTabChange: (tab: TabType) => void;
   dataSaver: boolean;
   onDataSaverToggle: () => void;
   kazeSilent: boolean;
@@ -29,13 +28,26 @@ const TAB_ICONS: Record<TabType, string> = {
   precos: 'price_check',
 };
 
+const TAB_ROUTES: Record<TabType, string> = {
+  home: '/',
+  social: '/social',
+  contrato: '/contrato',
+  rides: '/rides',
+  wallet: '/wallet',
+  profile: '/profile',
+  precos: '/precos',
+};
+
 const Layout: React.FC<LayoutProps> = ({
-  children, role, activeTab, onTabChange,
+  children, role,
   dataSaver, onDataSaverToggle, kazeSilent, onKazeSilentToggle,
   userName, userRating,
 }) => {
   const isDriver = role === UserRole.DRIVER;
   const isAdmin = role === UserRole.ADMIN;
+  
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const tabs: TabType[] = isDriver
     ? ['home', 'social', 'rides', 'wallet', 'profile']
@@ -102,11 +114,11 @@ const Layout: React.FC<LayoutProps> = ({
       {!isAdmin && (
         <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md z-50 bg-[#000000] border-t border-primary/30 flex justify-around items-center h-20 px-4">
           {tabs.map(tab => {
-            const active = activeTab === tab;
+            const active = location.pathname === TAB_ROUTES[tab];
             return (
               <button
                 key={tab}
-                onClick={() => onTabChange(tab)}
+                onClick={() => navigate(TAB_ROUTES[tab])}
                 className={`flex flex-col items-center justify-center gap-1 flex-1 py-2 luxury-transition relative ${active ? 'text-primary' : 'text-on-surface-variant/30 hover:text-on-surface-variant/60'
                   }`}
               >

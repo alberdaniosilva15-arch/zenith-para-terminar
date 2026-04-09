@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — src/components/MotoGoScore.tsx
+// ZENITH RIDE v3.0 — src/components/MotoGoScore.tsx
 //
 // Score de crédito 0-1000 para motoristas, calculado a partir de:
 //   corridas (400) + rating (300) + nível (200) + consistência (100)

@@ -179,7 +179,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
         <div className="flex justify-between items-start relative z-10">
           <div>
             <span className="bg-surface-container-low/10 border border-white/20 px-3 py-1 rounded-lg font-black text-[9px] uppercase tracking-widest mb-4 inline-block">
-              MotoGo AI Core v4.5
+              Zenith Ride Core v4.5
             </span>
             <h1 className="text-3xl font-black tracking-tighter italic">
               PAINEL DE <span className="text-primary">CONTROLO</span>

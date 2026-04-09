@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v3.0 — AgoraCall.tsx
+// ZENITH RIDE v3.0 — AgoraCall.tsx
 // Chamadas de voz VoIP entre motorista e passageiro via Agora.io
 // Versão WEB (agora-rtc-sdk-ng) — NÃO é React Native
 //

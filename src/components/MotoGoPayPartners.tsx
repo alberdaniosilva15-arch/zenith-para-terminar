@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — src/components/MotoGoPayPartners.tsx
+// ZENITH RIDE v3.0 — src/components/MotoGoPayPartners.tsx
 //
 // Aba de parceiros da carteira MotoGo Pay.
 // Motoristas podem gastar o saldo em combustível, comida, seguros.

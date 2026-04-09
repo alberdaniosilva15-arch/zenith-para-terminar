@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — Edge Function: calculate-price (ACTUALIZADA)
+// ZENITH RIDE v3.0 — Edge Function: calculate-price (ACTUALIZADA)
 // Ficheiro: supabase/functions/calculate-price/index.ts
 //
 // NOVO: Antes de calcular dinamicamente, verifica se existe preço fixo por zona.

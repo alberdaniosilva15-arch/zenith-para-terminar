@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — Edge Function: match-driver
+// ZENITH RIDE v3.0 — Edge Function: match-driver
 // Ficheiro: supabase/functions/match-driver/index.ts
 //
 // ✅ FIX: Raio uniformizado de 8km → 7km

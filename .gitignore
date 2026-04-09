@@ -30,3 +30,15 @@ build/
 .env.test
 !.env.example
 
+# Ficheiros de erro e relatórios
+compile_errors.txt
+errors.txt
+eslint-report.json
+
+# Pastas e ficheiros temporários
+e2e-screenshots/
+page.html
+
+# Ficheiros comprimidos
+*.zip
+

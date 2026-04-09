@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — geminiService.ts (FRONTEND)
+// ZENITH RIDE v3.0 — geminiService.ts (FRONTEND)
 // ✅ CORREÇÃO 3 APLICADA: timeout de 8s via AbortController no callProxy
 // Todas as chamadas passam pela Edge Function gemini-proxy
 // A API key NUNCA está no frontend

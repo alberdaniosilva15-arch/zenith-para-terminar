@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.0 — RidesHistory.tsx
+// ZENITH RIDE v3.0 — RidesHistory.tsx
 // ANTES: 3 corridas mock hardcoded
 // DEPOIS: histórico real do Supabase com paginação e análise de segurança Kaze
 // =============================================================================
