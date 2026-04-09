@@ -9,6 +9,8 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import EscolarMonitor from './EscolarMonitor';
 import { mapService } from '../services/mapService';
+import { buildReceiptPDF, saveReceiptToPhone, shareReceipt } from '../services/pdfService';
+import jsPDF from 'jspdf';
 
 type ContractType = 'school' | 'family' | 'corporate';
 
@@ -395,6 +397,114 @@ const ContractCard: React.FC<{
   onDeactivate: () => void;
 }> = ({ contract: c, isScheduling, isSuccess, onSchedule, onDeactivate }) => {
   const [showMonitor, setShowMonitor] = useState(false);
+  const [trackingToken, setTrackingToken] = useState<string | null>(null);
+  const [sharingLink, setSharingLink] = useState(false);
+
+  const generateTrackingLink = async () => {
+    setSharingLink(true);
+    try {
+      const { data, error } = await supabase
+        .from('school_tracking_sessions')
+        .insert({
+          contract_id: c.id,
+          driver_id: null,
+          expires_at: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
+        })
+        .select('public_token')
+        .single();
+
+      if (error || !data) {
+        alert('Erro ao gerar link. Tenta novamente.');
+        return;
+      }
+
+      const link = `${window.location.origin}/track/${data.public_token}`;
+      setTrackingToken(data.public_token);
+
+      const msg = encodeURIComponent(
+        `🚗 *Zenith Ride — Rastreio em tempo real*\n\nPodes acompanhar a localização em tempo real aqui:\n${link}\n\n_O link expira em 8 horas._`
+      );
+      window.open(`https://wa.me/?text=${msg}`, '_blank');
+    } finally {
+      setSharingLink(false);
+    }
+  };
+
+  const generateContractPDF = async (mode: 'save' | 'share') => {
+    const doc  = new jsPDF({ unit: 'mm', format: 'a4' });
+    const W    = 210;
+    const M    = 15;
+    let y      = 0;
+
+    doc.setFillColor(10, 10, 10);
+    doc.rect(0, 0, W, 40, 'F');
+    doc.setFontSize(22); doc.setFont('helvetica', 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text('ZENITH RIDE', M, 17);
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    doc.setTextColor(180, 180, 180);
+    doc.text('CONTRATO DE SERVIÇO', M, 25);
+    doc.text(new Date().toLocaleDateString('pt-AO'), W - M, 25, { align: 'right' });
+
+    y = 52;
+    doc.setFontSize(13); doc.setFont('helvetica', 'bold');
+    doc.setTextColor(20, 20, 20);
+    doc.text(c.title, M, y); y += 8;
+
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 100, 100);
+    const type = { school: 'Escolar', family: 'Familiar', corporate: 'Empresarial' }[c.contract_type] || 'Serviço';
+    doc.text(`Tipo: Contrato ${type}`, M, y); y += 6;
+    doc.text(`Morada: ${c.address}`, M, y); y += 6;
+    doc.text(`Horário: ${c.time_start} — ${c.time_end}`, M, y); y += 6;
+    doc.text(`Km acumulados: ${c.km_accumulated.toFixed(1)} km`, M, y); y += 6;
+    doc.text(`Bónus disponível: ${c.bonus_kz.toFixed(0)} AOA`, M, y); y += 6;
+    if (c.route_deviation_alert) {
+      doc.text(`Alerta de desvio activo (máx. ${c.max_deviation_km} km)`, M, y); y += 6;
+    }
+    if (c.parent_monitoring) {
+      y += 3;
+      doc.setFillColor(240, 250, 245);
+      doc.roundedRect(M, y, W - M * 2, 14, 2, 2, 'F');
+      doc.setTextColor(10, 100, 60);
+      doc.setFontSize(8); doc.setFont('helvetica', 'bold');
+      doc.text('Monitorização parental activa', M + 4, y + 6);
+      doc.setFontSize(7); doc.setFont('helvetica', 'normal');
+      doc.text('Usa o botão "Partilhar Rastreio" para enviar o link em tempo real.', M + 4, y + 11);
+      y += 20;
+    }
+
+    y = 255;
+    doc.setFontSize(6.5); doc.setTextColor(180, 180, 180);
+    doc.text('Zenith Ride · Mobilidade Urbana Angola', W / 2, y, { align: 'center' });
+
+    const base64  = doc.output('datauristring').split(',')[1];
+    const fileName = `zenith_contrato_${c.id.substring(0, 8)}.pdf`;
+
+    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    const { Share } = await import('@capacitor/share');
+
+    if (mode === 'share') {
+      const { uri } = await Filesystem.writeFile({
+        path:      fileName,
+        data:      base64,
+        directory: Directory.Cache,
+        encoding:  'base64' as any,
+      });
+      await Share.share({
+        title:       'Contrato Zenith Ride',
+        url:          uri,
+        dialogTitle: 'Partilhar contrato',
+      });
+    } else {
+      await Filesystem.writeFile({
+        path:      fileName,
+        data:      base64,
+        directory: Directory.Documents,
+        encoding:  'base64' as any,
+      });
+    }
+  };
 
   return (
     <div className="rounded-2xl border border-primary/20 overflow-hidden relative"
@@ -455,16 +565,26 @@ const ContractCard: React.FC<{
 
       {/* EscolarMonitor (school & family only) */}
       {c.parent_monitoring && (
-        <div className="px-6 mb-4">
+        <div className="px-6 mb-4 space-y-3">
           <button onClick={() => setShowMonitor(!showMonitor)}
             className="w-full flex items-center justify-between py-3 px-4 rounded-xl font-label text-[10px] uppercase tracking-widest font-bold transition-all"
             style={{ border: '1px solid rgba(230,195,100,0.2)', color: 'rgba(230,195,100,0.7)', background: showMonitor ? 'rgba(230,195,100,0.08)' : 'transparent' }}>
             <span className="flex items-center gap-2">
               <span className="material-symbols-outlined text-sm">location_on</span>
-              Link de Rastreamento para Pais
+              Ver Monitorização
             </span>
             <span className="material-symbols-outlined text-sm">{showMonitor ? 'expand_less' : 'expand_more'}</span>
           </button>
+          
+          <button
+            onClick={generateTrackingLink}
+            disabled={sharingLink}
+            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-label text-[10px] uppercase tracking-widest font-bold transition-all active:scale-95 disabled:opacity-50"
+            style={{ background: '#25D366', color: '#FFF' }}>
+            <span className="material-symbols-outlined text-sm">share</span>
+            {sharingLink ? 'A gerar...' : '📍 Partilhar Rastreio via WhatsApp'}
+          </button>
+
           {showMonitor && (
             <div className="mt-3 animate-in fade-in duration-200">
               <EscolarMonitor contractId={c.id} contractTitle={c.title} />
@@ -472,6 +592,24 @@ const ContractCard: React.FC<{
           )}
         </div>
       )}
+
+      {/* PDF Buttons */}
+      <div className="flex gap-3 px-6 mb-4 mt-2">
+        <button
+          onClick={() => generateContractPDF('share')}
+          className="flex-1 flex items-center justify-center gap-2 py-3 bg-[#25D366] text-white rounded-xl font-black text-[10px] uppercase active:scale-95"
+        >
+          <span className="material-symbols-outlined text-sm">share</span>
+          📤 Partilhar PDF
+        </button>
+        <button
+          onClick={() => generateContractPDF('save')}
+          className="flex-1 flex items-center justify-center gap-2 py-3 bg-white/10 border border-white/10 text-white/80 rounded-xl font-black text-[10px] uppercase active:scale-95"
+        >
+          <span className="material-symbols-outlined text-sm">save</span>
+          💾 Guardar
+        </button>
+      </div>
 
       {/* Schedule button */}
       <div className="px-6 pb-6">

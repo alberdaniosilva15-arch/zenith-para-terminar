@@ -29,6 +29,9 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
   const [saveOk,        setSaveOk]        = useState(false);
   const [editName,      setEditName]      = useState(profile?.name ?? '');
   const [editPhone,     setEditPhone]     = useState(profile?.phone ?? '');
+  const [phonePrivacy,  setPhonePrivacy]  = useState(profile?.phone_privacy ?? false);
+  const [emergencyName, setEmergencyName] = useState(profile?.emergency_contact_name ?? '');
+  const [emergencyPhone, setEmergencyPhone] = useState(profile?.emergency_contact_phone ?? '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ------------------------------------------------------------------
@@ -146,7 +149,62 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
         return (
           <div className="space-y-6 animate-in slide-in-from-right duration-300">
             <SectionHeader onBack={() => setActiveSection('main')} title="Segurança" />
-            <div className="bg-surface-container-low p-6 rounded-[2rem] border border-outline-variant/20 space-y-4">
+            <div className="bg-surface-container-low p-6 rounded-[2rem] border border-outline-variant/20 space-y-6">
+              {/* Privacidade do número */}
+              <div className="flex items-center justify-between py-3 border-b border-outline-variant/10">
+                <div>
+                  <p className="font-bold text-sm">Privacidade do número</p>
+                  <p className="text-xs text-white/50">Ocultar número ao motorista</p>
+                </div>
+                <button 
+                  onClick={async () => {
+                    const newVal = !phonePrivacy;
+                    setPhonePrivacy(newVal);
+                    await supabase.from('profiles').update({ phone_privacy: newVal }).eq('user_id', dbUser.id);
+                  }} 
+                  className={`w-12 h-6 rounded-full transition-colors ${phonePrivacy ? 'bg-primary' : 'bg-white/20'}`}
+                >
+                  <span className={`block w-5 h-5 bg-white rounded-full transition-transform mx-0.5 ${phonePrivacy ? 'translate-x-6' : ''}`} />
+                </button>
+              </div>
+
+              {/* Contacto de emergência */}
+              <div className="space-y-3 pt-2">
+                <p className="font-bold text-sm">Contacto de Emergência</p>
+                <div className="space-y-2">
+                  <input
+                    type="text"
+                    value={emergencyName}
+                    onChange={(e) => setEmergencyName(e.target.value)}
+                    placeholder="Nome do contacto"
+                    className="w-full bg-surface-container-lowest border border-outline-variant/20 p-3 rounded-xl outline-none text-sm"
+                  />
+                  <input
+                    type="tel"
+                    value={emergencyPhone}
+                    onChange={(e) => setEmergencyPhone(e.target.value)}
+                    placeholder="9XX XXX XXX"
+                    className="w-full bg-surface-container-lowest border border-outline-variant/20 p-3 rounded-xl outline-none text-sm"
+                  />
+                </div>
+                <button
+                  onClick={async () => {
+                    setSaving(true);
+                    await supabase.from('profiles').update({
+                      emergency_contact_name: emergencyName || null,
+                      emergency_contact_phone: emergencyPhone || null,
+                    }).eq('user_id', dbUser.id);
+                    setSaving(false);
+                    setSaveOk(true);
+                    setTimeout(() => setSaveOk(false), 2000);
+                  }}
+                  disabled={saving}
+                  className="w-full bg-primary text-black py-3 rounded-xl font-bold text-xs disabled:opacity-50"
+                >
+                  {saving ? 'A guardar...' : saveOk ? '✓ Guardado!' : 'Guardar Contacto'}
+                </button>
+              </div>
+
               <InfoItem label="Email" value={dbUser.email} />
               <InfoItem
                 label="Palavra-passe"
