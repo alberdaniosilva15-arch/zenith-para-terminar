@@ -98,13 +98,17 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
 
       // Buscar nomes dos perfis em batch
       const userIds = [...new Set(data.map((p: any) => p.user_id))];
-      const { data: profileRows } = await supabase
-        .from('profiles')
-        .select('user_id, name')
-        .in('user_id', userIds);
+      let profileRows: any[] = [];
+      if (userIds.length > 0) {
+        const { data: res } = await supabase
+          .from('profiles')
+          .select('user_id, name')
+          .in('user_id', userIds);
+        profileRows = res ?? [];
+      }
 
       const nameMap: Record<string, string> = {};
-      (profileRows ?? []).forEach((pr: any) => { nameMap[pr.user_id] = pr.name; });
+      profileRows.forEach((pr: any) => { nameMap[pr.user_id] = pr.name; });
 
       setMessages(
         data.map((p: any) => ({

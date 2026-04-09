@@ -1,12 +1,9 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — PassengerHome.tsx
-// FIXES:
-//   1. "CHAMAR TÁXI" → pesquisa motoristas reais via rideService (startAuction)
-//   2. Distância km entre A e B calculada e visível logo após destino escolhido
-//   3. GPS reverseGeocode → mostra nome do bairro (não coordenadas)
-//   4. Preço estimado visível com distância e duração
-//   5. Estado SEARCHING com contagem regressiva e opção de cancelar
-//   6. Estados completos: IDLE / BROWSING / SEARCHING / ACCEPTED / IN_PROGRESS
+// ZENITH RIDE v3.1 — PassengerHome.tsx
+// FIXES v3.1:
+//   1. userLocation → posição GPS real passada ao Map3D (mapa centra correctamente)
+//   2. useGPS actualiza userLocation imediatamente → mapa move-se para o utilizador
+//   3. Map3D recebe userLocation={userLocation} em vez de ficara centrado em Luanda
 // =============================================================================
 
 import React, { useState, useCallback, useRef, useEffect, Suspense } from 'react';
@@ -65,6 +62,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [routeInfo,    setRouteInfo]    = useState<RouteInfo | null>(null);
   const [loadingRide,  setLoadingRide]  = useState(false);
   const [nearbyCount,  setNearbyCount]  = useState<number | null>(null);
+  // FIX v3.1: posição GPS real do utilizador — passada ao Map3D para centrar correctamente
+  const [userLocation, setUserLocation] = useState<LatLng | null>(null);
   // Engine Pro: rota real + preço calculado no servidor
   const [routeData,    setRouteData]    = useState<RouteResult | null>(null);
   const [fareData, setFareData] = useState<{
@@ -154,6 +153,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       const address = await mapService.reverseGeocode(coords);
       setPickupName(address);
       setPickupCoords(coords);
+      // FIX v3.1: guardar posição real para o mapa centrar correctamente
+      setUserLocation(coords);
       setSelecting(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Não foi possível obter a localização.';
@@ -362,6 +363,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
             destination={destCoords ?? undefined}
             status={ride.status}
             carLocation={ride.carLocation}
+            userLocation={userLocation ?? undefined}
             dataSaver={dataSaver}
           />
         </Suspense>

@@ -13,6 +13,18 @@ export interface RouteLatLng {
   lng: number;
 }
 
+function haversineKm(a: RouteLatLng, b: RouteLatLng): number {
+  const R    = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const sin2 =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) *
+    Math.cos((b.lat * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(sin2), Math.sqrt(1 - sin2));
+}
+
 export interface RouteResult {
   distanceKm:           number;  // distância real por estrada
   durationMin:          number;  // duração com trânsito actual (TRAFFIC_AWARE)
@@ -75,15 +87,26 @@ export const routeService = {
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
-      console.error('[routeService] Erro da API:', err);
-      throw new Error('Não foi possível calcular a rota. Verifica a tua ligação à internet.');
+      console.warn('[routeService] Erro da API Google Routes (Fallback activado):', err);
+      // FALLBACK SE A API FALHAR: Distância recta e sem polyline, em vez de atirar erro
+      const dist = haversineKm(origin, dest);
+      const fakeDuration = Math.ceil((dist / 30) * 60); // 30km/h
+      return {
+        distanceKm: dist,
+        durationMin: fakeDuration,
+        durationMinNoTraffic: fakeDuration * 0.8,
+        polyline: '', // Linha reta será desenhada por bounds, Map3D lida com polyline vazia mantendo points
+        trafficFactor: 1.2
+      };
     }
 
     const data  = await response.json();
     const route = data.routes?.[0];
 
     if (!route) {
-      throw new Error('Nenhuma rota encontrada entre os pontos indicados.');
+      const dist = haversineKm(origin, dest);
+      const fakeDuration = Math.ceil((dist / 30) * 60);
+      return { distanceKm: dist, durationMin: fakeDuration, durationMinNoTraffic: fakeDuration * 0.8, polyline: '', trafficFactor: 1.2 };
     }
 
     // ── Parse correcto da duração ──────────────────────────────────────────
