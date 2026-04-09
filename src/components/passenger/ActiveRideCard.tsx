@@ -1,5 +1,7 @@
 import React, { Suspense } from 'react';
 import { RideState, RideStatus } from '../../types';
+import RideChat from '../RideChat';
+import PanicButton from '../PanicButton';
 
 const AgoraCall = React.lazy(() => import('../AgoraCall'));
 
@@ -94,6 +96,14 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
               />
             </Suspense>
           )}
+          {ride.rideId && (
+            <RideChat
+              rideId={ride.rideId}
+              myId={userId}
+              peerName={ride.driverName ?? 'Motorista'}
+              phonePrivacyMode={true}
+            />
+          )}
         </div>
       )}
 
@@ -122,6 +132,15 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
               />
             </Suspense>
           )}
+          {ride.rideId && (
+            <RideChat
+              rideId={ride.rideId}
+              myId={userId}
+              peerName={ride.driverName ?? 'Motorista'}
+              phonePrivacyMode={true}
+            />
+          )}
+          <PanicButton userId={userId} rideId={ride.rideId} />
         </div>
       )}
     </div>

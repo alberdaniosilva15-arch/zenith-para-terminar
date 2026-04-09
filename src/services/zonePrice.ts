@@ -195,3 +195,26 @@ class ZonePriceService {
 }
 
 export const zonePriceService = new ZonePriceService();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTIPLICADORES DE VEÍCULO
+// ─────────────────────────────────────────────────────────────────────────────
+export type VehicleType = 'standard' | 'moto' | 'comfort' | 'xl';
+
+const VEHICLE_MULTIPLIER: Record<VehicleType, number> = {
+  standard: 1.0,
+  moto:     0.40,  // 40% do preço normal
+  comfort:  1.40,
+  xl:       1.80,
+};
+
+export function applyVehicleMultiplier(basePriceKz: number, type: VehicleType): number {
+  return Math.round(basePriceKz * VEHICLE_MULTIPLIER[type]);
+}
+
+export const MOTO_SAFETY_WARNING =
+  `Por favor, certifica-te de que:\n\n` +
+  `• Tens capacete disponível (obrigatório por lei)\n` +
+  `• A zona de partida e chegada é segura\n` +
+  `• Evita distâncias superiores a 20 km por razões de segurança\n\n` +
+  `A Zenith recomenda o uso de moto-táxi apenas em percursos urbanos conhecidos.`;
