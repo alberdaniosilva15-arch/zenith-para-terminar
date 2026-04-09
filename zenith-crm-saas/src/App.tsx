@@ -12,6 +12,7 @@ import DriversPage from './pages/Drivers';
 import PassengersPage from './pages/Passengers';
 import RidesPage  from './pages/Rides';
 import FinancePage from './pages/Finance';
+import AdminsPage from './pages/Admins';
 import TenantsPage from './pages/Tenants';
 import SettingsPage from './pages/Settings';
 
@@ -65,6 +66,7 @@ const App: React.FC = () => (
         <Route path="/passengers/*" element={<PassengersPage />} />
         <Route path="/rides/*"    element={<RidesPage />} />
         <Route path="/finance/*"  element={<FinancePage />} />
+        <Route path="/admins/*"   element={<AdminsPage />} />
         <Route path="/tenants/*"  element={<TenantsPage />} />
         <Route path="/settings"   element={<SettingsPage />} />
       </Route>

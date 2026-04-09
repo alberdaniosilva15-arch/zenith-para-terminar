@@ -1,14 +1,11 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — App.tsx
-// Actualizado para suportar:
-// - Leilão de motoristas (auction flow)
-// - PostRideReview (avaliação pós-corrida)
-// - DriverHome com confirmRide/declineRide
-// - PassengerHome com startAuction/selectDriver/cancelAuction
-// - IA condicional: Kaze silencioso quando ride.status === IDLE
+// ZENITH RIDE v3.1 — App.tsx
+// FIXES v3.1:
+//   1. Ecrã "a finalizar registo" agora tem botão Sair + timeout de 15s
+//   2. Se profile não carregar em 15s, mostra opções de diagnóstico
 // =============================================================================
 
-import React, { useState, useEffect, Suspense } from 'react';
+import React, { useState, useEffect, Suspense, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useRide } from './hooks/useRide';
@@ -47,6 +44,70 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   );
   if (!dbUser) return <Navigate to="/login" replace />;
   return <>{children}</>;
+};
+
+// =============================================================================
+// =============================================================================
+// ECRÃ DE REGISTO PRESO — FIX v3.1
+// Mostrado quando há sessão mas o perfil ainda não carregou
+// Tem timeout de 15s, botão Sair e diagnóstico
+// =============================================================================
+const StuckRegistrationScreen: React.FC<{ onSignOut: () => void }> = ({ onSignOut }) => {
+  const [seconds, setSeconds] = useState(0);
+  const [timedOut, setTimedOut] = useState(false);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setSeconds(prev => {
+        if (prev >= 14) { setTimedOut(true); clearInterval(interval); }
+        return prev + 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6 p-6">
+      {!timedOut ? (
+        <>
+          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+          <div className="text-center">
+            <p className="text-white/80 font-bold">Conta autenticada — a finalizar registo...</p>
+            <p className="text-white/40 text-xs mt-2">({15 - seconds}s)</p>
+          </div>
+          <p className="text-white/40 text-sm max-w-sm text-center">
+            Estamos a concluir a criação do teu perfil. Aguarda um momento.
+          </p>
+        </>
+      ) : (
+        <>
+          <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center">
+            <span className="text-3xl">⚠️</span>
+          </div>
+          <div className="text-center space-y-2">
+            <p className="text-white font-black">Não foi possível finalizar o registo</p>
+            <p className="text-white/50 text-sm max-w-sm text-center">
+              O trigger <code className="text-primary bg-primary/10 px-1 rounded">handle_new_user</code> no Supabase pode não estar activo, ou as tabelas <code className="text-primary bg-primary/10 px-1 rounded">users</code> / <code className="text-primary bg-primary/10 px-1 rounded">profiles</code> não existem.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3 w-full max-w-xs">
+            <button
+              onClick={() => window.location.reload()}
+              className="w-full py-4 bg-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-primary/90 transition-all"
+            >
+              🔄 Tentar de Novo
+            </button>
+            <button
+              onClick={onSignOut}
+              className="w-full py-4 bg-white/5 text-white/70 rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-white/10 transition-all border border-white/10"
+            >
+              ← Sair e Voltar ao Login
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
 };
 
 // =============================================================================
@@ -101,11 +162,7 @@ const AppInner: React.FC = () => {
         element={
           dbUser ? <Navigate to="/" replace /> : (
             session ? (
-              <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6 p-6">
-                <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-                <p className="text-white/80 font-bold">Conta autenticada — a finalizar registo...</p>
-                <p className="text-white/50 text-sm max-w-lg text-center mt-2">Estamos a concluir a criação do teu perfil. Se isto não avançar em alguns segundos, confirma que o teu projeto Supabase tem o trigger <code>handle_new_user</code> e as tabelas do schema.</p>
-              </div>
+              <StuckRegistrationScreen onSignOut={signOut} />
             ) : <Login />
           )
         } 
