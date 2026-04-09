@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.0 — Profile.tsx
+// ZENITH RIDE v3.0 — Profile.tsx
 // ANTES: nome "Mário Bento" hardcoded, logout via prop, sem Supabase
 // DEPOIS: dados reais do DbUser/DbProfile, avatar upload via Supabase Storage,
 //         edição de perfil real, settings persistidos

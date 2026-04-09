@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — Wallet.tsx
+// ZENITH RIDE v3.0 — Wallet.tsx
 // Adicionado: carregamento via Multicaixa Express + modal de top-up
 // =============================================================================
 
@@ -140,7 +140,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
       <div className={`text-white p-8 rounded-[3rem] shadow-2xl relative overflow-hidden ${isDriver ? 'bg-[#0A0A0A]' : 'bg-surface-container-highest'}`}>
         <div className={`absolute -right-10 -top-10 w-48 h-48 opacity-20 rounded-full blur-[80px] ${isDriver ? 'bg-red-600' : 'bg-primary'}`} />
         <p className={`text-[9px] font-black uppercase tracking-[0.2em] mb-3 ${isDriver ? 'text-error' : 'text-primary'}`}>
-          {isDriver ? 'LUCRO LÍQUIDO' : 'SALDO MOTOGO'}
+          {isDriver ? 'LUCRO LÍQUIDO' : 'SALDO ZENITH'}
         </p>
         <h2 className="text-5xl font-black mb-2 tracking-tighter italic">
           {balance.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}

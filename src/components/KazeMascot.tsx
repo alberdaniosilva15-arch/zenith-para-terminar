@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — KazeMascot.tsx
+// ZENITH RIDE v3.0 — KazeMascot.tsx
 // Props actualizadas para corresponder ao App.tsx v2.1:
 //   role, rideStatus, dataSaver, userName
 // Kaze só activo quando há corrida em progresso (poupar tokens)

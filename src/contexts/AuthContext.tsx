@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.0 — AuthContext
+// ZENITH RIDE v2.0 — AuthContext
 // Substitui completamente o sistema mock (user_123)
 // Gere sessão, user, profile e role em toda a aplicação
 // =============================================================================
@@ -16,6 +16,7 @@ import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import type { DbUser, DbProfile, AppError } from '../types';
 import { UserRole } from '../types';
+import { useAppStore } from '../store/useAppStore';
 
 // =============================================================================
 // TIPOS DO CONTEXTO
@@ -48,10 +49,15 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [session,  setSession]  = useState<Session | null>(null);
   const [authUser, setAuthUser] = useState<User | null>(null);
-  const [dbUser,   setDbUser]   = useState<DbUser | null>(null);
-  const [profile,  setProfile]  = useState<DbProfile | null>(null);
   const [loading,  setLoading]  = useState(true);
   const [authError, setAuthError] = useState<AppError | null>(null);
+
+  // ZUSTAND STATE
+  const dbUser = useAppStore(s => s.dbUser);
+  const profile = useAppStore(s => s.profile);
+  const setUser = useAppStore(s => s.setUser);
+  const clearUser = useAppStore(s => s.clearUser);
+  const updateProfileStore = useAppStore(s => s.updateProfile);
   const isInitRef = useRef(false);
   const pendingAuthEventRef = useRef<{ event: string; newSession: Session | null } | null>(null);
 
@@ -87,8 +93,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (updatedUser) finalUserRow = updatedUser;
       }
 
-      setDbUser(finalUserRow as DbUser);
-      setProfile(profileRow as DbProfile);
+      setUser(finalUserRow as DbUser, profileRow as DbProfile);
       setAuthError(null);
       setLoading(false);
     } catch (err: any) {
@@ -97,8 +102,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => loadUserData(userId, attempt + 1), delay);
       } else {
         console.error('[AuthContext] Erro ao carregar dados do utilizador após retries:', err);
-        setDbUser(null);
-        setProfile(null);
+        clearUser();
         setAuthError({ code: 'db_user_load_failed', message: 'Não foi possível finalizar o registo. Tenta novamente mais tarde.' });
         setLoading(false);
       }
@@ -138,8 +142,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 setAuthError(null);
                 await loadUserData(pending.newSession.user.id);
               } else {
-                setDbUser(null);
-                setProfile(null);
+                clearUser();
               }
               setLoading(false);
             }
@@ -175,8 +178,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setAuthError(null);
           await loadUserData(pending.newSession.user.id);
         } else {
-          setDbUser(null);
-          setProfile(null);
+          clearUser();
         }
         setLoading(false);
       }
@@ -203,8 +205,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setAuthError(null);
           await loadUserData(newSession.user.id);
         } else {
-          setDbUser(null);
-          setProfile(null);
+          clearUser();
         }
 
         setLoading(false);
@@ -289,9 +290,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await supabase.auth.signOut();
     setSession(null);
     setAuthUser(null);
-    setDbUser(null);
-    setProfile(null);
-  }, []);
+    clearUser();
+  }, [clearUser]);
 
   // ------------------------------------------------------------------
   // UPDATE PROFILE
@@ -308,9 +308,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     if (error) return { code: error.code, message: error.message };
 
-    setProfile(prev => prev ? { ...prev, ...data } : null);
+    updateProfileStore(data);
     return null;
-  }, [dbUser]);
+  }, [dbUser, updateProfileStore]);
 
   // ------------------------------------------------------------------
   // VALOR DO CONTEXTO

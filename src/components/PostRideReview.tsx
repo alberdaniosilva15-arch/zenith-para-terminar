@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — PostRideReview.tsx (NOVO)
+// ZENITH RIDE v3.0 — PostRideReview.tsx (NOVO)
 // Activado AUTOMATICAMENTE após corrida concluída
 // Kaze guia a avaliação: pergunta, colecta nota 1-5, guarda no Supabase
 // IA SÓ ACTIVA AQUI — não consome tokens em idle

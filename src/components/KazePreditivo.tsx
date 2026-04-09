@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — src/components/KazePreditivo.tsx
+// ZENITH RIDE v3.0 — src/components/KazePreditivo.tsx
 //
 // Banner inteligente que aparece quando o passageiro abre a app.
 // Analisa o histórico e sugere a corrida mais provável para aquela hora.
