@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '../../hooks/useAdminAuth';
 import {
   LayoutDashboard, DollarSign, Users, UserCheck,
-  Map, TrendingUp, Building2, Settings, LogOut,
+  Map, TrendingUp, Building2, Settings, LogOut, ShieldCheck
 } from 'lucide-react';
 
 const NAV = [
@@ -13,6 +13,7 @@ const NAV = [
   { to: '/passengers',  icon: Users,           label: 'Passageiros' },
   { to: '/rides',       icon: Map,             label: 'Corridas' },
   { to: '/finance',     icon: TrendingUp,      label: 'Financeiro' },
+  { to: '/admins',      icon: ShieldCheck,     label: 'Equipa Admin' },
   { to: '/tenants',     icon: Building2,       label: 'Tenants' },
   { to: '/settings',    icon: Settings,        label: 'Configurações' },
 ];
@@ -51,7 +52,7 @@ const Sidebar: React.FC = () => {
 
         <div className="sidebar-section-label" style={{ marginTop: '8px' }}>Gestão</div>
 
-        {NAV.slice(2, 6).map(({ to, icon: Icon, label }) => (
+        {NAV.slice(2, 7).map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -64,7 +65,7 @@ const Sidebar: React.FC = () => {
 
         <div className="sidebar-section-label" style={{ marginTop: '8px' }}>Sistema</div>
 
-        {NAV.slice(6).map(({ to, icon: Icon, label }) => (
+        {NAV.slice(7).map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
