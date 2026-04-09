@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — Edge Function: gemini-proxy
+// ZENITH RIDE v3.0 — Edge Function: gemini-proxy
 // Ficheiro: supabase/functions/gemini-proxy/index.ts
 //
 // SEGURANÇA:

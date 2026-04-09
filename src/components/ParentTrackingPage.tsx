@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — src/components/ParentTrackingPage.tsx
+// ZENITH RIDE v3.0 — src/components/ParentTrackingPage.tsx
 //
 // Página pública para os pais acompanharem a corrida escolar.
 // Acessível via: /track/:token (SEM login)
@@ -211,7 +211,7 @@ const ParentTrackingPage: React.FC<ParentTrackingPageProps> = ({ token }) => {
       {/* Header */}
       <div className="bg-[#0A0A0A] px-6 py-5 flex items-center gap-3 border-b border-white/5">
         <div className="px-4 py-1.5 bg-primary rounded-full font-black text-sm text-white italic">
-          MotoGo AI
+          Zenith Ride
         </div>
         <div>
           <p className="text-white font-black text-sm">{data.contract_title}</p>
@@ -240,7 +240,7 @@ const ParentTrackingPage: React.FC<ParentTrackingPageProps> = ({ token }) => {
           <div>
             <p className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">Motorista</p>
             <p className="text-white font-black text-sm">{data.driver_name}</p>
-            <p className="text-white/40 text-[9px] font-bold">MotoGo AI · Motorista verificado</p>
+            <p className="text-white/40 text-[9px] font-bold">Zenith Ride · Motorista verificado</p>
           </div>
           {isEnRoute && (
             <div className="ml-auto">
