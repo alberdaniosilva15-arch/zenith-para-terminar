@@ -40,7 +40,7 @@ export interface Map3DProps {
   dataSaver?:   boolean; // true → desactiva terrain e 3D buildings (poupa ~40% dados)
 }
 
-// ─── Marcadores HTML ──────────────────────────────────────────────────────────
+// ─── Marcadores HTML com suporte a rotação ─────────────────────────────────
 
 function makeMarkerEl(content: string, bg: string, glow: string): HTMLDivElement {
   const el = document.createElement('div');
@@ -55,6 +55,16 @@ function makeMarkerEl(content: string, bg: string, glow: string): HTMLDivElement
   `;
   el.innerHTML = content;
   return el;
+}
+
+// Calcula bearing entre dois pontos (retorna graus 0-360)
+function getBearing(from: [number, number], to: [number, number]): number {
+  const [lng1, lat1] = from.map(x => x * Math.PI / 180);
+  const [lng2, lat2] = to.map(x => x * Math.PI / 180);
+  const dLng = lng2 - lng1;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return ((Math.atan2(y, x) * 180 / Math.PI) + 360) % 360;
 }
 
 // Marcador do motorista: moto azul pulsante
@@ -128,6 +138,7 @@ const Map3D: React.FC<Map3DProps> = ({
   const markerOrigRef  = useRef<mapboxgl.Marker | null>(null);
   const markerDestRef  = useRef<mapboxgl.Marker | null>(null);
   const mapReadyRef    = useRef(false); // true quando style carregou
+  const prevCarPosRef  = useRef<[number, number] | null>(null); // para cálculo de bearing
 
   // ── 1. Inicializar mapa (apenas uma vez) ─────────────────────────────────
   useEffect(() => {
@@ -352,7 +363,7 @@ const Map3D: React.FC<Map3DProps> = ({
     }
   }, [pickup?.lat, pickup?.lng, destination?.lat, destination?.lng, drawRouteAndMarkers]);
 
-  // ── 3. Tracking em tempo real do motorista ───────────────────────────────
+  // ── 3. Tracking em tempo real do motorista com rotação ───────────────────
   // carLocation é actualizado externamente via Supabase Realtime
   // (subscribeToDriverLocation em rideService.ts)
   useEffect(() => {
@@ -360,6 +371,7 @@ const Map3D: React.FC<Map3DProps> = ({
     if (!map || !carLocation) return;
 
     const coords: [number, number] = [carLocation.lng, carLocation.lat];
+    const currentPos: [number, number] = [carLocation.lng, carLocation.lat];
 
     // Criar ou mover marcador do motorista
     if (!markerCarRef.current) {
@@ -367,7 +379,20 @@ const Map3D: React.FC<Map3DProps> = ({
         element: makeCarMarker(),
         anchor:  'center',
       }).setLngLat(coords).addTo(map);
+      prevCarPosRef.current = currentPos;
     } else {
+      // Calcular bearing se temos posição anterior
+      if (prevCarPosRef.current) {
+        const bearing = getBearing(prevCarPosRef.current, currentPos);
+        const markerEl = markerCarRef.current.getElement();
+        // Aplicar rotação ao ícone interno (o segundo filho é o ícone)
+        const iconEl = markerEl.children[1] as HTMLElement;
+        if (iconEl) {
+          iconEl.style.transform = `rotate(${bearing}deg)`;
+          iconEl.style.transition = 'transform 0.6s ease-in-out';
+        }
+      }
+      prevCarPosRef.current = currentPos;
       markerCarRef.current.setLngLat(coords);
     }
 

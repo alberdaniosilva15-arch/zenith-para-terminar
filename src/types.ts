@@ -44,6 +44,9 @@ export interface DbProfile {
   avatar_url: string | null; phone: string | null;
   rating: number; total_rides: number; level: UserLevel;
   created_at: string; updated_at: string;
+  phone_privacy?: boolean;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
 }
 
 export interface DbDriverLocation {

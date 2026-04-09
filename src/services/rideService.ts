@@ -71,6 +71,8 @@ interface CreateRideInput {
   dest_lat:        number;
   dest_lng:        number;
   selected_driver_id?: string;
+  vehicle_type?:     'standard' | 'moto' | 'comfort' | 'xl';
+  traffic_factor?:   number;
 }
 
 interface RideUpdateResult { data: DbRide | null; error: AppError | null; }
@@ -249,7 +251,9 @@ class RideService {
         driver_id:        input.selected_driver_id ?? null,
         status:           isAuction ? RideStatus.ACCEPTED : RideStatus.SEARCHING,
         accepted_at:      isAuction ? new Date().toISOString() : null,
-        driver_confirmed: false,
+        driver_confirmed:  false,
+        vehicle_type:      input.vehicle_type ?? 'standard',
+        traffic_factor:   input.traffic_factor ?? 1.0,
       }).select().single();
 
       if (error) {
