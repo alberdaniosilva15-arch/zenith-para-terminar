@@ -1,5 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { RideStatus } from '../../types';
+
+type VehicleType = 'standard' | 'moto' | 'comfort' | 'xl';
 
 interface RideRequestFormProps {
   rideStatus: RideStatus;
@@ -12,6 +14,8 @@ interface RideRequestFormProps {
   onCalculatePrice: () => void;
   onCallTaxi: () => void;
   onConfirmRideRequest: () => void;
+  selectedVehicle?: VehicleType;
+  onVehicleChange?: (v: VehicleType) => void;
 }
 
 const RideRequestForm: React.FC<RideRequestFormProps> = ({
@@ -25,11 +29,73 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
   onCalculatePrice,
   onCallTaxi,
   onConfirmRideRequest,
+  selectedVehicle: initialVehicle = 'standard',
+  onVehicleChange,
 }) => {
+  const [selectedVehicle, setSelectedVehicle] = useState<VehicleType>(initialVehicle);
+  const [showMotoWarning, setShowMotoWarning] = useState(false);
+
+  const handleVehicleChange = (type: VehicleType) => {
+    if (type === 'moto' && selectedVehicle !== 'moto') {
+      setShowMotoWarning(true);
+      return;
+    }
+    setSelectedVehicle(type);
+    onVehicleChange?.(type);
+  };
+
+  const vehicles = [
+    { type: 'standard' as VehicleType, icon: '🚗', label: 'Táxi', priceNote: 'Normal' },
+    { type: 'moto' as VehicleType, icon: '🏍️', label: 'Moto', priceNote: '-40%' },
+    { type: 'comfort' as VehicleType, icon: '🚙', label: 'Comfort', priceNote: '+40%' },
+    { type: 'xl' as VehicleType, icon: '🚐', label: 'XL', priceNote: '+80%' },
+  ];
+
+  const MOTO_SAFETY_WARNING = `Por favor, certifica-te de que:\n\n• Tens capacete disponível (obrigatório por lei)\n• A zona de partida e chegada é segura\n• Evita distâncias superiores a 20 km\n\nA Zenith recomenda moto-táxi apenas em percursos urbanos conhecidos.`;
+
   if (rideStatus !== RideStatus.IDLE) return null;
 
   return (
     <div className="space-y-4">
+      {/* Selector de Tipo de Veículo */}
+      <div className="grid grid-cols-4 gap-2">
+        {vehicles.map(v => (
+          <button
+            key={v.type}
+            onClick={() => handleVehicleChange(v.type)}
+            className={`flex flex-col items-center py-3 rounded-2xl border transition-all ${
+              selectedVehicle === v.type 
+                ? 'border-primary bg-primary/10' 
+                : 'border-white/10 bg-white/5'
+            }`}
+          >
+            <span className="text-2xl">{v.icon}</span>
+            <span className="text-[10px] font-bold mt-1">{v.label}</span>
+            <span className="text-[9px] text-white/50">{v.priceNote}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Diálogo de aviso para Moto */}
+      {showMotoWarning && (
+        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6">
+          <div className="bg-[#1a1a1a] rounded-3xl p-6 max-w-sm">
+            <p className="font-bold text-lg mb-3 text-yellow-400">⚠️ Aviso de Segurança</p>
+            <p className="text-sm text-white/80 whitespace-pre-line mb-4">{MOTO_SAFETY_WARNING}</p>
+            <div className="flex gap-3">
+              <button onClick={() => { setSelectedVehicle('standard'); setShowMotoWarning(false); }}
+                className="flex-1 py-3 border border-white/20 rounded-2xl text-sm font-bold">
+                Cancelar
+              </button>
+              <button onClick={() => { setSelectedVehicle('moto'); onVehicleChange?.('moto'); setShowMotoWarning(false); }}
+                className="flex-1 py-3 bg-yellow-500 text-black rounded-2xl text-sm font-bold">
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Card de preço Engine Pro (aparece após calcular) */}
       {fareData && (
         <div

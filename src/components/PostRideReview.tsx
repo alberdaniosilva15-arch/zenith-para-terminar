@@ -7,6 +7,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { geminiService } from '../services/geminiService';
+import { supabase } from '../lib/supabase';
+import { generateAndShareReceipt, RideReceiptData } from '../services/pdfService';
 import type { PostRideState } from '../types';
 
 interface PostRideReviewProps {
@@ -15,7 +17,7 @@ interface PostRideReviewProps {
   onDismiss:    () => void;
 }
 
-type ReviewStep = 'loading' | 'opening' | 'rating' | 'comment' | 'done';
+type ReviewStep = 'loading' | 'opening' | 'rating' | 'comment' | 'done' | 'receipt';
 
 const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onDismiss }) => {
   const [step,        setStep]        = useState<ReviewStep>('loading');
@@ -24,6 +26,8 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
   const [hovered,     setHovered]     = useState<number>(0);
   const [comment,     setComment]     = useState('');
   const [submitting,  setSubmitting]  = useState(false);
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [pdfError,      setPdfError]      = useState<string | null>(null);
 
   const { driverName, priceKz, rideId } = postRide;
 
@@ -97,6 +101,56 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
     await onSubmit(score, comment.trim() || undefined);
     setStep('done');
     setSubmitting(false);
+  };
+
+  const handleReceipt = async (mode: 'save' | 'share') => {
+    setGeneratingPdf(true);
+    setPdfError(null);
+    try {
+      const { data: ride } = await supabase
+        .from('rides')
+        .select(`
+          *,
+          passenger:profiles!rides_passenger_id_fkey(name),
+          driver:profiles!rides_driver_id_fkey(name),
+          vehicle:driver_vehicles!driver_vehicles_driver_id_fkey(plate_number, vehicle_type)
+        `)
+        .eq('id', postRide.rideId!)
+        .single();
+
+      if (!ride) {
+        setPdfError('Não foi possível carregar os dados da corrida.');
+        return;
+      }
+
+      const receiptData: RideReceiptData = {
+        passengerName:  ride.passenger?.name ?? 'Passageiro',
+        driverName:     postRide.driverName ?? ride.driver?.name ?? 'Motorista',
+        driverPlate:    ride.vehicle?.plate_number ?? '',
+        rideId:         postRide.rideId!,
+        acceptedAt:     ride.accepted_at ?? ride.created_at,
+        startedAt:      ride.started_at  ?? ride.accepted_at ?? ride.created_at,
+        completedAt:    ride.completed_at ?? new Date().toISOString(),
+        originAddress:  ride.origin_address,
+        destAddress:    ride.dest_address,
+        originLat:      ride.origin_lat,
+        originLng:      ride.origin_lng,
+        destLat:        ride.dest_lat,
+        destLng:        ride.dest_lng,
+        distanceKm:     ride.distance_km  ?? postRide.distanceKm  ?? 0,
+        durationMin:    ride.duration_min ?? postRide.durationMin ?? 0,
+        priceKz:        postRide.priceKz  ?? ride.price_kz        ?? 0,
+        trafficFactor:  ride.traffic_factor ?? 1.0,
+        vehicleType:    ride.vehicle?.vehicle_type ?? 'standard',
+      };
+
+      await generateAndShareReceipt(receiptData, mode);
+    } catch (e) {
+      setPdfError('Erro ao gerar recibo. Tenta novamente.');
+      console.error('[PostRideReview] PDF error:', e);
+    } finally {
+      setGeneratingPdf(false);
+    }
   };
 
   if (!postRide.active) return null;
@@ -226,15 +280,52 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
 
           {/* STEP: done */}
           {step === 'done' && (
-            <div className="text-center space-y-4 py-4">
+            <div className="text-center space-y-4 py-2">
               <div className="text-5xl">✅</div>
               <p className="font-black text-on-surface text-lg">Obrigado pelo feedback!</p>
               <p className="text-xs text-on-surface-variant/70 font-bold">A tua avaliação ajuda a melhorar a experiência.</p>
+          
+              {/* Divisória */}
+              <div className="border-t border-white/10 pt-4">
+                <p className="text-[10px] font-bold text-on-surface-variant/50 uppercase tracking-widest mb-3">
+                  Recibo da corrida
+                </p>
+          
+                {pdfError && (
+                  <p className="text-xs text-red-400 mb-3">{pdfError}</p>
+                )}
+          
+                {/* Botão: Partilhar (WhatsApp etc.) */}
+                <button
+                  onClick={() => handleReceipt('share')}
+                  disabled={generatingPdf}
+                  className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 mb-3"
+                >
+                  {generatingPdf ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      A gerar recibo...
+                    </>
+                  ) : (
+                    '📤 Partilhar via WhatsApp'
+                  )}
+                </button>
+          
+                {/* Botão: Guardar no telemóvel */}
+                <button
+                  onClick={() => handleReceipt('save')}
+                  disabled={generatingPdf}
+                  className="w-full py-4 bg-white/8 border border-white/15 text-white/80 rounded-2xl font-black text-[11px] uppercase tracking-widest active:scale-95 disabled:opacity-50 mb-3"
+                >
+                  💾 Guardar no Telemóvel
+                </button>
+              </div>
+          
               <button
                 onClick={onDismiss}
-                className="w-full py-5 bg-[#0A0A0A] text-white rounded-2xl font-black text-[10px] uppercase tracking-widest"
+                className="w-full py-3 text-on-surface-variant/50 font-black text-[9px] uppercase tracking-widest"
               >
-                FECHAR
+                Fechar
               </button>
             </div>
           )}
