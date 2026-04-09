@@ -1,17 +1,19 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — mapService.ts
-// FIXES:
-//   1. reverseGeocode: quando não há API key, encontra o bairro de Luanda
-//      mais próximo usando Haversine em vez de mostrar coordenadas
-//   2. calculateDistance: exportado (usado em PassengerHome para mostrar km)
-//   3. searchPlaces: manter resultados locais + Google Autocomplete
+// ZENITH RIDE v3.1 — mapService.ts
+// FIXES v3.1:
+//   1. searchPlaces: usa Mapbox Geocoding API em vez de Google Places
+//      (Google Places falha silenciosamente — token Mapbox já está no .env)
+//   2. geocodeAddress: usa Mapbox Geocoding como fallback primário
+//   3. reverseGeocode: usa Mapbox Geocoding quando há token
+//   4. calculateDistance: exportado (usado em PassengerHome para mostrar km)
 // =============================================================================
 
 import type { LatLng, LocationResult } from '../types';
 
-const MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_KEY as string | undefined;
+const MAPS_API_KEY   = import.meta.env.VITE_GOOGLE_MAPS_KEY as string | undefined;
+const MAPBOX_TOKEN   = import.meta.env.VITE_MAPBOX_TOKEN   as string | undefined;
 
-// Coordenadas reais dos bairros de Luanda (cache estática para offline)
+// Coordenadas reais dos bairros de Luanda (cache estática para offline / resultados rápidos)
 export const LUANDA_STATIC_LOCATIONS: LocationResult[] = [
   { name: 'Mutamba — Baixa de Luanda',         type: 'bairro',    description: 'Centro histórico',     coords: { lat: -8.8160, lng: 13.2300 }, isPopular: true },
   { name: 'Ilha do Cabo — Chicala',            type: 'bairro',    description: 'Zona turística',       coords: { lat: -8.7900, lng: 13.2200 }, isPopular: true },
@@ -27,6 +29,7 @@ export const LUANDA_STATIC_LOCATIONS: LocationResult[] = [
   { name: 'Cacuaco — Sequele',                 type: 'bairro',    description: 'Zona norte exterior',  coords: { lat: -8.7500, lng: 13.3600 } },
   { name: 'Morro Bento',                       type: 'bairro',    description: 'Luanda Sul',           coords: { lat: -8.8900, lng: 13.2200 } },
   { name: 'Benfica',                           type: 'bairro',    description: 'Luanda Sul',           coords: { lat: -8.9200, lng: 13.1900 } },
+  { name: 'Camama',                            type: 'bairro',    description: 'Luanda Sul',           coords: { lat: -8.9000, lng: 13.2050 } },
   { name: 'Aeroporto Internacional de Luanda', type: 'monumento', description: '4 de Fevereiro',       coords: { lat: -8.8584, lng: 13.2312 }, isPopular: true },
   { name: 'Hospital Américo Boavida',          type: 'hospital',  description: 'Hospital público',     coords: { lat: -8.8270, lng: 13.2350 } },
   { name: 'Shoprite Viana',                    type: 'servico',   description: 'Supermercado',         coords: { lat: -8.9080, lng: 13.3450 } },
@@ -56,7 +59,7 @@ function haversineKm(a: LatLng, b: LatLng): number {
   return R * 2 * Math.atan2(Math.sqrt(sin2), Math.sqrt(1 - sin2));
 }
 
-// ─── FIX: Encontrar bairro mais próximo das coordenadas ──────────────────────
+// ─── Encontrar bairro mais próximo das coordenadas ────────────────────────────
 function nearestNeighbourhood(coords: LatLng): string {
   let best: LocationResult | null = null;
   let bestDist = Infinity;
@@ -65,9 +68,60 @@ function nearestNeighbourhood(coords: LatLng): string {
     if (d < bestDist) { bestDist = d; best = loc; }
   }
   if (!best) return 'Luanda';
-  // Se o bairro mais próximo está a mais de 5 km, combinar com distância
   if (bestDist > 5) return `Luanda (perto de ${best.name.split('—')[0].trim()})`;
   return best.name.split('—')[0].trim();
+}
+
+// ─── Mapbox Geocoding: pesquisa de texto → lista de locais ───────────────────
+async function mapboxForwardGeocode(query: string): Promise<LocationResult[]> {
+  if (!MAPBOX_TOKEN) return [];
+  try {
+    const encoded = encodeURIComponent(query);
+    // proximity=-8.8368,13.2343 = centro de Luanda (prioriza resultados próximos)
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?country=AO&language=pt&proximity=13.2343,-8.8368&limit=6&access_token=${MAPBOX_TOKEN}`;
+    const res  = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+
+    return (data.features ?? []).map((f: any): LocationResult => {
+      const [lng, lat] = f.center;
+      const name = f.text ?? f.place_name?.split(',')[0] ?? 'Local';
+      const description = f.place_name ?? f.text ?? 'Angola';
+      return {
+        name,
+        type: mapboxTypeToLocal(f.place_type),
+        description: description.replace(/, Angola$/i, '').replace(/Angola,?\s*/gi, '').trim(),
+        coords: { lat, lng },
+        isPopular: false,
+      };
+    });
+  } catch (err) {
+    console.warn('[mapService.mapboxForwardGeocode]', err);
+    return [];
+  }
+}
+
+// ─── Mapbox Reverse Geocoding: coordenadas → endereço ───────────────────────
+async function mapboxReverseGeocode(coords: LatLng): Promise<string | null> {
+  if (!MAPBOX_TOKEN) return null;
+  try {
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${coords.lng},${coords.lat}.json?types=neighborhood,locality,place&language=pt&access_token=${MAPBOX_TOKEN}`;
+    const res  = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const feature = data.features?.[0];
+    if (!feature) return null;
+    return feature.text ?? feature.place_name?.split(',')[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function mapboxTypeToLocal(types: string[]): LocationResult['type'] {
+  if (types.includes('poi')) return 'servico';
+  if (types.includes('neighborhood') || types.includes('locality')) return 'bairro';
+  if (types.includes('address')) return 'rua';
+  return 'bairro';
 }
 
 // =============================================================================
@@ -80,16 +134,25 @@ export const mapService = {
     const cacheKey = address.toLowerCase().trim();
     if (geocodeCache.has(cacheKey)) return geocodeCache.get(cacheKey)!;
 
+    // 1. Lista estática (mais rápido)
     const local = LUANDA_STATIC_LOCATIONS.find(
-      (l) => l.name.toLowerCase().includes(cacheKey) || cacheKey.includes(l.name.toLowerCase())
+      (l) => l.name.toLowerCase().includes(cacheKey) || cacheKey.includes(l.name.toLowerCase().split('—')[0].trim())
     );
     if (local) { geocodeCache.set(cacheKey, local.coords); return local.coords; }
 
-    if (!MAPS_API_KEY) {
-      console.warn('[mapService.geocodeAddress] VITE_GOOGLE_MAPS_KEY não definida. Sem geocoding remoto.');
-      return null;
+    // 2. Mapbox Geocoding (token sempre presente)
+    if (MAPBOX_TOKEN) {
+      try {
+        const results = await mapboxForwardGeocode(`${address} Luanda`);
+        if (results.length > 0) {
+          geocodeCache.set(cacheKey, results[0].coords);
+          return results[0].coords;
+        }
+      } catch { /* fallthrough */ }
     }
 
+    // 3. Google Maps como último recurso
+    if (!MAPS_API_KEY) return null;
     try {
       const query = encodeURIComponent(`${address}, Luanda, Angola`);
       const url   = `https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${MAPS_API_KEY}&region=ao&language=pt`;
@@ -108,35 +171,35 @@ export const mapService = {
   },
 
   // ── reverseGeocode ──────────────────────────────────────────────────────────
-  // FIX: sem API key → encontra bairro mais próximo em vez de mostrar coordenadas
   async reverseGeocode(coords: LatLng): Promise<string> {
-    if (!MAPS_API_KEY) {
-      // Fallback inteligente: nome do bairro mais próximo
-      return nearestNeighbourhood(coords);
+    // 1. Tentar Mapbox Reverse Geocoding (mais preciso, token sempre presente)
+    if (MAPBOX_TOKEN) {
+      const name = await mapboxReverseGeocode(coords);
+      if (name) return name;
     }
 
-    try {
-      const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.lat},${coords.lng}&key=${MAPS_API_KEY}&language=pt`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (data.status !== 'OK' || !data.results?.length) {
-        return nearestNeighbourhood(coords);
-      }
-      const result =
-        data.results.find((r: { types: string[] }) => r.types.includes('route'))
-        ?? data.results.find((r: { types: string[] }) => r.types.includes('neighborhood'))
-        ?? data.results.find((r: { types: string[] }) => r.types.includes('sublocality'))
-        ?? data.results[0];
-
-      // Extrair parte útil (sem Angola, Angola)
-      const formatted: string = result.formatted_address ?? '';
-      const cleaned = formatted.replace(/, Angola$/, '').replace(/Angola,?\s*/g, '').trim();
-      return cleaned || nearestNeighbourhood(coords);
-    } catch (err) {
-      console.error('[mapService.reverseGeocode] Erro:', err);
-      return nearestNeighbourhood(coords);
+    // 2. Google Maps como fallback
+    if (MAPS_API_KEY) {
+      try {
+        const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.lat},${coords.lng}&key=${MAPS_API_KEY}&language=pt`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (data.status === 'OK' && data.results?.length) {
+          const result =
+            data.results.find((r: { types: string[] }) => r.types.includes('route'))
+            ?? data.results.find((r: { types: string[] }) => r.types.includes('neighborhood'))
+            ?? data.results.find((r: { types: string[] }) => r.types.includes('sublocality'))
+            ?? data.results[0];
+          const formatted: string = result.formatted_address ?? '';
+          const cleaned = formatted.replace(/, Angola$/, '').replace(/Angola,?\s*/g, '').trim();
+          if (cleaned) return cleaned;
+        }
+      } catch { /* fallthrough */ }
     }
+
+    // 3. Fallback: bairro mais próximo da lista estática
+    return nearestNeighbourhood(coords);
   },
 
   // ── calculateDistance — Haversine (exportado para uso em UI) ───────────────
@@ -153,15 +216,18 @@ export const mapService = {
   },
 
   // ── searchPlaces ─────────────────────────────────────────────────────────────
+  // FIX v3.1: usa Mapbox Geocoding em vez de Google Places (que falha silenciosamente)
   async searchPlaces(query: string): Promise<LocationResult[]> {
     const q = query.toLowerCase().trim();
     if (q.length < 2) return LUANDA_STATIC_LOCATIONS.filter((l) => l.isPopular);
 
+    // Filtro na lista estática
     const localResults = LUANDA_STATIC_LOCATIONS.filter((l) =>
       l.name.toLowerCase().includes(q) || l.description.toLowerCase().includes(q)
     );
 
-    if (q.includes('kilamba')) {
+    // Expansão Kilamba (fallback dinâmico, mas damos preferência ao Mapbox real)
+    if (q.includes('kilamba') && q.length < 8) {
       const letters = 'ABCDEFGH'.split('');
       const kilambaBlocks: LocationResult[] = letters.map((letter, i) => ({
         name:        `Kilamba — Quarteirão ${letter}`,
@@ -170,36 +236,24 @@ export const mapService = {
         coords:      { lat: -8.978 + i * 0.001, lng: 13.218 + i * 0.001 },
         isPopular:   i < 3,
       }));
-      const filtered = kilambaBlocks.filter((b) => b.name.toLowerCase().includes(q));
-      return filtered.length ? filtered : kilambaBlocks.slice(0, 8);
+      localResults.push(...kilambaBlocks.filter(b => b.name.toLowerCase().includes(q) || 'kilamba'.includes(q)));
     }
 
-    if (!MAPS_API_KEY || localResults.length >= 5) return localResults;
-
-    try {
-      const encoded = encodeURIComponent(`${query} Luanda Angola`);
-      const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encoded}&key=${MAPS_API_KEY}&components=country:ao&language=pt&types=geocode`;
-      const res = await fetch(url);
-      if (!res.ok) return localResults;
-      const data = await res.json();
-      if (data.status !== 'OK') return localResults;
-
-      const remoteResults: LocationResult[] = await Promise.all(
-        data.predictions.slice(0, 5).map(async (p: { description: string }) => {
-          const coords = await this.geocodeAddress(p.description);
-          return {
-            name:        p.description.split(',')[0],
-            type:        'rua' as const,
-            description: p.description,
-            coords:      coords ?? { lat: -8.8368, lng: 13.2343 },
-          };
-        })
-      );
-      return [...localResults, ...remoteResults].slice(0, 10);
-    } catch (err) {
-      console.error('[mapService.searchPlaces] Erro Google Places:', err);
-      return localResults;
+    // FIX v3.1: Mapbox Geocoding API sempre chamada se houver token (removemos o bloqueio de localResults >= 5)
+    if (MAPBOX_TOKEN) {
+      try {
+        const remoteResults = await mapboxForwardGeocode(`${query} Luanda Angola`);
+        // Remover duplicados: não mostrar resultado Mapbox se já existe na lista local com nome idêntico
+        const deduplicated = remoteResults.filter(r =>
+          !localResults.some(l => l.name.toLowerCase().includes(r.name.toLowerCase().substring(0, 10)))
+        );
+        return [...localResults, ...deduplicated].slice(0, 15);
+      } catch (err) {
+        console.warn('[mapService.searchPlaces] Mapbox Geocoding falhou:', err);
+      }
     }
+
+    return localResults.slice(0, 10);
   },
 
   // ── getCurrentPosition ───────────────────────────────────────────────────
@@ -269,7 +323,6 @@ export const mapService = {
         },
         (err) => {
           console.warn('[mapService.watchPosition]', err.message);
-          // Reconectar automaticamente — até 3 tentativas com 3s de intervalo
           if (retryCount < 3) {
             retryCount++;
             setTimeout(() => {

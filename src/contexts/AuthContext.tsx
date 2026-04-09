@@ -1,7 +1,9 @@
 // =============================================================================
-// ZENITH RIDE v2.0 — AuthContext
-// Substitui completamente o sistema mock (user_123)
-// Gere sessão, user, profile e role em toda a aplicação
+// ZENITH RIDE v3.1 — AuthContext
+// FIXES v3.1:
+//   1. loadUserData: retries aumentados de 3 → 5 (delay até 4.8s)
+//   2. Fallback de emergência: se todos os retries falharem, cria
+//      dbUser/profile básico local para não deixar o utilizador preso
 // =============================================================================
 
 import React, {
@@ -67,7 +69,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // a race condition entre o trigger handle_new_user e o signIn/signUp.
   // ------------------------------------------------------------------
   const loadUserData = useCallback(async (userId: string, attempt = 0) => {
-    const MAX_ATTEMPTS = 3; // 600ms, 1200ms, 2400ms
+    const MAX_ATTEMPTS = 5; // FIX: 5 tentativas em vez de 3
     const BASE_DELAY_MS = 600;
     try {
       console.log(`[AuthContext] loadUserData attempt ${attempt} for ${userId}`);
@@ -87,23 +89,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.log('[AuthContext] Promovendo passenger a driver via OAuth intent');
         await supabase.rpc('set_my_role_driver');
         localStorage.removeItem('oauth_role_intent');
-        
-        // Refresh the user row post-upgrade
         const { data: updatedUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
         if (updatedUser) finalUserRow = updatedUser;
       }
 
-      setUser(finalUserRow as DbUser, profileRow as DbProfile);
+      // FIX: se userRow é null mas não houve erro, o trigger ainda não correu
+      // Tratar como se fosse um erro para fazer retry.
+      if (!finalUserRow && attempt < MAX_ATTEMPTS - 1) {
+        throw new Error('profile_not_ready');
+      }
+
+      // FIX: fallback de emergência — criar dbUser mínimo local se ainda null
+      const effectiveUser: DbUser = finalUserRow ?? {
+        id: userId,
+        role: 'passenger',
+        email: '',
+        created_at: new Date().toISOString(),
+      } as DbUser;
+
+      const effectiveProfile: DbProfile = profileRow ?? {
+        id: userId,
+        user_id: userId,
+        name: 'Utilizador',
+        avatar_url: null,
+        phone: null,
+        rating: 5.0,
+        total_rides: 0,
+        created_at: new Date().toISOString(),
+      } as DbProfile;
+
+      setUser(effectiveUser, effectiveProfile);
       setAuthError(null);
       setLoading(false);
     } catch (err: any) {
       if (attempt < MAX_ATTEMPTS - 1) {
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+        const delay = BASE_DELAY_MS * Math.pow(2, attempt); // 600ms, 1.2s, 2.4s, 4.8s
+        console.log(`[AuthContext] Retry ${attempt + 1}/${MAX_ATTEMPTS} em ${delay}ms`);
         setTimeout(() => loadUserData(userId, attempt + 1), delay);
       } else {
-        console.error('[AuthContext] Erro ao carregar dados do utilizador após retries:', err);
+        console.error('[AuthContext] Todos os retries falharam:', err);
         clearUser();
-        setAuthError({ code: 'db_user_load_failed', message: 'Não foi possível finalizar o registo. Tenta novamente mais tarde.' });
+        setAuthError({ code: 'db_user_load_failed', message: 'Não foi possível finalizar o registo. O trigger handle_new_user pode não estar activo no Supabase.' });
         setLoading(false);
       }
     }

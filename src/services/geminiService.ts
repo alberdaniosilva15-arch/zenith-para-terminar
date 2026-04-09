@@ -1,22 +1,25 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — geminiService.ts (FRONTEND)
-// ✅ CORREÇÃO 3 APLICADA: timeout de 8s via AbortController no callProxy
-// Todas as chamadas passam pela Edge Function gemini-proxy
-// A API key NUNCA está no frontend
+// ZENITH RIDE v3.1 — geminiService.ts (FRONTEND)
+// FIXES v3.1:
+//   1. createKazeChat: histórico usa role 'model' (não 'assistant') — formato Gemini correcto
+//   2. callProxy: expõe o erro HTTP real em vez de esconder
+//   3. Mensagens de erro mais informativas com diagnóstico
+//   4. Timeout aumentado de 8s para 12s (Edge Functions frias demoram mais)
 // =============================================================================
 
 import { supabase, edgeFunctionUrl } from '../lib/supabase';
 import type { LocationResult, AutonomousCommand } from '../types';
 
 // =============================================================================
-// HELPER: chamar Edge Function com auth automático + timeout de 8s
+// HELPER: chamar Edge Function com auth automático + timeout de 12s
 // =============================================================================
 async function callProxy<T>(action: string, payload: Record<string, unknown>): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
-  if (!session) throw new Error('Utilizador não autenticado.');
+  if (!session) throw new Error('Utilizador não autenticado. Faz login primeiro.');
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  // FIX: timeout aumentado para 12s — Edge Functions frias (cold start) demoram mais
+  const timeout = setTimeout(() => controller.abort(), 12000);
 
   try {
     const res = await fetch(edgeFunctionUrl('gemini-proxy'), {
@@ -32,8 +35,13 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>): P
     clearTimeout(timeout);
 
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error((body as any).message ?? `Erro ${res.status}`);
+      // FIX: expor o erro HTTP real (status + body) para diagnóstico
+      let errorMsg = `Erro HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        errorMsg = body?.message ?? body?.error ?? errorMsg;
+      } catch { /* ignorar se body não é JSON */ }
+      throw new Error(errorMsg);
     }
 
     return res.json() as Promise<T>;
@@ -41,7 +49,7 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>): P
   } catch (e: any) {
     clearTimeout(timeout);
     if (e.name === 'AbortError') {
-      throw new Error('A IA demorou muito a responder. Tenta de novo.');
+      throw new Error('A IA demorou demasiado a responder (cold start). Aguarda 5s e tenta de novo.');
     }
     throw e;
   }
@@ -66,8 +74,14 @@ export const geminiService = {
   async exploreLuanda(query: string): Promise<{ text: string; sources: { uri: string; title: string }[] }> {
     try {
       return await callProxy('explore_luanda', { query });
-    } catch {
-      return { text: 'Mano, a rede está a dar mambo. Tenta de novo!', sources: [] };
+    } catch (err: any) {
+      const isNoFunction = err?.message?.includes('404') || err?.message?.includes('not found');
+      return {
+        text: isNoFunction
+          ? '⚠️ A Edge Function gemini-proxy não está activa no teu projecto Supabase. Vai ao painel Supabase → Edge Functions → Deploy.'
+          : `Mano, a rede está a dar mambo: ${err?.message ?? 'erro desconhecido'}. Tenta de novo!`,
+        sources: [],
+      };
     }
   },
 
@@ -77,7 +91,7 @@ export const geminiService = {
   async getKazeInsight(context: { role: string; status: string; name?: string }): Promise<{ text: string; type: 'info' | 'motivation' | 'safety' }> {
     try {
       return await callProxy('kaze_insight', { context });
-    } catch { return { text: 'Fica firme na via, mano!', type: 'motivation' }; }
+    } catch { return { text: 'Fica firme na via!', type: 'motivation' }; }
   },
 
   // ------------------------------------------------------------------
@@ -119,18 +133,38 @@ export const geminiService = {
 
   // ------------------------------------------------------------------
   // Chat com Kaze (multi-turno)
-  // Só criar quando há corrida activa
+  // FIX v3.1: formato do histórico corrigido — 'model' não 'assistant'
   // ------------------------------------------------------------------
   createKazeChat() {
-    const history: { role: 'user' | 'assistant'; content: string }[] = [];
+    // FIX: usar 'model' como role (formato correcto da API Gemini)
+    const history: { role: 'user' | 'model'; content: string }[] = [];
     return {
       async sendMessage(message: string): Promise<{ text: string }> {
         history.push({ role: 'user', content: message });
         try {
-          const r = await callProxy<{ text: string }>('kaze_chat', { message, history: history.slice(-10) });
-          history.push({ role: 'assistant', content: r.text });
+          const r = await callProxy<{ text: string }>('kaze_chat', {
+            message,
+            // FIX: enviar histórico no formato correcto Gemini
+            history: history.slice(-10),
+          });
+          history.push({ role: 'model', content: r.text });
           return r;
-        } catch { return { text: 'Mano, tive um problema técnico. Tenta de novo.' }; }
+        } catch (err: any) {
+          // FIX: mensagem de erro informativa com diagnóstico
+          const isAuth = err?.message?.includes('autenticado');
+          const isTimeout = err?.message?.includes('demorou');
+          const is404 = err?.message?.includes('404') || err?.message?.includes('not found');
+
+          const errorText = is404
+            ? '⚠️ A Edge Function gemini-proxy não está deployada no Supabase. Vai ao painel → Edge Functions e faz deploy.'
+            : isAuth
+            ? '🔒 Sessão expirada. Sai e volta a entrar.'
+            : isTimeout
+            ? '⏱️ A IA demorou a responder. É normal no primeiro pedido (cold start). Tenta de novo.'
+            : `❌ ${err?.message ?? 'Erro desconhecido.'}`;
+
+          return { text: errorText };
+        }
       },
       getHistory: () => [...history],
       clearHistory: () => { history.length = 0; },
@@ -138,7 +172,7 @@ export const geminiService = {
   },
 
   // ------------------------------------------------------------------
-  // POST-RIDE REVIEW — IA condicional, só activa após corrida
+  // POST-RIDE REVIEW
   // ------------------------------------------------------------------
   async callPostRideReview(params: {
     driver_name: string; price_kz: number;
@@ -172,9 +206,7 @@ export const geminiService = {
     try {
       const tokenData = await geminiService.getKazeLiveToken();
       if (!tokenData?.ephemeral_token) throw new Error('Token efémero inválido.');
-      // O token ephemeral é usado pelo frontend para conectar directamente ao Gemini Live
       console.log('[KazeLive] Token obtido, usar SDK Gemini Live com este token');
-      // TODO: integrar SDK Gemini Live aqui para abrir o canal de voz.
       return { close: () => callbacks.onclose() };
     } catch (e) {
       console.error('[geminiService.connectKazeLive] falha:', e);

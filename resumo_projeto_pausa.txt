@@ -1,0 +1,37 @@
+================================================================================
+RELATÓRIO DE ESTADO E TRANSIÇÃO — ZENITH RIDE PRO & CRM CORPORATIVO
+Data: 09 de Abril de 2026
+Autor/Responsável: Alberdanio Silva (Proprietário)
+================================================================================
+
+1. SITUAÇÃO ATUAL DO PROJETO
+O desenvolvimento do Zenith Ride alcançou um marco crítico e robusto. Conseguimos separar com sucesso a aplicação dos Passageiros/Motoristas do painel central corporativo (SaaS / CRM). Ambos funcionam assentes num ecossistema moderno baseado em Supabase, React e rotas blindadas.
+A lógica do agendamento, proteção contra quedas da API de rotas e sincronização da base de dados foram polidas para evitar ecrãs presos num "carregamento infinito". A nível local, o CRM já restringe administrativamente todo o tráfego usando a base de cargos reais (Role-Level Security).
+
+2. AS NOSSAS IDEIAS E O QUE QUEREMOS ATINGIR
+Visão do Zenith Ride v3.1 Produtivo:
+- Motor de Leilões Justo: Garantir que as corridas são distribuídas sem falhas na negociação entre motoristas da via e clientes.
+- Inteligência Kaze Activa: Um robô interativo de voz/chat pronto para ajudar no preenchimento de frotas e monitorizar zonas quentes.
+- CRM Exclusivo e Impenetrável: Construímos o Zenith Engine Pro. O objetivo foi assegurar que as definições de administração só pudessem ser controladas pela super-conta do proprietário (Alberdaniosilva15@gmail.com). Sem "chaves mestras" expostas na janela de login para invasões de terceiros.
+
+3. O QUE FICOU PENDENTE NESTA PAUSA (E O QUE FAZER QUANDO VOLTARMOS)
+O projeto encontra-se pausado devido a dois serviços na Cloud que bloqueiam funcionalidades visuais por questões de autenticação/faturação das respetivas APIs:
+
+A) Google Routes API (O Mapa e as Corridas)
+   * Sintoma: Não calcula rotas porque não passa nos portões de "Billing" da Google.
+   * Acão Futura: O proprietário deve ir ao Google Cloud Console, gerar uma nova chave API (com a "Routes API" ativada e cartão inserido para validade grátis limitadora). 
+   * Local para guardar: Ficheiro `.env` na variável `VITE_GOOGLE_MAPS_KEY`.
+
+B) Kaze AI & Gemini Proxy (Inteligência Artificial)
+   * Sintoma: O sistema da aplicação tenta iniciar a IA, mas retorna status 404 porque o "cérebro" não foi submetido na base de dados online (Supabase Edge Functions).
+   * Acão Futura: Aceder à plataforma Google AI Studio (https://aistudio.google.com/app/apikey) e gerar uma Chave de API Gratuita do modelo Gemini.
+   * A seguir, deves abrir o terminal nesta mesma pasta, com o Docker ligado, e executar ESTRITAMENTE estes 2 comandos:
+     1. npx supabase secrets set GEMINI_API_KEY="TUA_CHAVE_AQUI"
+     2. npx supabase functions deploy gemini-proxy --no-verify-jwt
+
+4. MECÂNICA EXCLUSIVA DE ADMIN DO CRM
+Relembrando para testagens posteriores de segurança, o ficheiro `setup_admin_rpc.sql` gerado fica responsável por ditar a tua lei na app. Uma vez executado na plataforma Supabase (SQL Editor), o teu e-mail Alberdaniosilva15@gmail.com poderá adicionar novos membros de gestão com um simples clique direito da tua dashboard.
+
+================================================================================
+* O sistema aguarda agora de forma estável até que as credenciais supramencionadas repousem sob alçada do administrador. Commit Seguro gerado. Mãos à obra quando estiveres pronto!
+================================================================================

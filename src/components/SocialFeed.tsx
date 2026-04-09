@@ -52,13 +52,18 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
 
       // Buscar nomes em batch
       const ids = [...new Set(data.map((p: any) => p.user_id))];
-      const { data: profileRows } = await supabase
-        .from('profiles')
-        .select('user_id, name, avatar_url, rating')
-        .in('user_id', ids);
+      
+      let profileRows: any[] = [];
+      if (ids.length > 0) {
+        const { data: res } = await supabase
+          .from('profiles')
+          .select('user_id, name, avatar_url, rating')
+          .in('user_id', ids);
+        profileRows = res ?? [];
+      }
 
       const profileMap: Record<string, { name: string; avatar_url: string | null; rating: number }> = {};
-      (profileRows ?? []).forEach((pr: any) => {
+      profileRows.forEach((pr: any) => {
         profileMap[pr.user_id] = { name: pr.name, avatar_url: pr.avatar_url, rating: pr.rating };
       });
 
