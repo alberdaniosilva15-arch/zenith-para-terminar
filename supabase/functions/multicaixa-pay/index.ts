@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — Edge Function: multicaixa-pay
+// ZENITH RIDE v3.0 — Edge Function: multicaixa-pay
 // Ficheiro: supabase/functions/multicaixa-pay/index.ts
 //
 // Integração com Multicaixa Express (pagamento móvel Angola nativo)
@@ -75,7 +75,7 @@ Deno.serve(async (req: Request) => {
         }
 
         // Gerar referência única
-        const reference = `MOTOGO-${user.id.slice(0, 8).toUpperCase()}-${Date.now()}`;
+        const reference = `ZENITH-${user.id.slice(0, 8).toUpperCase()}-${Date.now()}`;
 
         // Chamar API Multicaixa Express
         const mcxRes = await fetch(`${MULTICAIXA_BASE_URL}/payments/initiate`, {
@@ -90,7 +90,7 @@ Deno.serve(async (req: Request) => {
             currency:    'AOA',
             phone:       `+244${phone_number}`,
             reference,
-            description: `Carregamento MotoGo AI - ${user.id.slice(0, 8)}`,
+            description: `Carregamento Zenith Ride - ${user.id.slice(0, 8)}`,
             callback_url: `${SUPABASE_URL}/functions/v1/multicaixa-pay`,
           }),
         });
@@ -189,7 +189,7 @@ Deno.serve(async (req: Request) => {
           return jsonOk({ received: true });
         }
 
-        // Extrair user_id da referência: MOTOGO-{userId8chars}-{timestamp}
+        // Extrair user_id da referência: ZENITH-{userId8chars}-{timestamp}
         const userIdPrefix = reference.split('-')[1]?.toLowerCase();
         if (!userIdPrefix) return jsonErr('Referência inválida.', 400);
 

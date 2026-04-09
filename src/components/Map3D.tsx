@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — Map3D.tsx
+// ZENITH RIDE v3.0 — Map3D.tsx
 //
 // Mapbox GL JS com:
 //   - Estilo dark-v11 personalizado para Luanda

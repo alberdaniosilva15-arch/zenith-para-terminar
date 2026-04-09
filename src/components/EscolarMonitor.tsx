@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO v3.0 — src/components/EscolarMonitor.tsx
+// ZENITH RIDE v3.0 — src/components/EscolarMonitor.tsx
 //
 // Monitorização em tempo real de contratos escolares.
 // Gera um link único para pais acompanharem a corrida sem precisar de conta.
@@ -148,7 +148,7 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
   const shareWhatsApp = () => {
     if (!trackingUrl) return;
     const msg = encodeURIComponent(
-      `🚗 Podes acompanhar a corrida escolar de "${contractTitle}" em tempo real:\n${trackingUrl}\n\nLink válido por 12 horas. — MotoGo AI`
+      `🚗 Podes acompanhar a corrida escolar de "${contractTitle}" em tempo real:\n${trackingUrl}\n\nLink válido por 12 horas. — Zenith Ride`
     );
     window.open(`https://wa.me/?text=${msg}`, '_blank');
   };

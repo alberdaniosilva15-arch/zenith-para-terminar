@@ -1,5 +1,5 @@
 // =============================================================================
-// MOTOGO AI v2.1 — types.ts
+// ZENITH RIDE v3.0 — types.ts
 // Adicionado: AuctionDriver, PostRideState, driver_bids, driver_confirmed
 // =============================================================================
 
@@ -252,7 +252,7 @@ export interface Post {
   timestamp: number;
 }
 // =============================================================================
-// MOTOGO v3.0 — NOVOS TIPOS (adicionar ao fim de types.ts — não apagar nada)
+// ZENITH RIDE v3.0 — NOVOS TIPOS
 // =============================================================================
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ export interface FreePerkState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MOTOGO SCORE
+// ZENITH SCORE
 // ─────────────────────────────────────────────────────────────────────────────
 export type ScoreLabel = 'Sem Historial' | 'Básico' | 'Médio' | 'Bom' | 'Excelente' | 'Extraordinário';
 
@@ -313,7 +313,7 @@ export interface MotoGoScore {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MOTOGO PAY — PARCEIROS
+// ZENITH PAY — PARCEIROS
 // ─────────────────────────────────────────────────────────────────────────────
 export type PartnerCategory = 'fuel' | 'food' | 'insurance' | 'mechanic' | 'supermarket';
 

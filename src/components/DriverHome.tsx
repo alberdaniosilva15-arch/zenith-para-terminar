@@ -5,10 +5,13 @@
 // ✅ Mantém: subscribeToAvailableRides + subscribeToDriverAssignments (fallback)
 // =============================================================================
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import RideTalk from './RideTalk';
-import Map3D from './Map3D';
-import AgoraCall from './AgoraCall';
+
+const Map3D = React.lazy(() => import('./Map3D'));
+
+import AvailableRidesList from './AvailableRidesList';
+import DriverActiveCard from './DriverActiveCard';
 import { geminiService } from '../services/geminiService';
 import { rideService } from '../services/rideService';
 import { mapService } from '../services/mapService';
@@ -302,12 +305,6 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     setPendingNotifCount(0);
   };
 
-  const nextAction: Record<string, { label: string; next: RideStatus }> = {
-    [RideStatus.PICKING_UP]:  { label: 'CHEGUEI AO CLIENTE',  next: RideStatus.IN_PROGRESS },
-    [RideStatus.IN_PROGRESS]: { label: 'CONCLUIR CORRIDA',    next: RideStatus.COMPLETED },
-  };
-  const currentAction = ride.status ? nextAction[ride.status] : null;
-
   return (
     <div className="p-4 space-y-5 bg-[#F8FAFC] min-h-screen pb-32">
 
@@ -356,12 +353,14 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
       {/* Mapa */}
       <div className="aspect-[4/3] w-full relative z-0 overflow-hidden rounded-[3rem] shadow-2xl border-4 border-white">
-        <Map3D
-          pickup={ride.pickupCoords}
-          destination={ride.destCoords}
-          carLocation={ride.carLocation}
-          status={ride.status}
-        />
+        <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-surface-container-low text-on-surface-variant text-xs">A carregar mapa...</div>}>
+          <Map3D
+            pickup={ride.pickupCoords}
+            destination={ride.destCoords}
+            carLocation={ride.carLocation}
+            status={ride.status}
+          />
+        </Suspense>
         <div className="absolute top-6 right-6 bg-surface-container-low/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-outline-variant/20 flex items-center gap-3">
           <div className="w-10 h-10 bg-primary/8 rounded-xl flex items-center justify-center text-xl">⛽</div>
           <div>
@@ -378,115 +377,26 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         </div>
       </div>
 
-      {/* POPUP: passageiro escolheu-te (leilão / driver_notifications) */}
-      {isOnline && incomingRide && isAuctionRide && !ride.rideId && (
-        <div className="bg-surface-container-low border-2 border-primary p-8 rounded-[3.5rem] shadow-[0_40px_100px_rgba(230,195,100,0.1)] animate-in slide-in-from-bottom-20 duration-500">
-          <div className="flex items-center gap-3 mb-5">
-            <span className="text-2xl">🎯</span>
-            <div>
-              <p className="text-[10px] font-black text-primary uppercase tracking-widest">Passageiro escolheu-te!</p>
-              <p className="text-[9px] text-on-surface-variant/70 font-bold">Confirma para começar a corrida</p>
-            </div>
-          </div>
-          <InfoRow icon="📍" label="Origem"  value={incomingRide.origin_address} />
-          <InfoRow icon="🏁" label="Destino" value={incomingRide.dest_address} />
-          <div className="flex gap-2 my-4">
-            <Pill label={`${incomingRide.price_kz.toLocaleString('pt-AO')} Kz`} blue />
-            {incomingRide.distance_km && <Pill label={`${incomingRide.distance_km.toFixed(1)} km`} />}
-          </div>
-          <div className="grid grid-cols-2 gap-3 mt-4">
-            <button
-              onClick={handleDeclineAuction}
-              disabled={actionLoading}
-              className="py-5 rounded-3xl font-black text-[10px] uppercase bg-surface-container-low text-on-surface-variant hover:bg-surface-container transition-all disabled:opacity-60"
-            >
-              Recusar
-            </button>
-            <button
-              onClick={handleConfirmAuction}
-              disabled={actionLoading}
-              className="py-5 rounded-3xl font-black text-[10px] uppercase bg-primary text-white shadow-xl hover:bg-primary transition-all active:scale-95 disabled:opacity-60"
-            >
-              {actionLoading ? <Spinner /> : 'CONFIRMAR'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* POPUP: nova corrida em searching (via driver_notifications ou fallback) */}
-      {isOnline && incomingRide && !isAuctionRide && !ride.rideId && (
-        <div className="bg-surface-container-low border-2 border-outline-variant p-8 rounded-[3.5rem] shadow-2xl animate-in slide-in-from-bottom-20 duration-500">
-          <div className="flex items-center gap-3 mb-5">
-            <div className="w-3 h-3 bg-primary rounded-full animate-ping" />
-            <div>
-              <p className="text-[10px] font-black text-primary uppercase tracking-widest">
-                Nova corrida disponível
-              </p>
-              <p className="text-[8px] text-on-surface-variant/60 font-bold uppercase">
-                Notificação persistente · não se perde
-              </p>
-            </div>
-          </div>
-          <InfoRow icon="📍" label="Origem"  value={incomingRide.origin_address} />
-          <InfoRow icon="🏁" label="Destino" value={incomingRide.dest_address} />
-          <div className="flex gap-2 my-4">
-            <Pill label={`${incomingRide.price_kz.toLocaleString('pt-AO')} Kz`} blue />
-            {incomingRide.distance_km && <Pill label={`${incomingRide.distance_km.toFixed(1)} km`} />}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => { setIncomingRide(null); setPendingNotifCount(0); }}
-              className="py-5 rounded-3xl font-black text-[10px] uppercase bg-surface-container-low text-on-surface-variant hover:bg-surface-container transition-all"
-            >
-              Ignorar
-            </button>
-            <button
-              onClick={() => handleAcceptSearching(incomingRide.id)}
-              disabled={actionLoading}
-              className="py-5 rounded-3xl font-black text-[10px] uppercase bg-[#0A0A0A] text-white shadow-xl hover:bg-surface-container-highest transition-all active:scale-95 disabled:opacity-60"
-            >
-              {actionLoading ? <Spinner /> : 'ACEITAR'}
-            </button>
-          </div>
-        </div>
-      )}
+      {/* POPUP: passageiro escolheu-te ou nova corrida */}
+      <AvailableRidesList 
+        isOnline={isOnline}
+        incomingRide={incomingRide}
+        isAuctionRide={isAuctionRide}
+        hasActiveRide={!!ride.rideId}
+        actionLoading={actionLoading}
+        pendingNotifCount={pendingNotifCount}
+        onDeclineAuction={handleDeclineAuction}
+        onConfirmAuction={handleConfirmAuction}
+        onAcceptSearching={handleAcceptSearching}
+        onIgnoreSearching={() => { setIncomingRide(null); setPendingNotifCount(0); }}
+      />
 
       {/* Corrida activa — avançar estado + VoIP */}
-      {currentAction && ride.rideId && (
-        <div className="bg-surface-container-low border border-primary/20 p-6 rounded-[2.5rem] vault-shadow space-y-4">
-          <div className="flex gap-4 items-start">
-            <div className="w-10 h-10 golden-gradient rounded-2xl flex items-center justify-center text-lg font-headline font-bold shrink-0">
-              {(ride.passengerName ?? 'P').charAt(0)}
-            </div>
-            <div>
-              <p className="font-black text-on-surface text-sm">Corrida activa</p>
-              <p className="text-[10px] text-on-surface-variant font-label truncate">
-                {ride.pickup} → {ride.destination}
-              </p>
-            </div>
-          </div>
-
-          <AgoraCall
-            corridaId={ride.rideId}
-            userId={driverId}
-            peerName={ride.passengerName ?? 'Passageiro'}
-            onEndCall={() => {}}
-          />
-
-          <button
-            onClick={() => onAdvanceStatus(currentAction.next)}
-            className="w-full py-5 golden-gradient rounded-3xl font-black text-[10px] uppercase tracking-widest vault-shadow active:scale-95 luxury-transition"
-          >
-            {currentAction.label}
-          </button>
-          <button
-            onClick={() => onAdvanceStatus(RideStatus.CANCELLED)}
-            className="w-full py-3 text-error font-black text-[9px] uppercase tracking-widest hover:bg-error/10 rounded-2xl luxury-transition"
-          >
-            Cancelar corrida
-          </button>
-        </div>
-      )}
+      <DriverActiveCard 
+        ride={ride}
+        driverId={driverId}
+        onAdvanceStatus={onAdvanceStatus}
+      />
 
       {/* Offline */}
       {!isOnline && !ride.rideId && (
@@ -506,31 +416,5 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     </div>
   );
 };
-
-// ── Sub-componentes ────────────────────────────────────────────────────────────
-const InfoRow: React.FC<{ icon: string; label: string; value: string }> = ({ icon, label, value }) => (
-  <div className="flex gap-3 items-start mb-3">
-    <span className="text-lg shrink-0">{icon}</span>
-    <div className="min-w-0">
-      <p className="text-[8px] font-black text-on-surface-variant/70 uppercase">{label}</p>
-      <p className="text-sm font-black text-on-surface truncate">{value}</p>
-    </div>
-  </div>
-);
-
-const Pill: React.FC<{ label: string; blue?: boolean }> = ({ label, blue }) => (
-  <span className={`text-[10px] font-black px-3 py-1.5 rounded-full ${
-    blue ? 'bg-primary text-white' : 'bg-surface-container-low text-on-surface-variant'
-  }`}>
-    {label}
-  </span>
-);
-
-const Spinner = () => (
-  <span className="flex items-center justify-center gap-2">
-    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-    A processar...
-  </span>
-);
 
 export default DriverHome;
