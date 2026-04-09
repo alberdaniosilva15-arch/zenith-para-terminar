@@ -176,21 +176,19 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
             <button onClick={() => setIsOpen(false)} className="w-8 h-8 rounded-lg bg-surface-container-low/5 text-white/40 flex items-center justify-center hover:text-white transition-all">✕</button>
           </div>
 
-          {/* Tabs de modo */}
+          {/* Tabs de modo (VOZ oculta até o Gemini Live SDK estar finalizado) */}
           <div className="flex bg-surface-container/50 p-1 mx-4 mt-4 rounded-xl border border-white/5">
-            {(['chat', 'explore', 'voice'] as const).map(m => (
+            {(['chat', 'explore'] as const).map(m => (
               <button
                 key={m}
                 onClick={() => setMode(m)}
                 className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
                   mode === m
-                    ? m === 'chat' ? 'bg-primary/20 text-primary shadow-glow'
-                    : m === 'explore' ? 'bg-primary/20 text-primary shadow-glow'
-                    : 'bg-red-600 text-white shadow-lg'
+                    ? 'bg-primary/20 text-primary shadow-glow'
                     : 'text-on-surface-variant hover:text-white'
                 }`}
               >
-                {m === 'chat' ? 'Chat' : m === 'explore' ? 'Luanda' : 'Voz'}
+                {m === 'chat' ? 'Chat' : 'Luanda'}
               </button>
             ))}
           </div>

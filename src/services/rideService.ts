@@ -130,7 +130,7 @@ class RideService {
         const rawDrivers = (data as Array<{
           driver_id: string; driver_name: string; rating: number; distance_m: number;
           avatar_url?: string | null; total_rides?: number; level?: string;
-          eta_min?: number; heading?: number | null;
+          eta_min?: number; heading?: number | null; motogo_score?: number;
         }>);
 
         // ── Driver Score: ordena por melhor match ─────────────────────────────
@@ -140,8 +140,8 @@ class RideService {
           const rating      = typeof row.rating === 'number' ? row.rating : 5.0;
           const distScore   = row.distance_m * 0.5;
           const ratingScore = (5 - rating) * 500 * 0.3;
-          // Sem motogo_score do RPC — usar valor neutro (500/1000 = 50%)
-          const consistencyScore = (1 - 0.5) * 200 * 0.2;
+          const motogoScore = row.motogo_score ?? 500;
+          const consistencyScore = (1 - (motogoScore / 1000)) * 200 * 0.2;
           const matchScore = distScore + ratingScore + consistencyScore;
 
           return {
@@ -155,6 +155,7 @@ class RideService {
             // ETA: distância em metros / velocidade média Luanda (400m/min = 24km/h)
             eta_min:     row.eta_min ?? Math.ceil(row.distance_m / 400),
             heading:     row.heading ?? null,
+            motogo_score: motogoScore,
             _matchScore: matchScore,
           };
         });
@@ -205,6 +206,7 @@ class RideService {
         distance_m:  2000 + i * 500,
         eta_min:     5 + i * 2,
         heading:     data[i]?.heading ?? null,
+        motogo_score: 500,
       }));
     } catch { return []; }
   }

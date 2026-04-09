@@ -109,6 +109,7 @@ export interface AuctionDriver {
   distance_m:  number;
   eta_min:     number;
   heading:     number | null;
+  motogo_score: number;
 }
 
 /** Estado do leilão no frontend */

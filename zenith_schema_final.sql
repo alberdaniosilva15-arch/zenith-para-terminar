@@ -742,15 +742,16 @@ CREATE OR REPLACE FUNCTION public.find_drivers_for_auction(
   p_limit     INT DEFAULT 8
 )
 RETURNS TABLE(
-  driver_id   UUID,
-  driver_name TEXT,
-  avatar_url  TEXT,
-  rating      NUMERIC,
-  total_rides INT,
-  level       TEXT,
-  distance_m  DOUBLE PRECISION,
-  eta_min     INT,
-  heading     NUMERIC
+  driver_id    UUID,
+  driver_name  TEXT,
+  avatar_url   TEXT,
+  rating       NUMERIC,
+  total_rides  INT,
+  level        TEXT,
+  distance_m   DOUBLE PRECISION,
+  eta_min      INT,
+  heading      NUMERIC,
+  motogo_score INT
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -765,22 +766,19 @@ BEGIN
     pr.rating,
     pr.total_rides,
     pr.level,
-    ST_Distance(dl.location,
-      ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography) AS distance_m,
-    CEIL(
-      ST_Distance(dl.location,
-        ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography) / 583.0
-    )::INT AS eta_min,
-    dl.heading
+    ST_Distance(dl.location, ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography) AS distance_m,
+    CEIL(ST_Distance(dl.location, ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography) / 583.0)::INT AS eta_min,
+    dl.heading,
+    COALESCE(ms.score, 500) AS motogo_score
   FROM public.driver_locations dl
   JOIN public.profiles pr ON pr.user_id = dl.driver_id
+  LEFT JOIN public.motogo_scores ms ON ms.driver_id = dl.driver_id
   WHERE dl.status = 'available'
-    AND ST_DWithin(dl.location,
-      ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography,
-      p_radius_km * 1000)
+    AND ST_DWithin(dl.location, ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography, p_radius_km * 1000)
   ORDER BY
     (ST_Distance(dl.location, ST_SetSRID(ST_MakePoint(p_lng, p_lat), 4326)::geography) * 0.7)
-    + ((5.0 - pr.rating) * 500 * 0.3)
+    + ((5.0 - pr.rating) * 500 * 0.2)
+    - (COALESCE(ms.score, 500) * 0.1)
   LIMIT p_limit;
 END;
 $$;
