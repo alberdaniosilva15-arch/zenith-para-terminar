@@ -278,7 +278,7 @@ const Map3D: React.FC<Map3DProps> = ({
       map.remove();
       mapRef.current = null;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Helper: colocar / mover marcador estático ───────────────────────────
   const placeMarker = useCallback((
@@ -375,7 +375,7 @@ const Map3D: React.FC<Map3DProps> = ({
     } else {
       markerUserRef.current.setLngLat(coords);
     }
-  }, [userLocation?.lat, userLocation?.lng]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userLocation?.lat, userLocation?.lng]);
 
   // ── 4. Tracking em tempo real do motorista ───────────────────────────────
   useEffect(() => {
