@@ -42,3 +42,6 @@ page.html
 # Ficheiros comprimidos
 *.zip
 
+# Supabase
+supabase/.temp/
+
