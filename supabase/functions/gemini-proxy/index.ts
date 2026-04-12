@@ -253,7 +253,7 @@ Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
       case 'explore_luanda': {
         const { query } = payload as { query: string };
         const res = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-2.0-flash',
           contents: `Informações actualizadas sobre: "${query}" em Luanda, Angola.`,
           config: { tools: [{ googleSearch: {} }], systemInstruction: KAZE_SYSTEM_PROMPT },
         });
@@ -283,7 +283,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           history: { role: 'user' | 'assistant'; content: string }[];
         };
         const chat = ai.chats.create({
-          model: 'gemini-2.5-flash',
+          model: 'gemini-2.0-flash',
           config: { systemInstruction: KAZE_SYSTEM_PROMPT },
           history: history.slice(0, -1).map(h => ({
             role: h.role === 'assistant' ? 'model' : 'user',
@@ -313,7 +313,7 @@ JSON: { dailyEstimateKz: number, weeklyEstimateKz: number, bestZones: string[], 
       case 'autonomous_decisions': {
         const { context } = payload;
         const res = await ai.models.generateContent({
-          model: 'gemini-2.5-pro',
+          model: 'gemini-2.0-pro-exp-02-05',
           contents: `SISTEMA VIGILANTE MOTOGO LUANDA. Contexto: ${JSON.stringify(context)}.
 JSON: { commands: Array<{ id, type: REALLOCATE|SURGE_PRICE|SECURITY_DISPATCH|ROUTE_OPTIMIZE,
 target, reason, intensity, timestamp, status: EXECUTED|LOGGED }> }`,
