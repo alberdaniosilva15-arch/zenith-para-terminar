@@ -1,284 +1,197 @@
-// =============================================================================
-// ZENITH RIDE v3.0 — src/components/ParentTrackingPage.tsx
-//
-// Página pública para os pais acompanharem a corrida escolar.
-// Acessível via: /track/:token (SEM login)
-//
-// Para activar, adicionar esta rota no main.tsx:
-//   import ParentTrackingPage from './components/ParentTrackingPage';
-//
-//   // Em main.tsx, antes de renderizar <App />:
-//   const path = window.location.pathname;
-//   const trackMatch = path.match(/^\/track\/([0-9a-f-]{36})$/);
-//   if (trackMatch) {
-//     ReactDOM.createRoot(document.getElementById('root')!).render(
-//       <React.StrictMode>
-//         <ParentTrackingPage token={trackMatch[1]} />
-//       </React.StrictMode>
-//     );
-//   } else {
-//     // render App normal
-//   }
-// =============================================================================
+// src/components/ParentTrackingPage.tsx
+// FASE 2 — Página de Rastreio Parental (Acesso Público via Token)
+// Segurança: Validação via RPC validate_tracking_token
 
-import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
-import { rideService } from '../services/rideService';
+import { useEffect, useState, useRef } from "react";
+import { useParams } from "react-router-dom";
+import { supabase } from "../lib/supabase";
+import Map3D, { Map3DHandle } from "./Map3D";
+import { DriverTracker } from "../lib/driverTracker";
 
-interface ParentTrackingPageProps {
-  token: string;
+// ─── Tipos ────────────────────────────────────────────────────
+interface RideTrackingInfo {
+  id:           string;
+  status:       string;
+  studentName:  string;
+  driverId:     string | null;
+  destination:  [number, number] | null;
 }
 
-interface TrackingData {
-  session_id:     string;
-  contract_title: string;
-  driver_name:    string;
-  status:         string;
-  origin:         string;
-  destination:    string;
-  expires_at:     string;
-  driver_lat?:    number;
-  driver_lng?:    number;
-}
-
-const ParentTrackingPage: React.FC<ParentTrackingPageProps> = ({ token }) => {
-  const [data,    setData]    = useState<TrackingData | null>(null);
-  const [expired, setExpired] = useState(false);
+// ─── Componente ───────────────────────────────────────────────
+export default function ParentTrackingPage() {
+  const { token } = useParams<{ token: string }>();
+  
+  // Estados
+  const [ride,  setRide]  = useState<RideTrackingInfo | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Refs para instâncias persistentes
+  const mapRef     = useRef<Map3DHandle>(null);
+  const trackerRef = useRef<DriverTracker | null>(null);
+
+  // ── 1. Validar token e buscar dados da corrida ─────────────
   useEffect(() => {
-    let mounted = true;
-    let sessionChannel: any = null;
-    let rideChannel: any = null;
-    let driverLocUnsub: (() => void) | null = null;
+    if (!token) return;
 
-    const cleanupRide = () => {
-      if (rideChannel) { supabase.removeChannel(rideChannel); rideChannel = null; }
-      if (driverLocUnsub) { driverLocUnsub(); driverLocUnsub = null; }
-    };
+    const fetchRideData = async () => {
+      setLoading(true);
+      setError(null);
 
-    const handleSession = (session: any) => {
-      if (!mounted) return;
-      if (!session) { setExpired(true); setLoading(false); return; }
-      if (new Date(session.expires_at) < new Date()) { setExpired(true); setLoading(false); return; }
+      try {
+        // Chamada RPC que valida o token e a expiração (Segurança)
+        const { data, error: rpcErr } = await supabase.rpc("validate_tracking_token", {
+          p_token: token
+        });
 
-      const ride = (session as any).rides;
-      const contract = (session as any).contracts;
-      const driverName = ride?.profiles?.name ?? 'Motorista';
+        if (rpcErr || !data || data.length === 0) {
+          setError("Link de rastreio inválido ou expirado.");
+          return;
+        }
 
-      setData({
-        session_id:     session.id,
-        contract_title: contract?.title ?? 'Contrato Escolar',
-        driver_name:    driverName,
-        status:         ride?.status ?? session.status,
-        origin:         ride?.origin_address ?? '',
-        destination:    ride?.dest_address ?? '',
-        expires_at:     session.expires_at,
-        driver_lat:     ride?.driver_lat ?? undefined,
-        driver_lng:     ride?.driver_lng ?? undefined,
-      });
+        const info = data[0];
+        setRide({
+          id:           info.ride_id,
+          status:       info.status,
+          studentName:  info.student_name,
+          driverId:     info.driver_id,
+          destination:  info.dest_coords ? [info.dest_coords.lng, info.dest_coords.lat] : null,
+        });
 
-      setLoading(false);
-
-      // Subscrever updates da corrida específica
-      cleanupRide();
-      if (ride?.id) {
-        rideChannel = supabase.channel(`parent-tracking-ride:${ride.id}`)
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'rides', filter: `id=eq.${ride.id}` }, (p: any) => {
-            const updated = p.new as any;
-            setData(prev => prev ? ({
-              ...prev,
-              status: updated.status ?? prev.status,
-              origin: updated.origin_address ?? prev.origin,
-              destination: updated.dest_address ?? prev.destination,
-            }) : prev);
-
-            if (updated.driver_id && !driverLocUnsub) {
-              driverLocUnsub = rideService.subscribeToDriverLocation(updated.driver_id, (coords) => {
-                setData(prev => prev ? ({ ...prev, driver_lat: coords.lat, driver_lng: coords.lng }) : prev);
-              });
-            }
-
-            if (updated.status === 'completed' || updated.status === 'cancelled') {
-              cleanupRide();
-            }
-          })
-          .subscribe();
+      } catch (err) {
+        setError("Erro de ligação ao servidor.");
+      } finally {
+        setLoading(false);
       }
     };
 
-    (async () => {
-      const { data: session } = await supabase
-        .from('school_tracking_sessions')
-        .select(`
-          id, status, expires_at,
-          contracts ( title ),
-          rides (
-            id, status, origin_address, dest_address, driver_id,
-            profiles!rides_driver_id_fkey ( name )
-          )
-        `)
-        .eq('public_token', token)
-        .maybeSingle();
-
-      handleSession(session as any);
-
-      // Subscrever alterações na sessão (por token público)
-      sessionChannel = supabase.channel(`parent-tracking:${token}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'school_tracking_sessions', filter: `public_token=eq.${token}` }, (p: any) => {
-          handleSession(p.new);
-        })
-        .subscribe();
-    })();
-
-    return () => {
-      mounted = false;
-      if (sessionChannel) supabase.removeChannel(sessionChannel);
-      cleanupRide();
-    };
+    fetchRideData();
   }, [token]);
 
-  const loadSession = async () => {
-    const { data: session } = await supabase
-      .from('school_tracking_sessions')
-      .select(`
-        id, status, expires_at,
-        contracts ( title ),
-        rides (
-          status,
-          origin_address, dest_address,
-          driver_id,
-          profiles!rides_driver_id_fkey ( name )
-        )
-      `)
-      .eq('public_token', token)
-      .maybeSingle();
+  // ── 2. Subscrever localização em tempo real (Supabase) ─────
+  useEffect(() => {
+    if (!ride?.driverId) return;
 
-    if (!session) { setExpired(true); setLoading(false); return; }
-    if (new Date(session.expires_at) < new Date()) { setExpired(true); setLoading(false); return; }
+    // Criar canal de subscrição
+    const channel = supabase
+      .channel(`tracking_${ride.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event:  "UPDATE",
+          schema: "public",
+          table:  "driver_locations",
+          filter: `driver_id=eq.${ride.driverId}`,
+        },
+        (payload) => {
+          const newLoc = payload.new as { lat: number; lng: number; heading?: number };
+          if (trackerRef.current) {
+            trackerRef.current.updateLocation({
+              lng:     newLoc.lng,
+              lat:     newLoc.lat,
+              heading: newLoc.heading,
+            });
+          }
+        }
+      )
+      .subscribe();
 
-    const ride = (session as any).rides;
-    const contract = (session as any).contracts;
-    const driverName = ride?.profiles?.name ?? 'Motorista';
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [ride?.id, ride?.driverId]);
 
-    setData({
-      session_id:     session.id,
-      contract_title: contract?.title ?? 'Contrato Escolar',
-      driver_name:    driverName,
-      status:         ride?.status ?? session.status,
-      origin:         ride?.origin_address ?? '',
-      destination:    ride?.dest_address ?? '',
-      expires_at:     session.expires_at,
-    });
+  // ── 3. Inicializar Tracker quando o mapa estiver pronto ────
+  const handleMapReady = (map: mapboxgl.Map) => {
+    if (trackerRef.current) trackerRef.current.destroy();
+    
+    trackerRef.current = new DriverTracker(map);
 
-    setLoading(false);
+    // Focar no destino se existir
+    if (ride?.destination) {
+      map.flyTo({
+        center: ride.destination,
+        zoom:   14,
+        pitch:  45,
+        duration: 2000,
+      });
+    }
   };
 
+  // ── Renderização: Erro ──────────────────────────────────────
+  if (error) {
+    return (
+      <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center p-8 text-center">
+        <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mb-6">
+          <span className="text-4xl">🔒</span>
+        </div>
+        <h1 className="text-white text-2xl font-black mb-2">Acesso Restrito</h1>
+        <p className="text-white/40 max-w-xs">{error}</p>
+        <button 
+          onClick={() => window.location.reload()}
+          className="mt-8 px-8 py-3 bg-white/5 border border-white/10 rounded-full text-white/60 text-xs font-bold uppercase tracking-widest hover:bg-white/10 transition-all"
+        >
+          Tentar Novamente
+        </button>
+      </div>
+    );
+  }
+
+  // ── Renderização: Loading ───────────────────────────────────
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#050912] flex items-center justify-center">
+      <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center">
         <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+        <p className="text-white/40 text-[10px] font-black uppercase tracking-[0.3em] mt-6">Zenith Orbital Tracking</p>
       </div>
     );
   }
 
-  if (expired || !data) {
-    return (
-      <div className="min-h-screen bg-[#050912] flex flex-col items-center justify-center p-8 text-center">
-        <span className="text-5xl mb-6">🔒</span>
-        <h1 className="text-white font-black text-xl mb-3">Link expirado</h1>
-        <p className="text-white/40 text-sm">
-          Este link de rastreamento já expirou ou é inválido.
-          Pede ao motorista para gerar um novo link.
-        </p>
-      </div>
-    );
-  }
-
-  const statusLabel: Record<string, string> = {
-    searching:   '🔍 À procura de motorista',
-    accepted:    '✓ Motorista confirmado',
-    picking_up:  '🚗 A caminho da escola',
-    in_progress: '🚀 Em rota',
-    completed:   '✅ Chegou ao destino',
-    cancelled:   '❌ Corrida cancelada',
-  };
-
-  const isEnRoute = ['picking_up', 'in_progress'].includes(data.status);
-
+  // ── Renderização: UI de Rastreio ────────────────────────────
   return (
-    <div className="min-h-screen bg-[#050912] flex flex-col">
-      {/* Header */}
-      <div className="bg-[#0A0A0A] px-6 py-5 flex items-center gap-3 border-b border-white/5">
-        <div className="px-4 py-1.5 bg-primary rounded-full font-black text-sm text-white italic">
-          Zenith Ride
-        </div>
-        <div>
-          <p className="text-white font-black text-sm">{data.contract_title}</p>
-          <p className="text-white/30 text-[9px] font-bold uppercase tracking-widest">Rastreamento ao vivo</p>
-        </div>
-      </div>
+    <div className="w-screen h-screen relative bg-[#0B0B0B] overflow-hidden">
+      
+      {/* MAPA (Fundo) */}
+      <Map3D 
+        ref={mapRef}
+        mode="tracking"
+        onMapReady={handleMapReady}
+      />
 
-      {/* Status principal */}
-      <div className="p-6 flex-1 space-y-5">
-        {/* Status badge */}
-        <div className={`rounded-[2.5rem] p-5 ${
-          data.status === 'completed' ? 'bg-primary/10 border border-primary/30' :
-          data.status === 'cancelled' ? 'bg-red-900/50 border border-red-500/30' :
-          'bg-primary/8 border border-primary/20'
-        }`}>
-          <p className="text-white font-black text-xl text-center">
-            {statusLabel[data.status] ?? data.status}
-          </p>
-        </div>
-
-        {/* Info do motorista */}
-        <div className="bg-surface-container-low/5 rounded-[2rem] p-5 flex items-center gap-4">
-          <div className="w-14 h-14 bg-primary rounded-2xl flex items-center justify-center font-black text-white text-xl shrink-0">
-            {data.driver_name.charAt(0)}
-          </div>
-          <div>
-            <p className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">Motorista</p>
-            <p className="text-white font-black text-sm">{data.driver_name}</p>
-            <p className="text-white/40 text-[9px] font-bold">Zenith Ride · Motorista verificado</p>
-          </div>
-          {isEnRoute && (
-            <div className="ml-auto">
-              <div className="w-3 h-3 bg-primary rounded-full animate-pulse" />
-            </div>
-          )}
-        </div>
-
-        {/* Rota */}
-        {data.origin && (
-          <div className="bg-surface-container-low/5 rounded-[2rem] p-5 space-y-3">
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 rounded-full bg-primary shrink-0" />
-              <div>
-                <p className="text-[8px] font-black text-white/30 uppercase tracking-widest">Origem</p>
-                <p className="text-white text-sm font-bold">{data.origin}</p>
+      {/* OVERLAY: HUD de Informação */}
+      <div className="absolute top-0 left-0 right-0 p-6 pointer-events-none">
+        <div className="max-w-md mx-auto flex items-start justify-between">
+          
+          <div className="bg-[#0B0B0B]/80 backdrop-blur-2xl border border-white/10 p-5 rounded-[2.5rem] shadow-2xl pointer-events-auto animate-in fade-in slide-in-from-top-4 duration-700">
+            <div className="flex items-center gap-5">
+              <div className="w-14 h-14 bg-primary rounded-3xl flex items-center justify-center font-black text-white text-2xl shadow-lg shadow-primary/20">
+                {ride?.studentName?.charAt(0) || "Z"}
               </div>
-            </div>
-            <div className="border-l-2 border-dashed border-white/10 ml-1 pl-4 py-1">
-              <p className="text-[9px] text-white/20 font-bold">Em rota</p>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 rounded-full bg-red-400 shrink-0" />
               <div>
-                <p className="text-[8px] font-black text-white/30 uppercase tracking-widest">Destino</p>
-                <p className="text-white text-sm font-bold">{data.destination}</p>
+                <p className="text-[9px] font-black text-white/30 uppercase tracking-[0.2em] mb-1">Passageiro Escolar</p>
+                <h2 className="text-white font-black text-xl leading-none">{ride?.studentName || "Sincronizando..."}</h2>
+                <div className="mt-3 flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${ride?.status === "in_progress" ? "bg-green-500 animate-pulse" : "bg-primary"}`}></div>
+                  <p className="text-[10px] font-bold text-white/60 uppercase tracking-widest">
+                    {ride?.status?.replace("_", " ") || "Procurando..."}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
-        )}
 
-        {/* Expiração */}
-        <p className="text-center text-white/20 text-[9px] font-bold">
-          Link válido até {new Date(data.expires_at).toLocaleTimeString('pt-AO', { hour: '2-digit', minute: '2-digit' })}
-        </p>
+          <div className="bg-primary/95 px-5 py-2.5 rounded-full font-black text-[9px] text-white italic shadow-xl shadow-primary/30">
+            ZENITH LIVE
+          </div>
+        </div>
       </div>
+
+      {/* FOOTER: Status da Rede */}
+      <div className="absolute bottom-10 left-0 right-0 pointer-events-none flex flex-col items-center gap-2 opacity-30">
+        <div className="w-1 h-1 bg-green-500 rounded-full animate-ping" />
+        <p className="text-[8px] font-black text-white tracking-[0.6em] uppercase">Zenith Orbital Systems — Luanda, AO</p>
+      </div>
+
     </div>
   );
-};
-
-export default ParentTrackingPage;
+}

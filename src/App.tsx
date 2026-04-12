@@ -6,7 +6,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, Suspense, useCallback } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useRide } from './hooks/useRide';
 import Layout from './components/Layout';
@@ -25,6 +25,52 @@ import ZonePriceMap from './components/ZonePriceMap';
 import ParentTrackingPage from './components/ParentTrackingPage';
 import { geminiService } from './services/geminiService';
 import Toast from './components/Toast';
+import { MapSingleton } from "./lib/mapInstance";
+
+// ─── TAB RESIZE HOOK ─────────────────────────────────────────
+function useMapTabResize() {
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            MapSingleton.resize();
+          });
+        });
+      }
+    };
+    const handleFocus = () => MapSingleton.resize();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, []);
+}
+
+// ─── TAB AWARE PANEL ─────────────────────────────────────────
+interface TabAwarePanelProps {
+  children: React.ReactNode;
+  activeTab: string;
+  thisTab:   string;
+}
+function TabAwarePanel({ children, activeTab, thisTab }: TabAwarePanelProps) {
+  const isActive = activeTab === thisTab;
+  return (
+    <div style={{
+      position:       isActive ? "relative" : "absolute",
+      inset:          isActive ? "auto" : 0,
+      visibility:     isActive ? "visible" : "hidden",
+      pointerEvents:  isActive ? "auto"    : "none",
+      width:          "100%",
+      height:         "100%",
+      zIndex:         isActive ? 1 : 0,
+    }}>
+      {children}
+    </div>
+  );
+}
 
 // =============================================================================
 // LAZY COMPONENTS (FASE 2)
@@ -127,6 +173,9 @@ const AppInner: React.FC = () => {
   const [dataSaver,   setDataSaver]   = useState(false);
   const [kazeSilent,  setKazeSilent]  = useState(false);
   const [lastCommand, setLastCommand] = useState<AutonomousCommand | null>(null);
+  const [activeTab,   setActiveTab]   = useState('home');
+
+  useMapTabResize();
 
   // Vigilante Engine — só para admins, a cada 2 minutos
   useEffect(() => {
@@ -154,6 +203,7 @@ const AppInner: React.FC = () => {
   }
 
   const kazeActive = !kazeSilent;
+  const location = useLocation();
 
   return (
     <Routes>
@@ -179,6 +229,22 @@ const AppInner: React.FC = () => {
             userName={profile?.name}
             userRating={profile?.rating}
           >
+            {role === UserRole.PASSENGER && (
+              <TabAwarePanel activeTab={activeTab} thisTab="home">
+                <PassengerHome
+                  ride={ride}
+                  auction={auction}
+                  userId={dbUser?.id ?? ''}
+                  onStartAuction={startAuction}
+                  onSelectDriver={selectDriver}
+                  onCancelAuction={cancelAuction}
+                  onRequestRide={requestRide}
+                  onCancelRide={cancelRide}
+                  dataSaver={dataSaver}
+                />
+              </TabAwarePanel>
+            )}
+
             <Routes>
               {role === UserRole.ADMIN ? (
                 <Route path="*" element={
@@ -189,19 +255,7 @@ const AppInner: React.FC = () => {
               ) : (
                 <>
                   <Route path="/" element={
-                    role === UserRole.PASSENGER ? (
-                      <PassengerHome
-                        ride={ride}
-                        auction={auction}
-                        userId={dbUser?.id ?? ''}
-                        onStartAuction={startAuction}
-                        onSelectDriver={selectDriver}
-                        onCancelAuction={cancelAuction}
-                        onRequestRide={requestRide}
-                        onCancelRide={cancelRide}
-                        dataSaver={dataSaver}
-                      />
-                    ) : (
+                    role === UserRole.PASSENGER ? null : (
                       <DriverHome
                         ride={ride}
                         onAcceptRide={acceptRide}
