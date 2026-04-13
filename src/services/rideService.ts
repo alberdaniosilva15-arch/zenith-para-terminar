@@ -68,16 +68,20 @@ function parseSupabasePoint(val: unknown): LatLng | null {
   return null;
 }
 
-// ─── Haversine (FIX 3 — distância real entre dois pontos) ───────────────────
-function haversineMeters(a: LatLng, b: LatLng): number {
-  const R    = 6_371_000;
-  const dLat = (b.lat - a.lat) * Math.PI / 180;
-  const dLng = (b.lng - a.lng) * Math.PI / 180;
-  const s    = Math.sin(dLat / 2) ** 2 +
-               Math.cos(a.lat * Math.PI / 180) *
-               Math.cos(b.lat * Math.PI / 180) *
-               Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+// Calcula distância em metros entre dois pontos (Haversine)
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000; // Raio da Terra em metros
+  const φ1 = lat1 * Math.PI / 180;
+  const φ2 = lat2 * Math.PI / 180;
+  const Δφ = (lat2 - lat1) * Math.PI / 180;
+  const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  
+  return R * c;
 }
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -115,7 +119,12 @@ class RideService {
 
   // FIX 4: Throttle de GPS — evita flood ao Supabase
   // Chave: driverId → { lastSentAt, lastH3 }
-  private locationThrottle = new Map<string, { lastSentAt: number; lastH3: string }>();
+  private locationThrottle = new Map<string, {
+    lastSentAt: number;
+    lastH3:     string;
+    lastLat:    number;
+    lastLng:    number;
+  }>();
   private readonly GPS_THROTTLE_MS   = 3_000; // 3 segundos mínimo entre updates
   private readonly GPS_MIN_DELTA_M   = 15;    // só envia se andou > 15m (evita drift)
 
@@ -296,7 +305,7 @@ class RideService {
         let distance_m = 3000; // fallback quando sem coords
         if (loc?.location) {
           const coords = parseSupabasePoint(loc.location);
-          if (coords) distance_m = haversineMeters(pickupCoords, coords);
+          if (coords) distance_m = haversineMeters(pickupCoords.lat, pickupCoords.lng, coords.lat, coords.lng);
         }
 
         return {
@@ -706,18 +715,26 @@ class RideService {
       if (elapsed < this.GPS_THROTTLE_MS) return; // Ainda não passaram 3s
     }
 
-    // Verificar se andou distância mínima (usando Haversine rápido)
     if (lastState) {
-      // Se o hex não mudou e não passou tempo suficiente: skip
-      // (Hex igual mas tempo passou → forçar update de heading)
       const hexChanged = newH3 !== lastState.lastH3;
-      if (!hexChanged && (now - lastState.lastSentAt) < this.GPS_THROTTLE_MS * 3) {
+      const distMoved = haversineMeters(
+        lastState.lastLat, lastState.lastLng,
+        coords.lat, coords.lng
+      );
+      
+      // Threshold 20m: ignora GPS drift dentro do mesmo hex
+      if (!hexChanged && distMoved < 20 && (now - lastState.lastSentAt) < this.GPS_THROTTLE_MS * 3) {
         return;
       }
     }
 
     // Actualizar throttle state
-    this.locationThrottle.set(driverId, { lastSentAt: now, lastH3: newH3 });
+    this.locationThrottle.set(driverId, {
+      lastSentAt: now,
+      lastH3:     newH3,
+      lastLat:    coords.lat,
+      lastLng:    coords.lng,
+    });
 
     const h3_res7 = latLngToCell(coords.lat, coords.lng, H3_RES_ZONE);
 
@@ -807,7 +824,7 @@ class RideService {
   }
 
   private _localPriceEstimate(origin: LatLng, dest: LatLng): PriceEstimate {
-    const distanceKm  = Math.max(0.5, haversineMeters(origin, dest) / 1000);
+    const distanceKm  = Math.max(0.5, haversineMeters(origin.lat, origin.lng, dest.lat, dest.lng) / 1000);
     const durationMin = Math.ceil((distanceKm / 25) * 60);
     const base_kz     = 150;
     const per_km_kz   = Math.ceil(distanceKm * 200);
@@ -858,7 +875,7 @@ export const rideService = new RideService();
 export async function checkRouteDeviation(
   rideId: string, currentCoords: LatLng, destCoords: LatLng, maxDeviationKm = 2
 ): Promise<{ deviated: boolean; deviationKm: number }> {
-  const deviationKm = haversineMeters(currentCoords, destCoords) / 1000;
+  const deviationKm = haversineMeters(currentCoords.lat, currentCoords.lng, destCoords.lat, destCoords.lng) / 1000;
   if (deviationKm > maxDeviationKm) {
     try {
       await supabase.from('route_deviation_alerts').insert({

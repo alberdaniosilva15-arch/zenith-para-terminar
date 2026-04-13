@@ -20,6 +20,10 @@ const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
 const H3_RES_DRIVER = 9; // ~150m
 const H3_RES_ZONE   = 7; // ~5km
 
+// Zenith Ride - Configurações
+const LUANDA_SPEED_M_PER_MIN = 250;  // 15 km/h em Luanda
+const DRIVER_COOLDOWN_S = 30;         // Cooldown entre notificações
+
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, {
@@ -90,7 +94,7 @@ Deno.serve(async (req: Request) => {
 
       const { data: h3Drivers, error: h3Err } = await supabaseAdmin.rpc(
         'find_drivers_h3',
-        { p_h3_indexes: hexes, p_limit: 8 }
+        { p_h3_indexes: hexes, p_limit: 8, p_cooldown_s: DRIVER_COOLDOWN_S }
       );
 
       if (h3Err) {
@@ -100,12 +104,15 @@ Deno.serve(async (req: Request) => {
 
       if (h3Drivers && h3Drivers.length > 0) {
         drivers = (h3Drivers as RawDriver[]).map(d => ({
-          driver_id:   d.driver_id,
-          driver_name: d.driver_name,
-          rating:      typeof d.rating === 'number' ? d.rating : 5.0,
-          distance_m:  Math.round(d.distance_m),
-          eta_min:     Math.ceil(d.distance_m / 400),
-          _score:      (d.distance_m * 0.5) + ((5 - (d.rating ?? 5)) * 500 * 0.3) + 20,
+          driver_id:           d.driver_id,
+          driver_name:         d.driver_name,
+          rating:              typeof d.rating === 'number' ? d.rating : 5.0,
+          distance_m:          Math.round(d.distance_m),
+          eta_min:             Math.ceil(d.distance_m / LUANDA_SPEED_M_PER_MIN),
+          acceptance_rate:     d.acceptance_rate     ?? 0.85,
+          cancel_rate:         d.cancel_rate         ?? 0.05,
+          avg_response_time_s: d.avg_response_time_s ?? 8.0,
+          _score:              computeScore(d),
         }));
         console.log(`[match-driver] ${drivers.length} motoristas em k=${k}`);
         break;
@@ -133,12 +140,15 @@ Deno.serve(async (req: Request) => {
       }
 
       drivers = (pgDrivers as RawDriver[]).map(d => ({
-        driver_id:   d.driver_id,
-        driver_name: d.driver_name,
-        rating:      d.rating ?? 5,
-        distance_m:  Math.round(d.distance_m),
-        eta_min:     Math.ceil(d.distance_m / 400),
-        _score:      (d.distance_m * 0.5) + ((5 - (d.rating ?? 5)) * 500 * 0.3) + 20,
+        driver_id:           d.driver_id,
+        driver_name:         d.driver_name,
+        rating:              d.rating ?? 5,
+        distance_m:          Math.round(d.distance_m),
+        eta_min:             Math.ceil(d.distance_m / LUANDA_SPEED_M_PER_MIN),
+        acceptance_rate:     0.85,
+        cancel_rate:         0.05,
+        avg_response_time_s: 8.0,
+        _score:              computeScore(d),
       }));
     }
 
@@ -211,13 +221,30 @@ Deno.serve(async (req: Request) => {
   }
 });
 
+// Score v2 - menor = melhor motorista
+function computeScore(d: RawDriver): number {
+  const rating     = d.rating              ?? 5.0;
+  const acceptance = d.acceptance_rate     ?? 0.85;
+  const cancel     = d.cancel_rate         ?? 0.05;
+  const response   = d.avg_response_time_s ?? 8.0;
+
+  return (d.distance_m        * 0.40)
+       + ((5 - rating)        * 400  * 0.20)
+       + ((1 - acceptance)    * 1000 * 0.20)
+       + (cancel              * 2000 * 0.15)
+       + (response            * 8    * 0.05);
+}
+
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 interface RawDriver {
-  driver_id:   string;
-  driver_name: string;
-  rating:      number;
-  distance_m:  number;
-  heading?:    number | null;
+  driver_id:            string;
+  driver_name:          string;
+  rating:               number;
+  distance_m:           number;
+  heading?:             number | null;
+  acceptance_rate?:     number;
+  cancel_rate?:         number;
+  avg_response_time_s?: number;
 }
 
 interface MatchedDriver {
