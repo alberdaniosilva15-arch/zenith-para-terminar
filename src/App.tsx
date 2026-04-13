@@ -3,14 +3,16 @@
 // FIXES v3.1:
 //   1. Ecrã "a finalizar registo" agora tem botão Sair + timeout de 15s
 //   2. Se profile não carregar em 15s, mostra opções de diagnóstico
+//   3. CORREÇÃO BUG 1: Routes aninhado removido — agora há apenas UM Routes dentro de Layout
+//   4. CORREÇÃO BUG 8: useLocation removido das importações (não era usado)
 // =============================================================================
 
 import React, { useState, useEffect, Suspense, useCallback } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useRide } from './hooks/useRide';
 import Layout from './components/Layout';
-import { UserRole, RideStatus, TabType, AutonomousCommand } from './types';
+import { UserRole, TabType, AutonomousCommand } from './types';
 import PassengerHome from './components/PassengerHome';
 import DriverHome from './components/DriverHome';
 import RidesHistory from './components/RidesHistory';
@@ -52,8 +54,8 @@ function useMapTabResize() {
 // ─── TAB AWARE PANEL ─────────────────────────────────────────
 interface TabAwarePanelProps {
   children: React.ReactNode;
-  activeTab: string;
-  thisTab:   string;
+  activeTab: TabType;
+  thisTab:   TabType;
 }
 function TabAwarePanel({ children, activeTab, thisTab }: TabAwarePanelProps) {
   const isActive = activeTab === thisTab;
@@ -173,7 +175,7 @@ const AppInner: React.FC = () => {
   const [dataSaver,   setDataSaver]   = useState(false);
   const [kazeSilent,  setKazeSilent]  = useState(false);
   const [lastCommand, setLastCommand] = useState<AutonomousCommand | null>(null);
-  const [activeTab,   setActiveTab]   = useState('home');
+  const [activeTab,   setActiveTab]   = useState<TabType>('home');
 
   useMapTabResize();
 
@@ -191,7 +193,7 @@ const AppInner: React.FC = () => {
     };
 
     runVigilante();
-  }, [role, dbUser, ride.status]);
+  }, [role, dbUser?.id]);
 
   if (authLoading) {
     return (
@@ -203,7 +205,6 @@ const AppInner: React.FC = () => {
   }
 
   const kazeActive = !kazeSilent;
-  const location = useLocation();
 
   return (
     <Routes>
@@ -229,53 +230,49 @@ const AppInner: React.FC = () => {
             userName={profile?.name}
             userRating={profile?.rating}
           >
-            {role === UserRole.PASSENGER && (
-              <TabAwarePanel activeTab={activeTab} thisTab="home">
-                <PassengerHome
-                  ride={ride}
-                  auction={auction}
-                  userId={dbUser?.id ?? ''}
-                  onStartAuction={startAuction}
-                  onSelectDriver={selectDriver}
-                  onCancelAuction={cancelAuction}
-                  onRequestRide={requestRide}
-                  onCancelRide={cancelRide}
-                  dataSaver={dataSaver}
-                />
-              </TabAwarePanel>
-            )}
-
-            <Routes>
-              {role === UserRole.ADMIN ? (
-                <Route path="*" element={
-                  <Suspense fallback={<div className="flex items-center justify-center p-8 text-white"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>}>
-                    <AdminDashboard lastCommand={lastCommand} />
-                  </Suspense>
-                } />
-              ) : (
-                <>
+            {role === UserRole.ADMIN ? (
+              <Suspense fallback={<div className="flex items-center justify-center p-8 text-white"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>}>
+                <AdminDashboard lastCommand={lastCommand} />
+              </Suspense>
+            ) : (
+              <Routes>
+                {role === UserRole.PASSENGER ? (
                   <Route path="/" element={
-                    role === UserRole.PASSENGER ? null : (
-                      <DriverHome
+                    <TabAwarePanel activeTab={activeTab} thisTab="home">
+                      <PassengerHome
                         ride={ride}
-                        onAcceptRide={acceptRide}
-                        onConfirmRide={confirmRide}
-                        onDeclineRide={declineRide}
-                        onAdvanceStatus={advanceStatus}
-                        driverId={dbUser?.id ?? ''}
+                        auction={auction}
+                        userId={dbUser?.id ?? ''}
+                        onStartAuction={startAuction}
+                        onSelectDriver={selectDriver}
+                        onCancelAuction={cancelAuction}
+                        onRequestRide={requestRide}
+                        onCancelRide={cancelRide}
+                        dataSaver={dataSaver}
                       />
-                    )
+                    </TabAwarePanel>
                   } />
-                  <Route path="/rides" element={<RidesHistory userId={dbUser?.id ?? ''} />} />
-                  <Route path="/wallet" element={<Wallet userId={dbUser?.id ?? ''} />} />
-                  <Route path="/profile" element={dbUser ? <Profile dbUser={dbUser} profile={profile} onSignOut={signOut} /> : <></>} />
-                  <Route path="/social" element={<Suspense fallback={<div className="flex justify-center p-4 text-white/50"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}><SocialFeed userId={dbUser?.id ?? ''} userName={profile?.name ?? ''} role={role} /></Suspense>} />
-                  <Route path="/contrato" element={<Contract />} />
-                  <Route path="/precos" element={<ZonePriceMap />} />
-                  <Route path="*" element={<Navigate to="/" replace />} />
-                </>
-              )}
-            </Routes>
+                ) : (
+                  <Route path="/" element={
+                    <DriverHome
+                      ride={ride}
+                      onAcceptRide={acceptRide}
+                      onConfirmRide={confirmRide}
+                      onDeclineRide={declineRide}
+                      onAdvanceStatus={advanceStatus}
+                      driverId={dbUser?.id ?? ''}
+                    />
+                  } />
+                )}
+                <Route path="/rides" element={<RidesHistory userId={dbUser?.id ?? ''} />} />
+                <Route path="/wallet" element={<Wallet userId={dbUser?.id ?? ''} />} />
+                <Route path="/profile" element={dbUser ? <Profile dbUser={dbUser} profile={profile} onSignOut={signOut} /> : <></>} />
+                <Route path="/social" element={<Suspense fallback={<div className="flex justify-center p-4 text-white/50"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}><SocialFeed userId={dbUser?.id ?? ''} userName={profile?.name ?? ''} role={role} /></Suspense>} />
+                <Route path="/contrato" element={<Contract />} />
+                <Route path="/precos" element={<ZonePriceMap />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            )}
 
             {kazeActive && (
               <KazeMascot
@@ -301,13 +298,33 @@ const AppInner: React.FC = () => {
 };
 
 // =============================================================================
+// FULL PAGE SPINNER — componente auxiliar
+// =============================================================================
+function FullPageSpinner({ label = 'A carregar…' }: { label?: string }) {
+  return (
+    <div className="fixed inset-0 flex flex-col items-center justify-center bg-background gap-3">
+      <div className="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin" />
+      <p className="text-sm text-muted-foreground">{label}</p>
+    </div>
+  );
+}
+
+// =============================================================================
 // APP ROOT
 // =============================================================================
 const App: React.FC = () => {
   // v3.0: rota pública /track/:token — sem AuthProvider
   const pathMatch = window.location.pathname.match(/^\/track\/([0-9a-f-]{36})$/);
+  
+  // ✅ BUG #2 CORRIGIDO: ParentTrackingPage envolvido em BrowserRouter
   if (pathMatch) {
-    return <ParentTrackingPage token={pathMatch[1]} />;
+    return (
+      <BrowserRouter>
+        <Suspense fallback={<FullPageSpinner label="A carregar rastreamento…" />}>
+          <ParentTrackingPage />
+        </Suspense>
+      </BrowserRouter>
+    );
   }
 
   // Envolver com BrowserRouter de forma segura para migração progressiva

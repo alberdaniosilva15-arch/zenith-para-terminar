@@ -10,7 +10,6 @@
 
 import type { LatLng, LocationResult } from '../types';
 
-const MAPS_API_KEY   = import.meta.env.VITE_GOOGLE_MAPS_KEY as string | undefined;
 const MAPBOX_TOKEN   = import.meta.env.VITE_MAPBOX_TOKEN   as string | undefined;
 
 // Coordenadas reais dos bairros de Luanda (cache estática para offline / resultados rápidos)
@@ -151,23 +150,7 @@ export const mapService = {
       } catch { /* fallthrough */ }
     }
 
-    // 3. Google Maps como último recurso
-    if (!MAPS_API_KEY) return null;
-    try {
-      const query = encodeURIComponent(`${address}, Luanda, Angola`);
-      const url   = `https://maps.googleapis.com/maps/api/geocode/json?address=${query}&key=${MAPS_API_KEY}&region=ao&language=pt`;
-      const res   = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data  = await res.json();
-      if (data.status !== 'OK' || !data.results?.length) return null;
-      const { lat, lng } = data.results[0].geometry.location;
-      const coords: LatLng = { lat, lng };
-      geocodeCache.set(cacheKey, coords);
-      return coords;
-    } catch (err) {
-      console.error('[mapService.geocodeAddress] Erro:', err);
-      return null;
-    }
+    return null;
   },
 
   // ── reverseGeocode ──────────────────────────────────────────────────────────
@@ -178,27 +161,7 @@ export const mapService = {
       if (name) return name;
     }
 
-    // 2. Google Maps como fallback
-    if (MAPS_API_KEY) {
-      try {
-        const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.lat},${coords.lng}&key=${MAPS_API_KEY}&language=pt`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        if (data.status === 'OK' && data.results?.length) {
-          const result =
-            data.results.find((r: { types: string[] }) => r.types.includes('route'))
-            ?? data.results.find((r: { types: string[] }) => r.types.includes('neighborhood'))
-            ?? data.results.find((r: { types: string[] }) => r.types.includes('sublocality'))
-            ?? data.results[0];
-          const formatted: string = result.formatted_address ?? '';
-          const cleaned = formatted.replace(/, Angola$/, '').replace(/Angola,?\s*/g, '').trim();
-          if (cleaned) return cleaned;
-        }
-      } catch { /* fallthrough */ }
-    }
-
-    // 3. Fallback: bairro mais próximo da lista estática
+    // 2. Fallback: bairro mais próximo da lista estática
     return nearestNeighbourhood(coords);
   },
 

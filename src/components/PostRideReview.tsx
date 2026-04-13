@@ -36,24 +36,29 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!postRide.active) return;
+    // Reset de estado local a cada nova avaliação
+    setStep('loading');
+    setScore(0);
+    setComment('');
+    setKazeText('');
+
     (async () => {
-      setStep('loading');
       try {
         const res = await geminiService.callPostRideReview({
-          driver_name:  driverName ?? 'o motorista',
-          price_kz:     priceKz ?? 0,
-          distance_km:  postRide.distanceKm ?? 0,
+          driver_name:  postRide.driverName  ?? 'o motorista',
+          price_kz:     postRide.priceKz     ?? 0,
+          distance_km:  postRide.distanceKm  ?? 0,
           duration_min: postRide.durationMin ?? 0,
           step:         'opening',
         });
         setKazeText(res.text);
         setStep('opening');
       } catch {
-        setKazeText(`Como foi a corrida com ${driverName}?`);
+        setKazeText(`Como foi a corrida com ${postRide.driverName ?? 'o motorista'}?`);
         setStep('opening');
       }
     })();
-  }, [postRide.active]);
+  }, [postRide.active, postRide.rideId]);
 
   // ------------------------------------------------------------------
   // Step 2: Kaze pede a classificação

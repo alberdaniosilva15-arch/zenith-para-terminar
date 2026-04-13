@@ -1,6 +1,7 @@
 import jsPDF from 'jspdf';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
+import { Capacitor } from '@capacitor/core';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
@@ -23,6 +24,20 @@ export interface RideReceiptData {
   priceKz:         number;
   trafficFactor:   number;   // >1.3 = engarrafamento
   vehicleType:     'standard' | 'moto' | 'comfort' | 'xl';
+}
+
+export interface ContractData {
+  id: string;
+  title: string;
+  contract_type: 'school' | 'family' | 'corporate';
+  address: string;
+  time_start: string;
+  time_end: string;
+  km_accumulated: number;
+  bonus_kz: number;
+  route_deviation_alert: boolean;
+  max_deviation_km: number;
+  parent_monitoring: boolean;
 }
 
 // ── Busca imagem do mapa como base64 ────────────────────────────────────────
@@ -168,7 +183,7 @@ export async function buildReceiptPDF(data: RideReceiptData): Promise<string> {
     { label: 'DISTÂNCIA',   value: `${data.distanceKm.toFixed(1)} km` },
     { label: 'DURAÇÃO',     value: `${data.durationMin} min` },
     { label: 'VEÍCULO',     value: data.vehicleType === 'moto' ? 'Moto-táxi' : data.vehicleType.charAt(0).toUpperCase() + data.vehicleType.slice(1) },
-    { label: 'TRÁFEGO',     value: hasTraffic ? `×${data.trafficFactor.toFixed(1)} 🚦` : 'Normal ✓' },
+    { label: 'TRÁFEGO',     value: hasTraffic ? `×${data.trafficFactor.toFixed(1)} \uD83D\uDED1` : 'Normal \u2713' },
   ];
   const colW = (W - MARGIN * 2) / 4;
 
@@ -179,8 +194,8 @@ export async function buildReceiptPDF(data: RideReceiptData): Promise<string> {
     doc.setTextColor(140, 140, 140);
     doc.text(col.label, cx, y + 8, { align: 'center' });
     doc.setFontSize(9.5);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(hasTraffic && col.label === 'TRÁFEGO' ? 200 : 20, 20, 20);
+    if (hasTraffic && col.label === 'TRÁFEGO') doc.setTextColor(200, 0, 0);
+    else doc.setTextColor(20, 20, 20);
     doc.text(col.value, cx, y + 18, { align: 'center' });
   });
   y += 33;
@@ -201,7 +216,7 @@ export async function buildReceiptPDF(data: RideReceiptData): Promise<string> {
     doc.setFontSize(8.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(50, 50, 50);
-    doc.text(`• ${t.label}`, MARGIN + 2, y);
+    doc.text(`\u2022 ${t.label}`, MARGIN + 2, y);
     doc.setTextColor(120, 120, 120);
     doc.text(fmtTime(t.iso), W - MARGIN, y, { align: 'right' });
     y += 6;
@@ -229,48 +244,158 @@ export async function buildReceiptPDF(data: RideReceiptData): Promise<string> {
   doc.setFontSize(6.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(180, 180, 180);
-  doc.text('Zenith Ride · Mobilidade Urbana Angola · zenithride.ao', W / 2, y, { align: 'center' });
-  doc.text('Este documento é válido como comprovativo de serviço prestado.', W / 2, y + 4, { align: 'center' });
+  doc.text('Zenith Ride \u00B7 Mobilidade Urbana Angola \u00B7 zenithride.ao', W / 2, y, { align: 'center' });
+  doc.text('Este documento \u00E9 v\u00E1lido como comprovativo de servi\u00E7o prestado.', W / 2, y + 4, { align: 'center' });
 
   // Devolve base64 (sem o prefixo "data:application/pdf;base64,")
   return doc.output('datauristring').split(',')[1];
 }
 
-// ── Guarda no telemóvel (pasta Documentos) ──────────────────────────────────
-export async function saveReceiptToPhone(
-  base64: string,
-  rideId: string
-): Promise<string> {
-  const fileName = `zenith_recibo_${rideId.substring(0, 8)}.pdf`;
-  const result = await Filesystem.writeFile({
-    path:        fileName,
-    data:        base64,
-    directory:   Directory.Documents,
-    encoding:    'base64' as any,
-    recursive:   true,
-  });
-  return result.uri;
+// ── Gera o PDF de Contrato ──────────────────────────────────────────────────
+export async function buildContractPDF(c: ContractData): Promise<string> {
+  const doc  = new jsPDF({ unit: 'mm', format: 'a4' });
+  const W    = 210;
+  const M    = 15;
+  let y      = 0;
+
+  doc.setFillColor(10, 10, 10);
+  doc.rect(0, 0, W, 40, 'F');
+  doc.setFontSize(22); doc.setFont('helvetica', 'bold');
+  doc.setTextColor(255, 255, 255);
+  doc.text('ZENITH RIDE', M, 17);
+  doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+  doc.setTextColor(180, 180, 180);
+  doc.text('CONTRATO DE SERVI\u00C7O', M, 25);
+  doc.text(new Date().toLocaleDateString('pt-AO'), W - M, 25, { align: 'right' });
+
+  y = 52;
+  doc.setFontSize(13); doc.setFont('helvetica', 'bold');
+  doc.setTextColor(20, 20, 20);
+  doc.text(c.title, M, y); y += 8;
+
+  doc.setFontSize(8); doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 100, 100);
+  const typeMap = { school: 'Escolar', family: 'Familiar', corporate: 'Empresarial' };
+  const type = typeMap[c.contract_type] || 'Servi\u00E7o';
+  doc.text(`Tipo: Contrato ${type}`, M, y); y += 6;
+  doc.text(`Morada: ${c.address}`, M, y); y += 6;
+  doc.text(`Hor\u00E1rio: ${c.time_start} \u2014 ${c.time_end}`, M, y); y += 6;
+  doc.text(`Km acumulados: ${c.km_accumulated.toFixed(1)} km`, M, y); y += 6;
+  doc.text(`B\u00F3nus dispon\u00EDvel: ${c.bonus_kz.toFixed(0)} AOA`, M, y); y += 6;
+  if (c.route_deviation_alert) {
+    doc.text(`Alerta de desvio activo (m\u00E1x. ${c.max_deviation_km} km)`, M, y); y += 6;
+  }
+  if (c.parent_monitoring) {
+    y += 3;
+    doc.setFillColor(240, 250, 245);
+    doc.roundedRect(M, y, W - M * 2, 14, 2, 2, 'F');
+    doc.setTextColor(10, 100, 60);
+    doc.setFontSize(8); doc.setFont('helvetica', 'bold');
+    doc.text('Monitoriza\u00E7\u00E3o parental activa', M + 4, y + 6);
+    doc.setFontSize(7); doc.setFont('helvetica', 'normal');
+    doc.text('Usa o bot\u00E3o "Partilhar Rastreio" para enviar o link em tempo real.', M + 4, y + 11);
+    y += 20;
+  }
+
+  y = 255;
+  doc.setFontSize(6.5); doc.setTextColor(180, 180, 180);
+  doc.text('Zenith Ride \u00B7 Mobilidade Urbana Angola', W / 2, y, { align: 'center' });
+
+  return doc.output('datauristring').split(',')[1];
 }
 
-// ── Partilha o ficheiro (WhatsApp, Drive, etc.) ──────────────────────────────
+// ── Generic Save File ───────────────────────────────────────────────────────
+export async function saveFile(base64: string, fileName: string, directory: any = Directory.Documents): Promise<string> {
+  if (Capacitor.isNativePlatform()) {
+    const result = await Filesystem.writeFile({
+      path:      fileName,
+      data:      base64,
+      directory,
+      encoding:  'base64' as any,
+      recursive: true,
+    });
+    return result.uri;
+  }
+
+  const byteChars = atob(base64);
+  const byteArray = new Uint8Array(byteChars.length);
+  for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+  const blob = new Blob([byteArray], { type: 'application/pdf' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = fileName; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  return url;
+}
+
+// ── Generic Share File ──────────────────────────────────────────────────────
+export async function shareFile(uriOrBase64: string, fileName: string, options: { title: string; text?: string; dialogTitle?: string }): Promise<void> {
+  if (Capacitor.isNativePlatform()) {
+    await Share.share({
+      title:       options.title,
+      text:        options.text,
+      url:          uriOrBase64,
+      dialogTitle: options.dialogTitle ?? 'Partilhar ficheiro',
+    });
+  } else {
+    if (navigator.share) {
+      try {
+        const base64Data = uriOrBase64.includes(',') ? uriOrBase64.split(',')[1] : uriOrBase64;
+        const byteChars = atob(base64Data);
+        const byteArray = new Uint8Array(byteChars.length);
+        for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+        const file = new File([byteArray], fileName, { type: 'application/pdf' });
+        await navigator.share({
+          title: options.title,
+          text:  options.text,
+          files: [file],
+        });
+      } catch {
+        console.warn('Web Share API falhou ou não suporta ficheiros.');
+      }
+    }
+  }
+}
+
+// ── Guarda no telemóvel (específico para recibos) ───────────────────────────
+export async function saveReceiptToPhone(base64: string, rideId: string): Promise<string> {
+  const fileName = `zenith_recibo_${rideId.substring(0, 8)}.pdf`;
+  return saveFile(base64, fileName, Directory.Documents);
+}
+
+// ── Partilha o ficheiro (específico para recibos) ───────────────────────────
 export async function shareReceipt(uri: string, rideId: string): Promise<void> {
-  await Share.share({
-    title:         'Recibo Zenith Ride',
-    text:          `Recibo da corrida #${rideId.substring(0, 8).toUpperCase()} — Zenith Ride`,
-    url:           uri,
-    dialogTitle:   'Partilhar ou guardar recibo',
+  return shareFile(uri, `zenith_recibo_${rideId.substring(0, 8)}.pdf`, {
+    title: 'Recibo Zenith Ride',
+    text:  `Recibo da corrida #${rideId.substring(0, 8).toUpperCase()} \u2014 Zenith Ride`,
+    dialogTitle: 'Partilhar ou guardar recibo',
   });
 }
 
 // ── Função principal: gera + guarda + partilha em 1 passo ────────────────────
+// ✅ BUG #10 CORRIGIDO: paths nativo e web completamente separados
 export async function generateAndShareReceipt(
   data: RideReceiptData,
   mode: 'save' | 'share'
 ): Promise<void> {
   const base64 = await buildReceiptPDF(data);
-  const uri    = await saveReceiptToPhone(base64, data.rideId);
+  const fileName = `zenith_recibo_${data.rideId.substring(0, 8)}.pdf`;
 
   if (mode === 'share') {
-    await shareReceipt(uri, data.rideId);
+    if (Capacitor.isNativePlatform()) {
+      // Nativo: gravar em cache temporária e partilhar URI
+      const uri = await saveFile(base64, fileName, Directory.Cache);
+      await shareReceipt(uri, data.rideId);
+    } else {
+      // ✅ BUG #10 CORRIGIDO: Web — partilhar base64 directamente,
+      // SEM saveReceiptToPhone (que fazia download automático indesejado)
+      await shareFile(base64, fileName, {
+        title: 'Recibo Zenith Ride',
+        text:  `Recibo da corrida #${data.rideId.substring(0, 8).toUpperCase()} — ${data.priceKz.toLocaleString('pt-AO')} Kz`,
+      });
+    }
+  } else {
+    // Apenas guardar
+    await saveReceiptToPhone(base64, data.rideId);
   }
 }

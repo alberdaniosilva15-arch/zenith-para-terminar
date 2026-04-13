@@ -41,7 +41,7 @@ export default {
         '2xl':   '1rem',
         '3xl':   '1.5rem',
         '4xl':   '2rem',
-        full:    '0.75rem',
+        full:    '9999px',
       },
       boxShadow: {
         gold:  '0 0 20px rgba(230,195,100,0.2)',

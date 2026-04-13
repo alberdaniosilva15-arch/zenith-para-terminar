@@ -41,21 +41,28 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Preview imediato
+    // 1. Validar extensão ANTES de qualquer leitura
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
+      alert('Apenas JPG, PNG ou WEBP são permitidos.'); // Idealmente usando um toast
+      return;
+    }
+
+    // 2. Validar tamanho (5MB máximo)
+    const MAX_MB = 5;
+    if (file.size > MAX_MB * 1024 * 1024) {
+      alert(`Imagem demasiado grande. Máximo: ${MAX_MB}MB.`);
+      return;
+    }
+
+    // 3. Só agora iniciar leitura para preview
     const reader = new FileReader();
     reader.onloadend = () => setAvatarUrl(reader.result as string);
     reader.readAsDataURL(file);
 
     setUploading(true);
     try {
-      const ext  = file.name.split('.').pop()?.toLowerCase() || '';
-      if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) {
-        alert('Apenas imagens (JPG, PNG, WEBP) são permitidas.');
-        setUploading(false);
-        return;
-      }
       const path = `avatars/${dbUser.id}.${ext}`;
-
       const { error: uploadError } = await supabase.storage
         .from('public')
         .upload(path, file, { upsert: true });
@@ -67,6 +74,7 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
       setAvatarUrl(publicUrl);
     } catch (err) {
       console.error('[Profile] Erro ao fazer upload de avatar:', err);
+      alert('Erro ao fazer upload do avatar.');
     } finally {
       setUploading(false);
     }

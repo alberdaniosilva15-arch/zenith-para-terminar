@@ -44,39 +44,42 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept }) => {
 
   const loadPrediction = async () => {
     setLoading(true);
+    try {
+      // Hora actual (Angola = UTC+1)
+      const currentHour = getLuandaHour();
 
-    // Hora actual (Angola = UTC+1)
-    const currentHour = getLuandaHour();
+      // Busca as corridas mais frequentes, com preferência pela hora actual
+      const { data, error } = await supabase
+        .from('ride_predictions')
+        .select('*')
+        .eq('user_id', userId)
+        .gte('frequency', 2)                       // mínimo 2 vezes para sugerir
+        .order('frequency', { ascending: false })
+        .limit(5);
 
-    // Busca as corridas mais frequentes, com preferência pela hora actual
-    const { data } = await supabase
-      .from('ride_predictions')
-      .select('*')
-      .eq('user_id', userId)
-      .gte('frequency', 2)                       // mínimo 2 vezes para sugerir
-      .order('frequency', { ascending: false })
-      .limit(5);
+      if (error || !data || data.length === 0) {
+        setLoading(false);
+        return;
+      }
 
-    if (!data || data.length === 0) {
+      // Score: frequência × coincidência de hora
+      const scored = (data as RidePrediction[]).map(p => ({
+        ...p,
+        score: p.frequency * (p.best_hour !== null && Math.abs(p.best_hour - currentHour) <= 1 ? 2 : 1),
+      }));
+
+      scored.sort((a, b) => b.score - a.score);
+      const best = scored[0];
+      setPrediction(best);
+
+      // Tenta obter preço fixo por zona
+      const zp = await zonePriceService.getZonePrice(best.origin_address, best.dest_address);
+      setZonePrice(zp);
+    } catch (err) {
+      // Silencioso - componente simplesmente não aparece
+    } finally {
       setLoading(false);
-      return;
     }
-
-    // Score: frequência × coincidência de hora
-    const scored = (data as RidePrediction[]).map(p => ({
-      ...p,
-      score: p.frequency * (p.best_hour !== null && Math.abs(p.best_hour - currentHour) <= 1 ? 2 : 1),
-    }));
-
-    scored.sort((a, b) => b.score - a.score);
-    const best = scored[0];
-    setPrediction(best);
-
-    // Tenta obter preço fixo por zona
-    const zp = await zonePriceService.getZonePrice(best.origin_address, best.dest_address);
-    setZonePrice(zp);
-
-    setLoading(false);
   };
 
   if (loading || !prediction || dismissed) return null;

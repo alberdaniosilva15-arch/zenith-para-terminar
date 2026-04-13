@@ -60,7 +60,7 @@ const RidesHistory: React.FC<RidesHistoryProps> = ({ userId }) => {
       role:   role,
       status: RideStatus.IDLE,
       extraText: `${completedCount} corridas concluídas, ${cancelledCount} canceladas, taxa ${completionRate}%`,
-    } as any).then(insight => {
+    }).then(insight => {
         if (insight && insight.text) {
           setAiSummary(insight.text);
         }
@@ -245,32 +245,7 @@ const RideCard: React.FC<{
           </button>
 
           {expanded && (
-            <div className="mt-3 bg-surface-container-lowest rounded-2xl p-4 space-y-2 text-xs animate-in slide-in-from-top duration-200">
-              <ReceiptRow label="Tarifa base"   value="500 Kz" />
-              <ReceiptRow
-                label={`Por km (${ride.distance_km?.toFixed(1) ?? '—'} km)`}
-                value={`${ride.distance_km ? Math.round(ride.distance_km * 250).toLocaleString('pt-AO') : '—'} Kz`}
-              />
-              {ride.surge_multiplier > 1 && (
-                <ReceiptRow
-                  label={`Surge ×${ride.surge_multiplier}`}
-                  value={`+${Math.round(ride.price_kz * (1 - 1 / ride.surge_multiplier)).toLocaleString('pt-AO')} Kz`}
-                  highlight
-                />
-              )}
-              <div className="border-t border-outline-variant/30 pt-2">
-                <ReceiptRow
-                  label="Total pago"
-                  value={`${ride.price_kz.toLocaleString('pt-AO', { maximumFractionDigits: 0 })} Kz`}
-                  bold
-                />
-              </div>
-              {ride.completed_at && (
-                <p className="text-[9px] text-on-surface-variant/70 font-bold pt-1">
-                  Concluída: {new Date(ride.completed_at).toLocaleString('pt-AO')}
-                </p>
-              )}
-            </div>
+            <RideReceiptDetails ride={ride} />
           )}
         </>
       )}
@@ -293,5 +268,88 @@ const ReceiptRow: React.FC<{ label: string; value: string; bold?: boolean; highl
     <span className={highlight ? 'text-primary/80' : ''}>{value}</span>
   </div>
 );
+
+// =============================================================================
+// ✅ BUG #8 CORRIGIDO: Função de decomposição do preço real
+// Calcula breakdown dinâmico baseado no price_kz e surge_multiplier
+// =============================================================================
+
+interface ReceiptBreakdown {
+  baseKz: number;
+  distanceKz: number;
+  surgeKz: number;
+  totalKz: number;
+  surgeLabel: string | null;
+  effectiveCostPerKm: number | null;
+}
+
+export function calculateReceiptBreakdown(ride: DbRide): ReceiptBreakdown {
+  const total    = ride.price_kz   ?? 0;
+  const surge    = ride.surge_multiplier ?? 1;
+  const distKm   = ride.distance_km ?? null;
+
+  const hasSurge = surge > 1.0;
+
+  const preSurgeTotal = hasSurge
+    ? Math.round(total / surge)
+    : total;
+
+  const BASE_RATIO    = 0.30;
+  const baseKz        = Math.round(preSurgeTotal * BASE_RATIO);
+  const distanceKz    = preSurgeTotal - baseKz;
+  const surgeKz       = hasSurge ? total - preSurgeTotal : 0;
+
+  const effectiveCostPerKm = distKm
+    ? Math.round(distanceKz / distKm)
+    : null;
+
+  return {
+    baseKz,
+    distanceKz,
+    surgeKz,
+    totalKz: total,
+    surgeLabel:        hasSurge ? `${surge.toFixed(1)}×` : null,
+    effectiveCostPerKm,
+  };
+}
+
+// Componente de detalhes do recibo com valores dinâmicos
+export function RideReceiptDetails({ ride }: { ride: DbRide }) {
+  const fmt = (kz: number) => kz.toLocaleString('pt-AO');
+  const breakdown = calculateReceiptBreakdown(ride);
+
+  return (
+    <div className="bg-surface-container-lowest rounded-2xl p-4 space-y-2 text-xs animate-in slide-in-from-top duration-200">
+      <ReceiptRow label="Tarifa base" value={`${fmt(breakdown.baseKz)} Kz`} />
+      <ReceiptRow
+        label={`Por km (${ride.distance_km?.toFixed(1) ?? '—'} km${
+          breakdown.effectiveCostPerKm
+            ? ` × ${fmt(breakdown.effectiveCostPerKm)} Kz/km`
+            : ''
+        })`}
+        value={`${fmt(breakdown.distanceKz)} Kz`}
+      />
+      {breakdown.surgeKz > 0 && (
+        <ReceiptRow
+          label={`Procura elevada (${breakdown.surgeLabel})`}
+          value={`+ ${fmt(breakdown.surgeKz)} Kz`}
+          highlight
+        />
+      )}
+      <div className="border-t border-outline-variant/30 pt-2">
+        <ReceiptRow
+          label="Total pago"
+          value={`${fmt(breakdown.totalKz)} Kz`}
+          bold
+        />
+      </div>
+      {ride.completed_at && (
+        <p className="text-[9px] text-on-surface-variant/70 font-bold pt-1">
+          Concluída: {new Date(ride.completed_at).toLocaleString('pt-AO')}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default RidesHistory;

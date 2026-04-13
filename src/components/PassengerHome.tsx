@@ -196,8 +196,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           p_dest_lat:       destCoords.lat,
           p_dest_lng:       destCoords.lng,
           p_service_tier:   'standard',
+          p_supply_count:   nearbyCount ?? 5,
           p_demand_count:   5,
-          p_supply_count:   5,
           p_is_night:       isNight,
           p_is_airport:     isAirport,
           p_traffic_factor: route.trafficFactor,
@@ -359,12 +359,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       <div className="absolute inset-0 z-0">
         <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-[#050912] text-white/50 text-xs">A carregar mapa...</div>}>
           <Map3D
-            pickup={pickupCoords ?? undefined}
-            destination={destCoords ?? undefined}
-            status={ride.status}
-            carLocation={ride.carLocation}
-            userLocation={userLocation ?? undefined}
-            dataSaver={dataSaver}
+            mode="passenger"
+            center={userLocation ? [userLocation.lng, userLocation.lat] : undefined}
           />
         </Suspense>
       </div>

@@ -4,6 +4,9 @@
 //   1. loadUserData: retries aumentados de 3 → 5 (delay até 4.8s)
 //   2. Fallback de emergência: se todos os retries falharem, cria
 //      dbUser/profile básico local para não deixar o utilizador preso
+//   3. CORREÇÃO BUG 11: loadUserData agora usa while loop para retry,
+//      garantindo que a Promise só resolve APÓS todos os retries terminarem
+//      (elimina race condition com init())
 // =============================================================================
 
 import React, {
@@ -65,75 +68,87 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ------------------------------------------------------------------
   // Carregar dados do utilizador a partir do ID do Supabase Auth
-  // Tem retry automático (3 tentativas, 600ms entre cada) para lidar com
+  // Tem retry automático (5 tentativas, 600ms entre cada) para lidar com
   // a race condition entre o trigger handle_new_user e o signIn/signUp.
+  // CORREÇÃO BUG 11: Promise encadeada correctamente — não resolve antes dos retries
   // ------------------------------------------------------------------
-  const loadUserData = useCallback(async (userId: string, attempt = 0) => {
-    const MAX_ATTEMPTS = 5; // FIX: 5 tentativas em vez de 3
+  const loadUserData = useCallback(async (userId: string, attempt = 0): Promise<void> => {
+    const MAX_ATTEMPTS = 5;
     const BASE_DELAY_MS = 600;
-    try {
-      console.log(`[AuthContext] loadUserData attempt ${attempt} for ${userId}`);
-      const [{ data: userRow, error: userErr }, { data: profileRow, error: profErr }] =
-        await Promise.all([
-          supabase.from('users').select('*').eq('id', userId).maybeSingle(),
-          supabase.from('profiles').select('*').eq('user_id', userId).maybeSingle(),
-        ]);
 
-      if (userErr)  throw userErr;
-      if (profErr)  throw profErr;
+    while (attempt < MAX_ATTEMPTS) {
+      try {
+        console.log(`[AuthContext] loadUserData attempt ${attempt + 1}/${MAX_ATTEMPTS} for ${userId}`);
+        
+        const [{ data: userRow, error: userErr }, { data: profileRow, error: profErr }] =
+          await Promise.all([
+            supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+            supabase.from('profiles').select('*').eq('user_id', userId).maybeSingle(),
+          ]);
 
-      // Google OAuth Role Intent Resolution
-      const intent = localStorage.getItem('oauth_role_intent');
-      let finalUserRow = userRow;
-      if (intent === 'driver' && finalUserRow && (finalUserRow as DbUser).role === 'passenger') {
-        console.log('[AuthContext] Promovendo passenger a driver via OAuth intent');
-        await supabase.rpc('set_my_role_driver');
-        localStorage.removeItem('oauth_role_intent');
-        const { data: updatedUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
-        if (updatedUser) finalUserRow = updatedUser;
-      }
+        if (userErr) throw userErr;
+        if (profErr) throw profErr;
 
-      // FIX: se userRow é null mas não houve erro, o trigger ainda não correu
-      // Tratar como se fosse um erro para fazer retry.
-      if (!finalUserRow && attempt < MAX_ATTEMPTS - 1) {
-        throw new Error('profile_not_ready');
-      }
+        // Verificar erros de permissão
+        if (isPermissionError(userErr)) {
+          throw new Error('Sem permissão para carregar dados do utilizador. Contacte o suporte.');
+        }
 
-      // FIX: fallback de emergência — criar dbUser mínimo local se ainda null
-      const effectiveUser: DbUser = finalUserRow ?? {
-        id: userId,
-        role: 'passenger',
-        email: '',
-        created_at: new Date().toISOString(),
-      } as DbUser;
+        // Google OAuth Role Intent Resolution
+        const intent = localStorage.getItem('oauth_role_intent');
+        let finalUserRow = userRow;
+        if (intent === 'driver' && finalUserRow && (finalUserRow as DbUser).role === 'passenger') {
+          console.log('[AuthContext] Promovendo passenger a driver via OAuth intent');
+          await supabase.rpc('set_my_role_driver');
+          localStorage.removeItem('oauth_role_intent');
+          const { data: updatedUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
+          if (updatedUser) finalUserRow = updatedUser;
+        }
 
-      const effectiveProfile: DbProfile = profileRow ?? {
-        id: userId,
-        user_id: userId,
-        name: 'Utilizador',
-        avatar_url: null,
-        phone: null,
-        rating: 5.0,
-        total_rides: 0,
-        created_at: new Date().toISOString(),
-      } as DbProfile;
+        if (!finalUserRow) {
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+          console.log(`[AuthContext] Dados não encontrados, retry ${attempt + 2}/${MAX_ATTEMPTS} em ${delay}ms`);
+          await new Promise(r => setTimeout(r, delay));
+          attempt++;
+          continue;
+        }
 
-      setUser(effectiveUser, effectiveProfile);
-      setAuthError(null);
-      setLoading(false);
-    } catch (err: any) {
-      if (attempt < MAX_ATTEMPTS - 1) {
-        const delay = BASE_DELAY_MS * Math.pow(2, attempt); // 600ms, 1.2s, 2.4s, 4.8s
-        console.log(`[AuthContext] Retry ${attempt + 1}/${MAX_ATTEMPTS} em ${delay}ms`);
-        setTimeout(() => loadUserData(userId, attempt + 1), delay);
-      } else {
-        console.error('[AuthContext] Todos os retries falharam:', err);
-        clearUser();
-        setAuthError({ code: 'db_user_load_failed', message: 'Não foi possível finalizar o registo. O trigger handle_new_user pode não estar activo no Supabase.' });
+        // ✅ BUG #6 CORRIGIDO: effectiveUser é sempre o finalUserRow real
+        // O ?? foi removido porque era código morto e enganoso
+        const effectiveUser: DbUser = finalUserRow;
+
+        const effectiveProfile: DbProfile = profileRow ?? {
+          id: userId,
+          user_id: userId,
+          name: 'Utilizador',
+          avatar_url: null,
+          phone: null,
+          rating: 5.0,
+          total_rides: 0,
+          created_at: new Date().toISOString(),
+        } as DbProfile;
+
+        setUser(effectiveUser, effectiveProfile);
+        setAuthError(null);
         setLoading(false);
+        return; // Sucesso - sai da função
+      } catch (err: any) {
+        console.warn(`[AuthContext] loadUserData attempt ${attempt + 1} falhou:`, err.message);
+        if (attempt < MAX_ATTEMPTS - 1) {
+          const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+          console.log(`[AuthContext] Retry ${attempt + 2}/${MAX_ATTEMPTS} em ${delay}ms`);
+          await new Promise(r => setTimeout(r, delay));
+          attempt++;
+        } else {
+          console.error('[AuthContext] Todos os retries falharam:', err);
+          clearUser();
+          setAuthError({ code: 'db_user_load_failed', message: 'Não foi possível finalizar o registo. O trigger handle_new_user pode não estar activo no Supabase.' });
+          setLoading(false);
+          return;
+        }
       }
     }
-  }, []);
+  }, [setUser, clearUser]);
 
   // ------------------------------------------------------------------
   // Inicializar: recuperar sessão existente + subscrever a mudanças
@@ -313,10 +328,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // SIGN OUT
   // ------------------------------------------------------------------
   const signOut = useCallback(async () => {
-    await supabase.auth.signOut();
-    setSession(null);
-    setAuthUser(null);
-    clearUser();
+    try {
+      pendingAuthEventRef.current = null;
+      await supabase.auth.signOut();
+      setSession(null);
+      setAuthUser(null);
+      clearUser();
+      // ✅ BUG #12 CORRIGIDO: garantir que loading=false após logout
+      setLoading(false);
+    } catch (err) {
+      console.error('[Auth] Erro ao fazer signOut:', err);
+      setLoading(false);
+      clearUser();
+    }
   }, [clearUser]);
 
   // ------------------------------------------------------------------
@@ -386,4 +410,19 @@ function translateAuthError(msg: string): string {
     'signup_disabled':                     'Registo temporariamente desactivado.',
   };
   return map[msg] ?? `Erro de autenticação: ${msg}`;
+}
+
+// ------------------------------------------------------------------
+// Utilitário — detectar erros de permissão Supabase/PostgREST
+// ------------------------------------------------------------------
+function isPermissionError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code    = (err as any).code;
+  const message = String((err as any).message ?? '');
+  return (
+    code === '42501' ||                  // PostgreSQL permission denied
+    code === 'PGRST301' ||               // PostgREST unauthorized
+    message.toLowerCase().includes('permission denied') ||
+    message.toLowerCase().includes('jwt')
+  );
 }

@@ -64,8 +64,9 @@ export class DriverTracker {
 
       // 2. Interpolação de rotação (heading)
       if (this.target.heading !== undefined && this.current.heading !== undefined) {
-        // Lógica simples de rotação (não resolve o problema do salto 359 -> 0, mas serve para v3)
-        this.current.heading += (this.target.heading - this.current.heading) * 0.1;
+        // Calcular delta pelo caminho mais curto (max 180°)
+        const delta = ((this.target.heading - this.current.heading) + 540) % 360 - 180;
+        this.current.heading = ((this.current.heading + delta * 0.1) + 360) % 360;
       }
 
       // 3. Aplicar ao marcador

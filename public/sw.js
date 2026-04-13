@@ -2,7 +2,6 @@ const CACHE_NAME = 'zenith-ride-cache-v1';
 const URLS_TO_CACHE = [
   '/',
   '/index.html',
-  '/manifest.json',
 ];
 
 self.addEventListener('install', (event) => {
