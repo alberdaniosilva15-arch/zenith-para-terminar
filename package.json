@@ -17,6 +17,7 @@
     "@capacitor/share": "^8.0.1",
     "@supabase/supabase-js": "^2.39.0",
     "agora-rtc-sdk-ng": "^4.20.0",
+    "h3-js": "^4.4.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.383.0",
     "mapbox-gl": "^3.3.0",
