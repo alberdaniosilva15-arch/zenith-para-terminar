@@ -328,7 +328,7 @@ class RideService {
   async acceptRide(rideId: string, driverId: string): Promise<RideUpdateResult> {
     try {
       const { data, error } = await supabase.rpc('accept_ride_atomic', {
-        p_ride_id: rideId,
+        p_ride_id:   rideId,
         p_driver_id: driverId,
       });
 
@@ -337,23 +337,26 @@ class RideService {
         return { data: null, error: { code: error.code, message: 'Erro ao aceitar corrida.' } };
       }
 
-      if (!data.success) {
+      // Guard: data pode ser null se a RPC falhar ou retornar void
+      if (!data || !data.success) {
+        const reason = data?.reason ?? 'unknown';
         const messages: Record<string, string> = {
-          ride_not_found:      'Corrida não encontrada',
-          ride_not_searching:  'Esta corrida já foi aceite (já não está à espera)',
-          already_accepted:    'Corrida já aceite',
-          driver_not_available:'O teu estado não permite aceitar corridas agora',
-          race_condition_lost: 'Outro motorista aceitou primeiro. Tenta outra corrida!',
+          ride_not_found:       'Corrida não encontrada',
+          ride_not_searching:   'Esta corrida já foi aceite (já não está à espera)',
+          already_accepted:     'Corrida já aceite',
+          driver_not_available: 'O teu estado não permite aceitar corridas agora',
+          race_condition_lost:  'Outro motorista aceitou primeiro. Tenta outra corrida!',
         };
-        const msg = messages[data.reason] || 'Não foi possível aceitar a corrida';
-        return { data: null, error: { code: data.reason, message: msg } };
+        return { data: null, error: { code: reason, message: messages[reason] ?? 'Não foi possível aceitar a corrida' } };
       }
 
-      // Actualizar a flag driver_confirmed (já que a rpc não o fez directamente) e ler a corrida
+      // ✅ BUG #3 CORRIGIDO: Apenas leitura, driver_confirmed permanece false
+      // até driverConfirmRide() ser chamado explicitamente
       const { data: rideData, error: rideError } = await supabase.from('rides')
-        .update({ driver_confirmed: true })
+        .select('*')
         .eq('id', rideId)
-        .select().single();
+        .eq('status', RideStatus.ACCEPTED)
+        .single();
 
       if (rideError) {
         return { data: null, error: { code: rideError.code, message: 'Corrida aceite, mas erro ao ler dados.' } };

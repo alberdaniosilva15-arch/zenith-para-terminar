@@ -39,15 +39,16 @@ export default function RideChat({ rideId, myId, peerName, phonePrivacyMode = fa
         filter: `ride_id=eq.${rideId}`,
       }, (payload) => {
         setMsgs(prev => [...prev, payload.new as Msg]);
-        if (!open) setUnread(u => u + 1);
+        setUnread(u => u + 1);
       })
       .subscribe();
 
     return () => { supabase.removeChannel(ch); };
-  }, [rideId, open]);
+  }, [rideId]);
 
   useEffect(() => {
     if (open) {
+      setUnread(0);
       bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [msgs, open]);

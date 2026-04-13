@@ -88,9 +88,9 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
 
     load();
 
-    // FIX: .on() ANTES de .subscribe()
+    const channelName = `social_feed_user_${userId}`;
     const ch = supabase
-      .channel(`social_feed_${Date.now()}`)
+      .channel(channelName)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'posts' }, async (payload) => {
         if (!mounted) return;
         const n = payload.new as any;
@@ -129,7 +129,7 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
       mounted = false;
       supabase.removeChannel(ch);
     };
-  }, [userId]);
+  }, [userId, userName, role]);
 
   // ── Publicar post ────────────────────────────────────────────────────────────
   const handlePost = async () => {

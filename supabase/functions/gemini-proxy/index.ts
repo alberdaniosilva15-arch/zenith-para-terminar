@@ -62,6 +62,7 @@ const ipCounters = new Map<string, IpEntry>();
 // Persistência imediata: usar tabela `ip_rate_limits` para contagem por janela.
 // Se a operação DB falhar, cair para o fallback em memória.
 const supabasePersist = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+const supabaseAdmin   = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
 async function checkIpRateLimit(ip: string): Promise<boolean> {
   const now = Date.now();
@@ -175,7 +176,6 @@ Deno.serve(async (req: Request) => {
     // ----------------------------------------------------------------
     // 2. RATE LIMITING via base de dados (persistente entre reinícios)
     // ----------------------------------------------------------------
-    const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
     const body   = await req.json();
     const action = body.action as string;
 
@@ -265,11 +265,13 @@ Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
 
       // ----------------------------------------------------------------
       case 'kaze_insight': {
-        const { context } = payload as { context: { role: string; status: string; name?: string } };
+        const { context } = payload as { context: {
+          role: string; status: string; name?: string; extraText?: string;
+        }};
         const res = await ai.models.generateContent({
           model: 'gemini-2.0-flash-lite',
           contents: `Insight curto (máx 2 frases) para ${context.name ?? 'utilizador'}
-(role: ${context.role}, status: ${context.status}) da MotoGo Luanda.
+(role: ${context.role}, status: ${context.status}${context.extraText ? `, contexto: ${context.extraText}` : ''}) da MotoGo Luanda.
 JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           config: { responseMimeType: 'application/json', systemInstruction: KAZE_SYSTEM_PROMPT },
         });
@@ -280,13 +282,13 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
       case 'kaze_chat': {
         const { message, history } = payload as {
           message: string;
-          history: { role: 'user' | 'assistant'; content: string }[];
+          history: { role: 'user' | 'model'; content: string }[];
         };
         const chat = ai.chats.create({
-          model: 'gemini-2.0-flash',
+          model:  'gemini-2.0-flash',
           config: { systemInstruction: KAZE_SYSTEM_PROMPT },
           history: history.slice(0, -1).map(h => ({
-            role: h.role === 'assistant' ? 'model' : 'user',
+            role:  h.role === 'model' ? 'model' : 'user',
             parts: [{ text: h.content }],
           })),
         });

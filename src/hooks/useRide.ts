@@ -63,6 +63,8 @@ export function useRide(): UseRideReturn {
       if (active) {
         applyDbRide(active);
         subscribeToRide(active.id, active.driver_id ?? undefined);
+      } else {
+        resetRide();
       }
     })();
 
@@ -73,11 +75,29 @@ export function useRide(): UseRideReturn {
   }, [dbUser?.id]);
 
   // ── Detectar transição para COMPLETED → activar review ──────────────────
+  // ✅ BUG #5 CORRIGIDO: setTimeout com cleanup e guarda de montagem
   useEffect(() => {
     const prev = prevStatusRef.current;
     const curr = ride.status;
-    if (prev !== RideStatus.COMPLETED && curr === RideStatus.COMPLETED && ride.rideId && ride.driverId) {
-      setTimeout(() => {
+
+    prevStatusRef.current = curr;
+
+    if (
+      prev !== RideStatus.COMPLETED &&
+      curr === RideStatus.COMPLETED &&
+      ride.rideId &&
+      ride.driverId
+    ) {
+      let isMounted = true;
+
+      const timer = setTimeout(() => {
+        if (!isMounted) {
+          if (import.meta.env.DEV) {
+            console.debug('[useRide] PostRide cancelado — componente desmontado');
+          }
+          return;
+        }
+
         setPostRide({
           active:       true,
           rideId:       ride.rideId!,
@@ -89,9 +109,13 @@ export function useRide(): UseRideReturn {
           durationMin:  rideDetailsRef.current.durationMin,
         });
       }, 2000);
+
+      return () => {
+        isMounted = false;
+        clearTimeout(timer);
+      };
     }
-    prevStatusRef.current = curr;
-  }, [ride.status]);
+  }, [ride.status, setPostRide, ride.rideId, ride.driverId, ride.driverName, ride.driverRating, ride.priceKz]);
 
   // ── applyDbRide ──────────────────────────────────────────────────────────
   const applyDbRide = useCallback((r: DbRide & { driver_name?: string; passenger_name?: string }) => {
@@ -343,4 +367,33 @@ export function useRide(): UseRideReturn {
     submitReview, dismissPostRide,
     clearError: () => setError(null),
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Hook genérico de safe-timeout (reutilizável no projecto)
+// ─────────────────────────────────────────────────────────────
+export function useSafeTimeout() {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clear = useCallback(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  const set = useCallback(
+    (fn: () => void, delay: number) => {
+      clear();
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        fn();
+      }, delay);
+    },
+    [clear],
+  );
+
+  useEffect(() => () => clear(), [clear]);
+
+  return { set, clear };
 }

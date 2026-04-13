@@ -39,14 +39,40 @@ export interface DbUser {
   created_at: string; updated_at: string;
 }
 
+// ✅ BUG #9 CORRIGIDO: DbProfile com todos os campos necessários
 export interface DbProfile {
-  id: string; user_id: string; name: string;
-  avatar_url: string | null; phone: string | null;
-  rating: number; total_rides: number; level: UserLevel;
-  created_at: string; updated_at: string;
-  phone_privacy?: boolean;
-  emergency_contact_name?: string;
-  emergency_contact_phone?: string;
+  // ── Identificação ──────────────────────────────────────────
+  id: string;
+  user_id: string;
+  name: string;
+
+  // ── Dados de apresentação ──────────────────────────────────
+  avatar_url: string | null;
+  bio: string | null;
+
+  // ── Contacto ─────────────────────────────────────────
+  phone: string | null;
+  rating: number;
+  total_rides: number;
+
+  // ── Privacidade e contactos de emergência ──────────────────
+  phone_privacy: boolean;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
+
+  // ── Sistema de níveis / gamificação ────────────────────────
+  level: UserLevel;
+  km_total: number | null;
+  km_to_next_perk: number | null;
+  free_km_available: number | null;
+
+  // ── Localização ───────────────────────────────────────────
+  last_known_lat: number | null;
+  last_known_lng: number | null;
+
+  // ── Metadados ─────────────────────────────────────────────
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DbDriverLocation {
@@ -352,4 +378,16 @@ export interface DbProfileV3 extends DbProfile {
   km_total:          number;
   free_km_available: number;
   km_to_next_perk:   number;
+}
+
+// =============================================================================
+// ✅ BUG #9 CORRIGIDO: type-guard para DbProfile
+// =============================================================================
+export function isDbProfile(obj: unknown): obj is DbProfile {
+  return (
+    typeof obj === 'object' &&
+    obj !== null &&
+    'user_id' in obj &&
+    'phone_privacy' in obj
+  );
 }

@@ -50,10 +50,31 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
 
   const channelName = `corrida_${corridaId}`;
 
+  const onEndCallRef = useRef(onEndCall);
+  useEffect(() => { onEndCallRef.current = onEndCall; }, [onEndCall]);
+
+  const endCall = React.useCallback(async (notify = true) => {
+    try {
+      audioRef.current?.stop();
+      audioRef.current?.close();
+      audioRef.current = null;
+
+      if (clientRef.current) {
+        await clientRef.current.leave();
+        clientRef.current = null;
+      }
+    } catch { /* já desconectado */ }
+
+    setCallState('ended');
+    setDuration(0);
+    setPeerJoined(false);
+    if (notify) onEndCallRef.current?.();
+  }, []);
+
   // Limpar ao desmontar — notifica pai para limpar estado
   useEffect(() => {
     return () => { endCall(true); };
-  }, []);
+  }, [endCall]);
 
   // Timer de duração
   useEffect(() => {
@@ -132,24 +153,6 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
       setCallState('error');
       await endCall(false);
     }
-  };
-
-  const endCall = async (notify = true) => {
-    try {
-      audioRef.current?.stop();
-      audioRef.current?.close();
-      audioRef.current = null;
-
-      if (clientRef.current) {
-        await clientRef.current.leave();
-        clientRef.current = null;
-      }
-    } catch { /* já desconectado */ }
-
-    setCallState('ended');
-    setDuration(0);
-    setPeerJoined(false);
-    if (notify) onEndCall?.();
   };
 
   const toggleMute = () => {

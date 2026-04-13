@@ -10,7 +10,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 export interface Map3DHandle {
   getMap:    () => mapboxgl.Map | null;
   resize:    () => void;
-  flyTo:     (options: mapboxgl.FlyToOptions) => void;
+  flyTo:     (options: Parameters<mapboxgl.Map['flyTo']>[0]) => void;
 }
 
 export interface Map3DProps {
@@ -50,7 +50,7 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
   useEffect(() => {
     if (!containerRef.current || !token) return;
 
-    const map = MapSingleton.init(containerRef.current, token, {
+    MapSingleton.init(containerRef.current, token, {
       center,
       zoom,
       pitch,
@@ -63,7 +63,14 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
     return () => {
       // Singleton persiste, apenas limpamos se necessário
     };
-  }, [token, center, zoom, pitch, onMapReady]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // init apenas uma vez
+
+  // ── Efeito separado para atualizar posição sem recriar ──────
+  useEffect(() => {
+    if (!center) return;
+    MapSingleton.get()?.flyTo({ center, zoom: zoom ?? 14, pitch: pitch ?? 0, duration: 800 });
+  }, [center, zoom, pitch]);
 
   // ── Resize quando o container muda de tamanho ──────────────
   useEffect(() => {

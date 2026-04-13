@@ -9,8 +9,10 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import EscolarMonitor from './EscolarMonitor';
 import { mapService } from '../services/mapService';
-import { buildReceiptPDF, saveReceiptToPhone, shareReceipt } from '../services/pdfService';
-import jsPDF from 'jspdf';
+import { buildContractPDF, saveFile, shareFile } from '../services/pdfService';
+import { Directory } from '@capacitor/filesystem';
+import { Capacitor } from '@capacitor/core';
+
 
 type ContractType = 'school' | 'family' | 'corporate';
 
@@ -431,78 +433,23 @@ const ContractCard: React.FC<{
   };
 
   const generateContractPDF = async (mode: 'save' | 'share') => {
-    const doc  = new jsPDF({ unit: 'mm', format: 'a4' });
-    const W    = 210;
-    const M    = 15;
-    let y      = 0;
+    try {
+      const base64 = await buildContractPDF(c as any);
+      const fileName = `zenith_contrato_${c.id.substring(0, 8)}.pdf`;
 
-    doc.setFillColor(10, 10, 10);
-    doc.rect(0, 0, W, 40, 'F');
-    doc.setFontSize(22); doc.setFont('helvetica', 'bold');
-    doc.setTextColor(255, 255, 255);
-    doc.text('ZENITH RIDE', M, 17);
-    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 180);
-    doc.text('CONTRATO DE SERVIÇO', M, 25);
-    doc.text(new Date().toLocaleDateString('pt-AO'), W - M, 25, { align: 'right' });
-
-    y = 52;
-    doc.setFontSize(13); doc.setFont('helvetica', 'bold');
-    doc.setTextColor(20, 20, 20);
-    doc.text(c.title, M, y); y += 8;
-
-    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
-    doc.setTextColor(100, 100, 100);
-    const type = { school: 'Escolar', family: 'Familiar', corporate: 'Empresarial' }[c.contract_type] || 'Serviço';
-    doc.text(`Tipo: Contrato ${type}`, M, y); y += 6;
-    doc.text(`Morada: ${c.address}`, M, y); y += 6;
-    doc.text(`Horário: ${c.time_start} — ${c.time_end}`, M, y); y += 6;
-    doc.text(`Km acumulados: ${c.km_accumulated.toFixed(1)} km`, M, y); y += 6;
-    doc.text(`Bónus disponível: ${c.bonus_kz.toFixed(0)} AOA`, M, y); y += 6;
-    if (c.route_deviation_alert) {
-      doc.text(`Alerta de desvio activo (máx. ${c.max_deviation_km} km)`, M, y); y += 6;
-    }
-    if (c.parent_monitoring) {
-      y += 3;
-      doc.setFillColor(240, 250, 245);
-      doc.roundedRect(M, y, W - M * 2, 14, 2, 2, 'F');
-      doc.setTextColor(10, 100, 60);
-      doc.setFontSize(8); doc.setFont('helvetica', 'bold');
-      doc.text('Monitorização parental activa', M + 4, y + 6);
-      doc.setFontSize(7); doc.setFont('helvetica', 'normal');
-      doc.text('Usa o botão "Partilhar Rastreio" para enviar o link em tempo real.', M + 4, y + 11);
-      y += 20;
-    }
-
-    y = 255;
-    doc.setFontSize(6.5); doc.setTextColor(180, 180, 180);
-    doc.text('Zenith Ride · Mobilidade Urbana Angola', W / 2, y, { align: 'center' });
-
-    const base64  = doc.output('datauristring').split(',')[1];
-    const fileName = `zenith_contrato_${c.id.substring(0, 8)}.pdf`;
-
-    const { Filesystem, Directory } = await import('@capacitor/filesystem');
-    const { Share } = await import('@capacitor/share');
-
-    if (mode === 'share') {
-      const { uri } = await Filesystem.writeFile({
-        path:      fileName,
-        data:      base64,
-        directory: Directory.Cache,
-        encoding:  'base64' as any,
-      });
-      await Share.share({
-        title:       'Contrato Zenith Ride',
-        url:          uri,
-        dialogTitle: 'Partilhar contrato',
-      });
-    } else {
-      await Filesystem.writeFile({
-        path:      fileName,
-        data:      base64,
-        directory: Directory.Documents,
-        encoding:  'base64' as any,
-      });
+      if (mode === 'share') {
+        if (Capacitor.isNativePlatform()) {
+          const uri = await saveFile(base64, fileName, Directory.Cache);
+          await shareFile(uri, fileName, { title: 'Contrato Zenith Ride', dialogTitle: 'Partilhar contrato' });
+        } else {
+          await shareFile(base64, fileName, { title: 'Contrato Zenith Ride' });
+        }
+      } else {
+        await saveFile(base64, fileName, Directory.Documents);
+      }
+    } catch (err) {
+      console.error('[Contract.generateContractPDF]', err);
+      alert('Erro ao gerar/partilhar o PDF.');
     }
   };
 

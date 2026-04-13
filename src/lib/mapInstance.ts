@@ -61,34 +61,41 @@ export const MapSingleton = {
 
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
 
-    const map = new mapboxgl.Map({
-      container,
-      style:            mergedConfig.style,
-      center:           mergedConfig.center,
-      zoom:             mergedConfig.zoom,
-      pitch:            mergedConfig.pitch,
-      bearing:          mergedConfig.bearing,
-      // ── Optimizações para Angola (RAM limitada, 3G) ────────
-      maxTileCacheSize: 50,           // Limitar cache de tiles — protege RAM
-      fadeDuration:     0,            // Sem fade — mais rápido em 3G
-      antialias:        false,        // Desactivar antialiasing — poupa GPU
-      trackResize:      true,         // Auto-resize ao redimensionar janela
-    });
+    try {
+      const map = new mapboxgl.Map({
+        container,
+        style:            mergedConfig.style,
+        center:           mergedConfig.center,
+        zoom:             mergedConfig.zoom,
+        pitch:            mergedConfig.pitch,
+        bearing:          mergedConfig.bearing,
+        // ── Optimizações para Angola (RAM limitada, 3G) ────────
+        maxTileCacheSize: 50,           // Limitar cache de tiles — protege RAM
+        fadeDuration:     0,            // Sem fade — mais rápido em 3G
+        antialias:        false,        // Desactivar antialiasing — poupa GPU
+        trackResize:      true,         // Auto-resize ao redimensionar janela
+      });
 
-    state.map       = map;
-    state.container = container;
-    state.isReady   = false;
+      state.map       = map;
+      state.container = container;
+      state.isReady   = false;
 
-    // Marcar como pronto quando o estilo carregar
-    map.once("load", () => {
-      state.isReady = true;
-      // Executar callbacks pendentes
-      readyCallbacks.forEach(cb => cb(map));
-      readyCallbacks.length = 0;
-      this.resize();
-    });
+      // Marcar como pronto quando o estilo carregar
+      map.once("load", () => {
+        state.isReady = true;
+        // Executar callbacks pendentes
+        readyCallbacks.forEach(cb => cb(map));
+        readyCallbacks.length = 0;
+        this.resize();
+      });
 
-    return map;
+      return map;
+    } catch (err: any) {
+      console.warn("Failed to initialize WebGL or Mapbox:", err.message);
+      // Fallback gracioso: evitar crash da SPA
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;background:#1e293b;color:#94a3b8;font-size:12px;text-align:center;padding:20px;">O teu navegador não suporta mapas em 3D (WebGL). Activa a aceleração de hardware.</div>';
+      return null as any; // Map3D lida com null de forma safe?
+    }
   },
 
   get(): mapboxgl.Map | null {

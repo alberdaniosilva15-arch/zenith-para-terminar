@@ -57,6 +57,10 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const unsubRef1 = useRef<(() => void) | null>(null); // subscribeToAvailableRides
   const unsubRef2 = useRef<(() => void) | null>(null); // subscribeToDriverAssignments
   const unsubRef3 = useRef<ReturnType<typeof supabase.channel> | null>(null); // driver_notifications
+  
+  // ✅ BUG #7 CORRIGIDO: timers para auto-mark notifications como lidas
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     if (!profile) return;
@@ -67,13 +71,17 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     }).then(s => setSimulation(s));
   }, [profile]);
 
+  const isOnlineRef = useRef(false);
+
   // ── Ir online ────────────────────────────────────────────────────────────
   const goOnline = useCallback(async () => {
+    isOnlineRef.current = true;
     setIsOnline(true);
     await rideService.setDriverStatus(driverId, 'available');
   }, [driverId]);
 
   const goOffline = useCallback(async () => {
+    isOnlineRef.current = false;
     setIsOnline(false);
     setAvailableRides([]);
     setIncomingRide(null);
@@ -194,20 +202,51 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
         setPendingNotifCount(c => c + 1);
 
-        // Marcar como lida automaticamente após 5s
-        setTimeout(async () => {
-          await supabase
-            .from('driver_notifications')
-            .update({ read_at: new Date().toISOString() })
-            .eq('id', notif.id);
+        // ✅ BUG #7 CORRIGIDO: setTimeout com cleanup e verificação de montagem
+        const timer = setTimeout(async () => {
+          timersRef.current.delete(notif.id);
+          if (!mountedRef.current) return;
+
+          try {
+            await supabase
+              .from('driver_notifications')
+              .update({ read_at: new Date().toISOString() })
+              .eq('id', notif.id);
+          } catch (err) {
+            if (import.meta.env.DEV) {
+              console.warn('[DriverHome] Falha ao marcar notificação como lida:', notif.id, err);
+            }
+          }
         }, 5000);
+
+        timersRef.current.set(notif.id, timer);
       })
       .subscribe((status) => {
         console.log('[DriverHome] driver_notifications canal:', status);
       });
   }, [driverId]);
 
-  // ── Ciclo de vida online/offline ───────────────────────────────────────────
+  // Effect único de lifecycle e unmount
+  // ✅ BUG #7 CORRIGIDO: cleanup completo de todos os timers
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // Limpar TODOS os timers de notificações pendentes
+      timersRef.current.forEach((timer) => clearTimeout(timer));
+      timersRef.current.clear();
+      if (gpsRef.current)    { gpsRef.current(); gpsRef.current = null; }
+      if (unsubRef1.current) { unsubRef1.current(); unsubRef1.current = null; }
+      if (unsubRef2.current) { unsubRef2.current(); unsubRef2.current = null; }
+      if (unsubRef3.current) { supabase.removeChannel(unsubRef3.current); unsubRef3.current = null; }
+      if (isOnlineRef.current) {
+        rideService.setDriverStatus(driverId, 'offline');
+        isOnlineRef.current = false;
+      }
+    };
+  }, [driverId]);
+
+  // Effect dependente do estado online
   useEffect(() => {
     if (!isOnline) {
       if (gpsRef.current)    { gpsRef.current(); gpsRef.current = null; }
@@ -260,27 +299,12 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         }
       });
 
-      // Subscrição 3: driver_notifications — recebe INSERT mesmo offline
+      // Subscrição 3: driver_notifications
       subscribeToNotifications();
     };
 
     initOnline();
-
-    return () => {
-      if (gpsRef.current)    { gpsRef.current(); gpsRef.current = null; }
-      if (unsubRef1.current) { unsubRef1.current(); unsubRef1.current = null; }
-      if (unsubRef2.current) { unsubRef2.current(); unsubRef2.current = null; }
-      if (unsubRef3.current) { supabase.removeChannel(unsubRef3.current); unsubRef3.current = null; }
-    };
   }, [isOnline, driverId, loadPendingNotifications, subscribeToNotifications]);
-
-  useEffect(() => () => {
-    if (gpsRef.current)    gpsRef.current();
-    if (unsubRef1.current) unsubRef1.current();
-    if (unsubRef2.current) unsubRef2.current();
-    if (unsubRef3.current) supabase.removeChannel(unsubRef3.current);
-    rideService.setDriverStatus(driverId, 'offline');
-  }, [driverId]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleConfirmAuction = async () => {
@@ -355,10 +379,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       <div className="aspect-[4/3] w-full relative z-0 overflow-hidden rounded-[3rem] shadow-2xl border-4 border-white">
         <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-surface-container-low text-on-surface-variant text-xs">A carregar mapa...</div>}>
           <Map3D
-            pickup={ride.pickupCoords}
-            destination={ride.destCoords}
-            carLocation={ride.carLocation}
-            status={ride.status}
+            mode="driver"
+            center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
           />
         </Suspense>
         <div className="absolute top-6 right-6 bg-surface-container-low/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-outline-variant/20 flex items-center gap-3">
@@ -416,5 +438,64 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     </div>
   );
 };
+
+// =============================================================================
+// Hook genérico useAutoMarkNotificationsRead (reutilizável)
+// Marca notificações como lidas automaticamente após delay
+// Cancela todos os timers pendentes ao desmontar
+// =============================================================================
+export function useAutoMarkNotificationsRead(
+  notifications: Array<{ id: string; read_at: string | null }>,
+  onRead: (id: string) => void,
+  delayMs = 5000,
+) {
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      timersRef.current.forEach((timer) => clearTimeout(timer));
+      timersRef.current.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    notifications.forEach((notif) => {
+      if (notif.read_at || timersRef.current.has(notif.id)) return;
+
+      const timer = setTimeout(async () => {
+        timersRef.current.delete(notif.id);
+        if (!mountedRef.current) return;
+
+        try {
+          await supabase
+            .from('driver_notifications')
+            .update({ read_at: new Date().toISOString() })
+            .eq('id', notif.id)
+            .eq('read_at', null);
+
+          if (!mountedRef.current) return;
+          onRead(notif.id);
+        } catch (err) {
+          if (import.meta.env.DEV) {
+            console.warn('[useAutoMarkNotificationsRead] Falha:', notif.id, err);
+          }
+        }
+      }, delayMs);
+
+      timersRef.current.set(notif.id, timer);
+    });
+
+    const currentIds = new Set(notifications.map((n) => n.id));
+    timersRef.current.forEach((timer, id) => {
+      if (!currentIds.has(id)) {
+        clearTimeout(timer);
+        timersRef.current.delete(id);
+      }
+    });
+  }, [notifications, onRead, delayMs]);
+}
 
 export default DriverHome;
