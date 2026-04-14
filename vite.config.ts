@@ -17,13 +17,17 @@ export default defineConfig({
     port: 5173,
   },
   build: {
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         manualChunks: {
-          mapbox:  ['mapbox-gl'],
-          agora:   ['agora-rtc-sdk-ng'],
-          charts:  ['recharts'],
-          zustand: ['zustand'],
+          mapbox:   ['mapbox-gl'],
+          agora:    ['agora-rtc-sdk-ng'],
+          charts:   ['recharts'],
+          zustand:  ['zustand'],
+          h3:       ['h3-js'],
+          supabase: ['@supabase/supabase-js'],
+          purify:   ['dompurify'],
         },
       },
     },

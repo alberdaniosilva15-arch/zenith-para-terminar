@@ -1,10 +1,10 @@
-// src/components/Map3D.tsx
-// FASE 1 — Componente Map3D estabilizado com singleton WebGL
-
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
 import mapboxgl from "mapbox-gl";
 import { MapSingleton } from "../lib/mapInstance";
 import "mapbox-gl/dist/mapbox-gl.css";
+
+// Re-export para manter compatibilidade com código existente
+export { createDriverMarkerElement } from "../lib/driverMarker";
 
 // ─── Tipos ────────────────────────────────────────────────────
 export interface Map3DHandle {
@@ -99,22 +99,7 @@ Map3D.displayName = "Map3D";
 
 export default Map3D;
 
-// ─── Utilitário: criar elemento HTML de marcador personalizado ─
-export function createDriverMarkerElement(heading: number = 0): HTMLElement {
-  const el = document.createElement("div");
-  el.className = "zenith-driver-marker";
-  el.style.cssText = `
-    width: 40px;
-    height: 40px;
-    transform: rotate(${heading}deg);
-    transition: transform 0.3s ease;
-    cursor: pointer;
-  `;
-  el.innerHTML = `
-    <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="20" cy="20" r="18" fill="#1e293b" stroke="#3B82F6" stroke-width="2"/>
-      <path d="M20 8 L28 28 L20 24 L12 28 Z" fill="#3B82F6"/>
-    </svg>
-  `;
-  return el;
-}
+// src/components/Map3D.tsx
+// FASE 1 — Componente Map3D estabilizado com singleton WebGL
+// NOTA: createDriverMarkerElement foi movida para src/lib/driverMarker.ts
+//       para resolver conflito de import static vs dynamic no Vite.
