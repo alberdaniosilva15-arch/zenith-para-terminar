@@ -3,7 +3,7 @@
 // FIX: heading interpolação usa caminho mais curto sempre
 
 import mapboxgl from 'mapbox-gl';
-import { createDriverMarkerElement } from '../components/Map3D';
+import { createDriverMarkerElement } from './driverMarker';
 
 interface Coords {
   lng: number;

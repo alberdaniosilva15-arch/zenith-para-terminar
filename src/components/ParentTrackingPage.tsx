@@ -2,11 +2,14 @@
 // FASE 2 — Página de Rastreio Parental (Acesso Público via Token)
 // Segurança: Validação via RPC validate_tracking_token
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
+import React from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
-import Map3D, { Map3DHandle } from "./Map3D";
+import type { Map3DHandle } from "./Map3D";
 import { DriverTracker } from "../lib/driverTracker";
+
+const Map3D = React.lazy(() => import("./Map3D"));
 
 // ─── Tipos ────────────────────────────────────────────────────
 interface RideTrackingInfo {
@@ -152,11 +155,13 @@ export default function ParentTrackingPage() {
     <div className="w-screen h-screen relative bg-[#0B0B0B] overflow-hidden">
       
       {/* MAPA (Fundo) */}
-      <Map3D 
-        ref={mapRef}
-        mode="tracking"
-        onMapReady={handleMapReady}
-      />
+      <Suspense fallback={<div className="w-screen h-screen bg-[#0B0B0B] flex items-center justify-center"><div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>}>
+        <Map3D 
+          ref={mapRef}
+          mode="tracking"
+          onMapReady={handleMapReady}
+        />
+      </Suspense>
 
       {/* OVERLAY: HUD de Informação */}
       <div className="absolute top-0 left-0 right-0 p-6 pointer-events-none">
