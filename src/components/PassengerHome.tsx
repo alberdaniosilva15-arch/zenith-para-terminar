@@ -7,8 +7,7 @@
 // =============================================================================
 
 import React, { useState, useCallback, useRef, useEffect, Suspense } from 'react';
-import { Megaphone } from 'lucide-react';
-import RideTalk from './RideTalk';
+
 import LocationSearch from './passenger/LocationSearch';
 import RoutePreview from './passenger/RoutePreview';
 import AuctionList from './passenger/AuctionList';
@@ -367,18 +366,20 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
       <div className="relative z-10 p-4 space-y-4 flex-1 flex flex-col">
 
-        {/* Card de rota */}
-        <RoutePreview
-          selecting={selecting}
-          nearbyCount={nearbyCount}
-          pickupName={pickupName}
-          destName={destName}
-          routeInfo={routeInfo}
-          zonePrice={zonePrice}
-          zoneNames={zoneNames}
-          onSelectPickup={() => { setSelecting('pickup'); handleSearch(''); }}
-          onSelectDest={() => { setSelecting('dest'); handleSearch(''); }}
-        />
+        {/* Card de rota (oculto quando já estamos no check-out para dar destaque ao Mapa) */}
+        {!fareData && !calculating && (
+          <RoutePreview
+            selecting={selecting}
+            nearbyCount={nearbyCount}
+            pickupName={pickupName}
+            destName={destName}
+            routeInfo={routeInfo}
+            zonePrice={zonePrice}
+            zoneNames={zoneNames}
+            onSelectPickup={() => { setSelecting('pickup'); handleSearch(''); }}
+            onSelectDest={() => { setSelecting('dest'); handleSearch(''); }}
+          />
+        )}
 
         {/* Overlay de pesquisa */}
         {selecting && (
@@ -438,20 +439,12 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               onCancelRide={onCancelRide}
             />
 
-            <RideTalk zone="Geral" role={UserRole.PASSENGER} />
+            {/* Adicionado espaço livre para quando a doca inferior com o Kaze está presente */}
+            <div className="h-10" />
           </div>
         )}
 
-        {/* FAB de destino rápido */}
-        {!selecting && ride.status === RideStatus.IDLE && (
-          <button
-            onClick={() => { setSelecting('dest'); handleSearch(''); }}
-            className="fixed bottom-28 left-1/2 -translate-x-1/2 z-50 w-16 h-16 bg-primary text-white rounded-full shadow-[0_20px_50px_rgba(37,99,235,0.5)] flex items-center justify-center hover:scale-110 active:scale-95 transition-all border-4 border-white/30"
-            aria-label="Escolher destino"
-          >
-            <Megaphone className="w-8 h-8" />
-          </button>
-        )}
+        {/* Kaze substituiu o FAB anterior e é injectado pelo App no topo */}
       </div>
     </div>
   );

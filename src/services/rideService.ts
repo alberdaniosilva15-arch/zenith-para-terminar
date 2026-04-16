@@ -14,6 +14,7 @@
 // =============================================================================
 
 import { latLngToCell, gridDisk } from 'h3-js';
+import { haversineMeters } from '../lib/geo';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { supabase, edgeFunctionUrl } from '../lib/supabase';
 import type {
@@ -29,7 +30,7 @@ const H3_RES_DRIVER = 9;
 const H3_RES_ZONE   = 7;
 
 // ─── Geo Parser (robusto — mantido intacto) ─────────────────────────────────
-function parseSupabasePoint(val: unknown): LatLng | null {
+export function parseSupabasePoint(val: unknown): LatLng | null {
   if (!val) return null;
 
   if (typeof val === 'object' && val !== null) {
@@ -68,21 +69,7 @@ function parseSupabasePoint(val: unknown): LatLng | null {
   return null;
 }
 
-// Calcula distância em metros entre dois pontos (Haversine)
-function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
-  const R = 6371000; // Raio da Terra em metros
-  const φ1 = lat1 * Math.PI / 180;
-  const φ2 = lat2 * Math.PI / 180;
-  const Δφ = (lat2 - lat1) * Math.PI / 180;
-  const Δλ = (lon2 - lon1) * Math.PI / 180;
-
-  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
-            Math.cos(φ1) * Math.cos(φ2) *
-            Math.sin(Δλ/2) * Math.sin(Δλ/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-  
-  return R * c;
-}
+// haversineMeters importada de '../lib/geo' — eliminada duplicação
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 interface CreateRideInput {
@@ -332,7 +319,7 @@ class RideService {
     }
     if (!input.passenger_id) return { data: null, error: { code: 'validation', message: 'ID de passageiro em falta.' } };
     if (!input.origin_address || !input.dest_address) return { data: null, error: { code: 'validation', message: 'Origem ou destino em falta.' } };
-    if (!input.origin_lat || !input.origin_lng || !input.dest_lat || !input.dest_lng) {
+    if (input.origin_lat == null || input.origin_lng == null || input.dest_lat == null || input.dest_lng == null) {
       return { data: null, error: { code: 'validation', message: 'Coordenadas inválidas.' } };
     }
 
@@ -619,6 +606,11 @@ class RideService {
     if (this.rideChannel) { supabase.removeChannel(this.rideChannel); this.rideChannel = null; }
     this.rideChannel = supabase.channel(`ride:${rideId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` }, (p) => {
+        // Tratar evento DELETE — corrida eliminada da BD (ex: cleanup automático)
+        if (p.eventType === 'DELETE' && p.old) {
+          onUpdate({ ...(p.old as DbRide), status: RideStatus.CANCELLED });
+          return;
+        }
         if (p.new) onUpdate(p.new as DbRide);
       })
       .subscribe();
@@ -783,7 +775,7 @@ class RideService {
     const updateData: Record<string, unknown> = {
       driver_id: driverId, status, updated_at: new Date().toISOString(),
     };
-    if (coords?.lat && coords?.lng) {
+    if (coords != null && Number.isFinite(coords.lat) && Number.isFinite(coords.lng)) {
       updateData.location = `POINT(${coords.lng} ${coords.lat})`;
       updateData.h3_index_res9 = latLngToCell(coords.lat, coords.lng, H3_RES_DRIVER);
       updateData.h3_index_res7 = latLngToCell(coords.lat, coords.lng, H3_RES_ZONE);

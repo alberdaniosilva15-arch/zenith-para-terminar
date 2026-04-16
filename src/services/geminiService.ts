@@ -12,6 +12,7 @@
 
 import { supabase, edgeFunctionUrl } from '../lib/supabase';
 import type { LocationResult, AutonomousCommand } from '../types';
+import { mapService } from './mapService';
 
 // =============================================================================
 // Conversores de formato de histórico
@@ -144,8 +145,17 @@ export const geminiService = {
   async searchLocations(query: string): Promise<LocationResult[]> {
     try {
       const r = await callProxy<{ locations: LocationResult[] }>('search_locations', { query });
-      return r.locations ?? [];
-    } catch (e) { console.error('[geminiService.searchLocations]', e); return []; }
+      if ((r.locations ?? []).length > 0) return r.locations;
+    } catch (e) {
+      console.warn('[geminiService.searchLocations] gemini-proxy indisponível, a usar fallback Mapbox/local:', e);
+    }
+
+    try {
+      return await mapService.searchPlaces(query);
+    } catch (fallbackErr) {
+      console.error('[geminiService.searchLocations] fallback local falhou:', fallbackErr);
+      return [];
+    }
   },
 
   // ------------------------------------------------------------------
@@ -287,8 +297,12 @@ export const geminiService = {
     try {
       const tokenData = await geminiService.getKazeLiveToken();
       if (!tokenData?.ephemeral_token) throw new Error('Token efémero inválido.');
-      console.log('[KazeLive] Token obtido, usar SDK Gemini Live com este token');
-      return { close: () => callbacks.onclose() };
+      // TODO: Implementar ligação WebSocket real ao Gemini Live API
+      // O token é válido mas a ligação bidirecional via WebSocket ainda não está implementada.
+      console.warn('[KazeLive] Funcionalidade em desenvolvimento — WebSocket não implementado nesta versão.');
+      // Notificar o componente que não há ligação activa
+      setTimeout(() => callbacks.onclose(), 0);
+      return { close: () => {} };
     } catch (e) {
       console.error('[geminiService.connectKazeLive] falha:', e);
       throw e;

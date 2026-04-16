@@ -85,21 +85,23 @@ export const LUANDA_ZONE_MAP: Record<string, string> = {
 
 // Cores das zonas para visualização no mapa de preços
 export const ZONE_COLORS: Record<string, { bg: string; text: string; label: string }> = {
-  'Centro':       { bg: 'bg-primary/10', text: 'text-primary',   label: 'Central' },
-  'Maianga':      { bg: 'bg-primary/8',  text: 'text-primary/80',   label: 'Central' },
-  'Miramar':      { bg: 'bg-primary/8',  text: 'text-primary/80',   label: 'Central' },
-  'Cazenga':      { bg: 'bg-primary/6',  text: 'text-primary/70',  label: 'Próximo' },
-  'Rangel':       { bg: 'bg-primary/6',  text: 'text-primary/70',  label: 'Próximo' },
-  'Samba':        { bg: 'bg-primary/8',  text: 'text-primary/80',  label: 'Médio' },
-  'Benfica':      { bg: 'bg-primary/8',  text: 'text-primary/80',  label: 'Médio' },
-  'Talatona':     { bg: 'bg-primary/10', text: 'text-primary',  label: 'Médio' },
-  'Kilamba':      { bg: 'bg-orange-50',  text: 'text-orange-700', label: 'Longo' },
-  'Viana':        { bg: 'bg-red-50',     text: 'text-red-700',    label: 'Longo' },
-  'Luanda Norte': { bg: 'bg-red-50',     text: 'text-red-700',    label: 'Longo' },
+  'Centro':       { bg: 'bg-primary/10', text: 'text-primary',     label: 'Central' },
+  'Maianga':      { bg: 'bg-primary/10', text: 'text-primary/80',   label: 'Central' },
+  'Miramar':      { bg: 'bg-primary/10', text: 'text-primary/80',   label: 'Central' },
+  'Cazenga':      { bg: 'bg-primary/10', text: 'text-primary/70',   label: 'Próximo' },
+  'Rangel':       { bg: 'bg-primary/10', text: 'text-primary/70',   label: 'Próximo' },
+  'Samba':        { bg: 'bg-primary/10', text: 'text-primary/80',   label: 'Médio' },
+  'Benfica':      { bg: 'bg-primary/10', text: 'text-primary/80',   label: 'Médio' },
+  'Talatona':     { bg: 'bg-primary/10', text: 'text-primary',      label: 'Médio' },
+  'Kilamba':      { bg: 'bg-orange-50',  text: 'text-orange-700',   label: 'Longo' },
+  'Viana':        { bg: 'bg-red-50',     text: 'text-red-700',      label: 'Longo' },
+  'Luanda Norte': { bg: 'bg-red-50',     text: 'text-red-700',      label: 'Longo' },
 };
 
-// Cache em memória para evitar hits repetidos ao Supabase
-const priceCache = new Map<string, ZonePrice | null>();
+// Cache em memória com TTL de 5 minutos (evitar hits repetidos ao Supabase)
+interface PriceCacheEntry { value: ZonePrice | null; expiresAt: number; }
+const priceCache     = new Map<string, PriceCacheEntry>();
+const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutos
 
 class ZonePriceService {
 
@@ -130,7 +132,8 @@ class ZonePriceService {
     if (!originZone || !destZone || originZone === destZone) return null;
 
     const cacheKey = `${originZone}→${destZone}`;
-    if (priceCache.has(cacheKey)) return priceCache.get(cacheKey) ?? null;
+    const cached = priceCache.get(cacheKey);
+    if (cached && Date.now() < cached.expiresAt) return cached.value;
 
     // Tenta a direcção directa
     const { data } = await supabase
@@ -143,7 +146,7 @@ class ZonePriceService {
 
     if (data) {
       const result = data as ZonePrice;
-      priceCache.set(cacheKey, result);
+      priceCache.set(cacheKey, { value: result, expiresAt: Date.now() + PRICE_CACHE_TTL });
       return result;
     }
 
@@ -163,11 +166,11 @@ class ZonePriceService {
         price_kz:    (reverse as ZonePrice).price_kz,
         distance_km: (reverse as ZonePrice).distance_km,
       };
-      priceCache.set(cacheKey, result);
+      priceCache.set(cacheKey, { value: result, expiresAt: Date.now() + PRICE_CACHE_TTL });
       return result;
     }
 
-    priceCache.set(cacheKey, null);
+    priceCache.set(cacheKey, { value: null, expiresAt: Date.now() + PRICE_CACHE_TTL });
     return null;
   }
 

@@ -2,23 +2,23 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Save } from 'lucide-react';
 
-interface AppSetting { key: string; value: any; }
+interface AppSetting { key: string; value: string | number | boolean; }
 
 const SettingsPage: React.FC = () => {
-  const [settings, setSettings] = useState<Record<string,any>>({
+  const [settings, setSettings] = useState<Record<string, string | number | boolean>>({
     matching_radius_km:   7,
     matching_expansion:   true,
     max_searching_minutes: 5,
     notif_expiry_minutes: 5,
     max_drivers_to_notify: 3,
   });
-  const [loading, setSaving] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [saved,   setSaved]  = useState(false);
 
   useEffect(() => {
     supabase.from('app_settings').select('key, value').then(({ data }) => {
       if (!data) return;
-      const map: Record<string,any> = {};
+      const map: Record<string, string | number | boolean> = {};
       for (const row of (data as AppSetting[])) map[row.key] = row.value;
       setSettings(prev => ({ ...prev, ...map }));
     });
@@ -33,7 +33,7 @@ const SettingsPage: React.FC = () => {
     setTimeout(() => setSaved(false), 3000);
   };
 
-  const set = (key: string, value: any) => setSettings(prev => ({ ...prev, [key]: value }));
+  const set = (key: string, value: string | number | boolean) => setSettings(prev => ({ ...prev, [key]: value }));
 
   const SliderRow: React.FC<{label:string;k:string;min:number;max:number;step:number;unit?:string}> = ({label,k,min,max,step,unit=''}) => (
     <div style={{ display:'grid', gridTemplateColumns:'220px 1fr 60px', alignItems:'center', gap:'16px' }}>
@@ -91,7 +91,7 @@ const SettingsPage: React.FC = () => {
               { name:'Supabase (Base de Dados)', ok:true },
               { name:'Google Maps (Geocoding + Routes)', ok:true },
               { name:'Agora (VoIP)', ok:true },
-              { name:'Multicaixa Express (Pagamentos)', ok:true },
+              { name:'Multicaixa Express (Pagamentos)', ok:false },
               { name:'Gemini AI (Kaze + Análise)', ok:true },
             ].map(int => (
               <div key={int.name} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'10px 0', borderBottom:'1px solid var(--border)' }}>
@@ -108,9 +108,9 @@ const SettingsPage: React.FC = () => {
         </div>
 
         <button className="btn btn-primary btn-lg w-full" style={{ justifyContent:'center', gap:'8px' }}
-          onClick={save} disabled={loading}>
-          {loading ? <span className="spinner" /> : <Save size={14} />}
-          {loading ? 'A guardar...' : saved ? '✓ Guardado!' : 'GUARDAR CONFIGURAÇÕES'}
+          onClick={save} disabled={saving}>
+          {saving ? <span className="spinner" /> : <Save size={14} />}
+          {saving ? 'A guardar...' : saved ? '✓ Guardado!' : 'GUARDAR CONFIGURAÇÕES'}
         </button>
       </div>
     </div>

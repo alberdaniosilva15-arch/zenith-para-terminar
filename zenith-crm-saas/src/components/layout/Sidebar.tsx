@@ -3,7 +3,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '../../hooks/useAdminAuth';
 import {
   LayoutDashboard, DollarSign, Users, UserCheck,
-  Map, TrendingUp, Building2, Settings, LogOut, ShieldCheck
+  Map, TrendingUp, Building2, Settings, LogOut, ShieldCheck, FileText
 } from 'lucide-react';
 
 const NAV = [
@@ -11,6 +11,7 @@ const NAV = [
   { to: '/pricing',     icon: DollarSign,      label: 'Pricing Engine' },
   { to: '/drivers',     icon: UserCheck,       label: 'Motoristas' },
   { to: '/passengers',  icon: Users,           label: 'Passageiros' },
+  { to: '/contracts',   icon: FileText,        label: 'Contratos IA' },
   { to: '/rides',       icon: Map,             label: 'Corridas' },
   { to: '/finance',     icon: TrendingUp,      label: 'Financeiro' },
   { to: '/admins',      icon: ShieldCheck,     label: 'Equipa Admin' },
@@ -19,7 +20,7 @@ const NAV = [
 ];
 
 const Sidebar: React.FC = () => {
-  const { admin, signOut } = useAdminAuth();
+  const { user, signOut } = useAdminAuth();
   const navigate = useNavigate();
 
   const handleSignOut = async () => {
@@ -52,7 +53,7 @@ const Sidebar: React.FC = () => {
 
         <div className="sidebar-section-label" style={{ marginTop: '8px' }}>Gestão</div>
 
-        {NAV.slice(2, 7).map(({ to, icon: Icon, label }) => (
+        {NAV.slice(2, 8).map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -65,7 +66,7 @@ const Sidebar: React.FC = () => {
 
         <div className="sidebar-section-label" style={{ marginTop: '8px' }}>Sistema</div>
 
-        {NAV.slice(7).map(({ to, icon: Icon, label }) => (
+        {NAV.slice(8).map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -80,11 +81,11 @@ const Sidebar: React.FC = () => {
       {/* Footer */}
       <div className="sidebar-footer">
         <div className="sidebar-avatar">
-          {(admin?.name ?? 'A').charAt(0).toUpperCase()}
+          {(user?.email ?? 'A').charAt(0).toUpperCase()}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="sidebar-user-name" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {admin?.name ?? 'Admin'}
+            {user?.email?.split('@')[0] ?? 'Admin'}
           </div>
           <div className="sidebar-user-role">Administrador</div>
         </div>

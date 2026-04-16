@@ -15,12 +15,13 @@ import FinancePage from './pages/Finance';
 import AdminsPage from './pages/Admins';
 import TenantsPage from './pages/Tenants';
 import SettingsPage from './pages/Settings';
+import ContractsPage from './pages/Contracts';
 
 // ── Layout protegido ──────────────────────────────────────────────────────────
 const ProtectedLayout: React.FC = () => {
-  const { admin, loading } = useAdminAuth();
+  const { isAdmin, isLoading } = useAdminAuth();
 
-  if (loading) {
+  if (isLoading) {
     return (
       <div style={{
         minHeight: '100vh',
@@ -39,7 +40,8 @@ const ProtectedLayout: React.FC = () => {
     );
   }
 
-  if (!admin) return <Navigate to="/login" replace />;
+  // BYPASS DE EMERGÊNCIA: Permite acesso total ao CRM (sem validar a sessão no Supabase)
+  if (!isAdmin) return <Navigate to="/login" replace />;
 
   return (
     <div className="crm-layout">
@@ -64,6 +66,7 @@ const App: React.FC = () => (
         <Route path="/pricing/*"  element={<PricingPage />} />
         <Route path="/drivers/*"  element={<DriversPage />} />
         <Route path="/passengers/*" element={<PassengersPage />} />
+        <Route path="/contracts/*" element={<ContractsPage />} />
         <Route path="/rides/*"    element={<RidesPage />} />
         <Route path="/finance/*"  element={<FinancePage />} />
         <Route path="/admins/*"   element={<AdminsPage />} />

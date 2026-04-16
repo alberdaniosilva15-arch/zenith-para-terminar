@@ -36,11 +36,14 @@ const ZonePriceMap: React.FC<{
   const filteredPrices = prices.filter(p =>
     p.origin_zone === originFilter || p.dest_zone === originFilter
   ).map(p => ({
-    zone:       p.origin_zone === originFilter ? p.dest_zone : p.origin_zone,
-    price_kz:   p.price_kz,
+    zone:        p.origin_zone === originFilter ? p.dest_zone : p.origin_zone,
+    price_kz:    p.price_kz,
     distance_km: p.distance_km,
     isHighlight: p.dest_zone === highlightDest || p.origin_zone === highlightDest,
-  })).sort((a, b) => a.price_kz - b.price_kz);
+  }))
+  // Deduplicar — evita zona aparecer duas vezes em preços bidirecionais
+  .filter((item, idx, arr) => arr.findIndex(x => x.zone === item.zone) === idx)
+  .sort((a, b) => a.price_kz - b.price_kz);
 
   if (loading) {
     return (
@@ -99,11 +102,11 @@ const ZonePriceMap: React.FC<{
         </p>
       ) : (
         <div className="space-y-2">
-          {filteredPrices.map(item => {
+          {filteredPrices.map((item, idx) => {
             const color = ZONE_COLORS[item.zone] ?? { bg: 'bg-surface-container-lowest', text: 'text-on-surface-variant', label: '' };
             return (
               <div
-                key={item.zone}
+                key={`${item.zone}-${idx}`}
                 className={`flex items-center gap-4 p-4 rounded-[2rem] border transition-all ${
                   item.isHighlight
                     ? 'border-primary/50 bg-primary/10 shadow-sm'

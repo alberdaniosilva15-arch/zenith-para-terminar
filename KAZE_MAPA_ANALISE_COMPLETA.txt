@@ -1,0 +1,2230 @@
+========================================================
+FILE: src\components\passenger\LocationSearch.tsx
+========================================================
+import React from 'react';
+import { LocationResult } from '../../types';
+
+interface LocationSearchProps {
+  selecting: 'pickup' | 'dest';
+  searchQuery: string;
+  results: LocationResult[];
+  searching: boolean;
+  onSearchChange: (query: string) => void;
+  onClose: () => void;
+  onUseGPS: () => void;
+  onSelectLocation: (loc: LocationResult) => void;
+}
+
+const LocationSearch: React.FC<LocationSearchProps> = ({
+  selecting,
+  searchQuery,
+  results,
+  searching,
+  onSearchChange,
+  onClose,
+  onUseGPS,
+  onSelectLocation,
+}) => {
+  return (
+    <div className="absolute inset-x-4 top-4 z-[100] animate-in slide-in-from-top duration-300 flex flex-col max-h-[85vh]">
+      <div className="bg-surface-container-low rounded-[2.5rem] overflow-hidden border border-outline-variant/20 flex flex-col shadow-2xl">
+        <div className="p-5 border-b border-outline-variant/10 flex items-center gap-4 sticky top-0 bg-surface-container-low z-10">
+          <button
+            onClick={onClose}
+            className="w-10 h-10 flex items-center justify-center bg-surface-container-lowest rounded-full text-outline font-black"
+          >✕</button>
+          <input
+            autoFocus
+            type="text"
+            placeholder={selecting === 'pickup' ? 'De onde partes?' : 'Para onde vais?'}
+            className="flex-1 bg-surface-container-lowest p-4 rounded-2xl outline-none font-black text-sm text-on-surface"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+          />
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          {selecting === 'pickup' && (
+            <button onClick={onUseGPS} disabled={searching}
+              className="w-full flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/20 mb-2 text-left disabled:opacity-60">
+              <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center text-white text-lg">
+                {searching ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : '📍'}
+              </div>
+              <div>
+                <p className="font-black text-on-surface text-sm">Usar a minha localização</p>
+                <p className="text-[9px] text-primary font-bold uppercase">GPS automático · Nome do bairro</p>
+              </div>
+            </button>
+          )}
+          <p className="px-4 text-[8px] font-black text-on-surface-variant/70 uppercase tracking-widest mb-2">
+            {searching ? 'A consultar...' : `${results.length} locais`}
+          </p>
+          {results.map((res, i) => (
+            <button key={`location-${res.name}-${i}`} onClick={() => onSelectLocation(res)}
+              className="w-full flex items-center gap-4 p-4 hover:bg-surface-container-lowest rounded-2xl transition-colors text-left border border-transparent hover:border-outline-variant/20">
+              <div className="w-10 h-10 bg-surface-container-low rounded-xl flex items-center justify-center text-xl shrink-0">
+                {res.type === 'bairro' ? '🏘️' : res.type === 'hospital' ? '🏥' : res.type === 'servico' ? '🏪' : res.type === 'monumento' ? '🏛️' : '📍'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-black text-on-surface text-sm truncate">{res.name}</p>
+                <p className="text-[9px] font-bold text-on-surface-variant/70 uppercase">{res.description}</p>
+              </div>
+              {res.isPopular && (
+                <span className="text-[8px] bg-primary/15 text-primary px-2 py-1 rounded-full font-black shrink-0">Popular</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default LocationSearch;
+
+
+
+========================================================
+FILE: src\components\LocationSearchPanel.tsx
+========================================================
+// src/components/LocationSearchPanel.tsx
+// Search autocomplete real com Mapbox Geocoding API
+// GPS real sem hardcode
+// Mostra rota + distância + ETA no mapa
+// Design superior ao Yango — tema dark Zenith Ride
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import mapboxgl from 'mapbox-gl';
+import { getCurrentPosition, watchPosition } from '../services/gpsService';
+import { getRoute } from '../services/mapboxRoutingService';
+import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
+
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+
+// ── Tipos ────────────────────────────────────────────────────────────────────
+interface SearchResult {
+  id: string;
+  place_name: string;
+  text: string;
+  place_type: string[];
+  center: [number, number]; // [lng, lat]
+  distanceKm?: number;
+}
+
+interface Props {
+  mapRef: React.MutableRefObject<mapboxgl.Map | null>;
+  onRideRequest?: (data: {
+    origin: { lat: number; lng: number; label: string };
+    destination: { lat: number; lng: number; label: string };
+    distanceKm: number;
+    durationMinutes: number;
+  }) => void;
+}
+
+// ── Utilitários ───────────────────────────────────────────────────────────────
+function haversineKm(
+  lat1: number, lng1: number,
+  lat2: number, lng2: number
+): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLng = ((lng2 - lng1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+    Math.cos((lat2 * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function getPlaceIcon(types: string[]): string {
+  if (types.includes('airport')) return '✈️';
+  if (types.includes('poi')) return '📍';
+  if (types.includes('address')) return '🏠';
+  if (types.includes('neighborhood') || types.includes('locality')) return '🏘️';
+  if (types.includes('place')) return '🏙️';
+  return '📍';
+}
+
+// ── Componente Principal ──────────────────────────────────────────────────────
+export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
+  const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsLabel, setGpsLabel] = useState('A obter localização...');
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  const [gpsSource, setGpsSource] = useState<'gps' | 'network' | 'fallback' | null>(null);
+
+  const [destQuery, setDestQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const [selectedDest, setSelectedDest] = useState<SearchResult | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeInfo, setRouteInfo] = useState<{
+    distanceKm: number;
+    durationText: string;
+    durationMinutes: number;
+  } | null>(null);
+
+  const [error, setError] = useState<string | null>(null);
+
+  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const originMarker = useRef<mapboxgl.Marker | null>(null);
+  const destMarker = useRef<mapboxgl.Marker | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── GPS real ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    let stopWatch: (() => void) | null = null;
+
+    getCurrentPosition()
+      .then(async (pos) => {
+        setUserPos({ lat: pos.lat, lng: pos.lng });
+        setGpsAccuracy(pos.accuracy);
+        setGpsSource(pos.source);
+
+        // Reverse geocode para mostrar nome do local actual
+        const revUrl =
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/` +
+          `${pos.lng},${pos.lat}.json` +
+          `?types=address,neighborhood,locality,place` +
+          `&language=pt` +
+          `&access_token=${MAPBOX_TOKEN}`;
+
+        const rev = await fetch(revUrl);
+        const revData = await rev.json();
+        const name = revData.features?.[0]?.place_name?.split(',')[0] ?? 'A tua localização';
+        setGpsLabel(name);
+
+        // Coloca marker do utilizador no mapa
+        if (mapRef.current) {
+          if (originMarker.current) originMarker.current.remove();
+
+          const el = document.createElement('div');
+          el.style.cssText = `
+            width:18px;height:18px;
+            background:#00D4FF;
+            border:3px solid #fff;
+            border-radius:50%;
+            box-shadow:0 0 0 4px rgba(0,212,255,0.25), 0 0 16px rgba(0,212,255,0.6);
+          `;
+          originMarker.current = new mapboxgl.Marker({ element: el })
+            .setLngLat([pos.lng, pos.lat])
+            .addTo(mapRef.current);
+
+          mapRef.current.flyTo({
+            center: [pos.lng, pos.lat],
+            zoom: 15,
+            duration: 1200,
+          });
+        }
+
+        // Watch contínuo para actualizar posição
+        stopWatch = watchPosition(
+          (updated) => {
+            setUserPos({ lat: updated.lat, lng: updated.lng });
+            originMarker.current?.setLngLat([updated.lng, updated.lat]);
+          },
+          () => {} // Erros de watch são silenciosos
+        );
+      })
+      .catch((err: Error) => {
+        setError(err.message + ' - A usar Luanda Centro (Fallback) para cálculo de distâncias.');
+        setGpsLabel('Centro de Luanda');
+        setUserPos({ lat: -8.8390, lng: 13.2343 }); // Fallback Luanda para não quebrar a UI
+      });
+
+    return () => { stopWatch?.(); };
+  }, []);
+
+  // ── Search autocomplete ─────────────────────────────────────────────────────
+  const searchPlaces = useCallback(
+    async (query: string) => {
+      if (query.trim().length < 2) {
+        setResults([]);
+        return;
+      }
+
+      setSearching(true);
+      setError(null);
+
+      try {
+        // Bias para Luanda — prioriza resultados de Angola
+        const proximity = userPos
+          ? `&proximity=${userPos.lng},${userPos.lat}`
+          : `&proximity=13.2343,-8.8390`;
+
+        const url =
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/` +
+          `${encodeURIComponent(query)}.json` +
+          `?country=AO` +                    // ANGOLA APENAS
+          `&language=pt` +                   // Português
+          `&limit=8` +
+          proximity +
+          `&access_token=${MAPBOX_TOKEN}`;
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        const enriched: SearchResult[] = (data.features || []).map(
+          (f: any): SearchResult => {
+            const distKm = userPos
+              ? haversineKm(
+                  userPos.lat, userPos.lng,
+                  f.center[1], f.center[0]
+                )
+              : undefined;
+            return {
+              id: f.id,
+              place_name: f.place_name,
+              text: f.text,
+              place_type: f.place_type,
+              center: f.center,
+              distanceKm: distKm !== undefined
+                ? parseFloat(distKm.toFixed(1))
+                : undefined,
+            };
+          }
+        );
+
+        setResults(enriched);
+      } catch {
+        setError('Erro na pesquisa — verifica a ligação');
+      } finally {
+        setSearching(false);
+      }
+    },
+    [userPos]
+  );
+
+  const handleQueryChange = (val: string) => {
+    setDestQuery(val);
+    setSelectedDest(null);
+    setRouteInfo(null);
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    searchTimeout.current = setTimeout(() => searchPlaces(val), 350);
+  };
+
+  // ── Selecciona destino e calcula rota ────────────────────────────────────────
+  const handleSelectDest = async (result: SearchResult) => {
+    setSelectedDest(result);
+    setDestQuery(result.text);
+    setResults([]);
+
+    if (!userPos || !mapRef.current) return;
+
+    const dest = { lat: result.center[1], lng: result.center[0] };
+
+    // Marker destino
+    if (destMarker.current) destMarker.current.remove();
+    const el = document.createElement('div');
+    el.style.cssText = `
+      width:14px;height:14px;
+      background:#FF5A1F;
+      border:3px solid #fff;
+      border-radius:50%;
+      box-shadow:0 0 0 4px rgba(255,90,31,0.25), 0 0 12px rgba(255,90,31,0.5);
+    `;
+    destMarker.current = new mapboxgl.Marker({ element: el })
+      .setLngLat([dest.lng, dest.lat])
+      .addTo(mapRef.current);
+
+    // Calcula rota real
+    setRouteLoading(true);
+    setError(null);
+
+    try {
+      const route = await getRoute(userPos, dest);
+      drawRoute(mapRef.current, route);
+      setRouteInfo({
+        distanceKm: route.distanceKm,
+        durationText: route.durationText,
+        durationMinutes: route.durationMinutes,
+      });
+      
+      if (onRideRequest) {
+        onRideRequest({
+          origin: { lat: userPos.lat, lng: userPos.lng, label: gpsLabel },
+          destination: { lat: dest.lat, lng: dest.lng, label: result.text },
+          distanceKm: route.distanceKm,
+          durationMinutes: route.durationMinutes,
+        });
+      }
+    } catch (err: any) {
+      setError(err.message || 'Não foi possível calcular a rota');
+      clearRoute(mapRef.current);
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
+  // ── Reset ────────────────────────────────────────────────────────────────────
+  const handleReset = () => {
+    setDestQuery('');
+    setSelectedDest(null);
+    setResults([]);
+    setRouteInfo(null);
+    setError(null);
+    if (mapRef.current) clearRoute(mapRef.current);
+    if (destMarker.current) { destMarker.current.remove(); destMarker.current = null; }
+    inputRef.current?.focus();
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+  return (
+    <>
+      {/* ── Painel de Search ── */}
+      <div style={{
+        position: 'absolute',
+        top: 0, left: 0, right: 0,
+        zIndex: 10,
+        padding: '16px 16px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px',
+        pointerEvents: 'none',
+      }}>
+
+        {/* Origem — GPS real */}
+        <div style={{
+          background: 'rgba(10,12,18,0.92)',
+          backdropFilter: 'blur(20px)',
+          border: '1px solid rgba(0,212,255,0.2)',
+          borderRadius: '18px',
+          padding: '14px 18px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          pointerEvents: 'auto',
+          boxShadow: '0 4px 32px rgba(0,0,0,0.5)',
+        }}>
+          <div style={{
+            width: 10, height: 10,
+            background: gpsSource === 'fallback' ? '#FFB020' : '#00D4FF',
+            borderRadius: '50%',
+            flexShrink: 0,
+            boxShadow: `0 0 8px ${gpsSource === 'fallback' ? '#FFB020' : '#00D4FF'}`,
+            animation: gpsSource === null ? 'pulse 1.2s infinite' : 'none',
+          }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 2 }}>
+              Recolha
+            </div>
+            <div style={{ fontSize: 14, color: '#fff', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {gpsLabel}
+            </div>
+          </div>
+          {gpsAccuracy !== null && gpsSource !== 'fallback' && (
+            <div style={{ fontSize: 10, color: 'rgba(0,212,255,0.6)', flexShrink: 0 }}>
+              ±{Math.round(gpsAccuracy)}m
+            </div>
+          )}
+        </div>
+
+        {/* Destino — Search */}
+        <div style={{
+          background: 'rgba(10,12,18,0.92)',
+          backdropFilter: 'blur(20px)',
+          border: `1px solid ${destQuery ? 'rgba(0,212,255,0.4)' : 'rgba(255,255,255,0.08)'}`,
+          borderRadius: '18px',
+          overflow: 'visible',
+          pointerEvents: 'auto',
+          boxShadow: '0 4px 32px rgba(0,0,0,0.5)',
+          transition: 'border-color 0.2s',
+          position: 'relative',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', padding: '14px 18px', gap: '12px' }}>
+            <div style={{
+              width: 10, height: 10,
+              background: '#FF5A1F',
+              borderRadius: '2px',
+              flexShrink: 0,
+              transform: 'rotate(45deg)',
+              boxShadow: '0 0 8px rgba(255,90,31,0.6)',
+            }} />
+            <input
+              ref={inputRef}
+              value={destQuery}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              placeholder="Para onde vais?"
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                color: '#fff',
+                fontSize: 14,
+                fontWeight: 600,
+                caretColor: '#00D4FF',
+              }}
+            />
+            {searching && (
+              <div style={{
+                width: 14, height: 14,
+                border: '2px solid rgba(0,212,255,0.3)',
+                borderTopColor: '#00D4FF',
+                borderRadius: '50%',
+                animation: 'spin 0.7s linear infinite',
+                flexShrink: 0,
+              }} />
+            )}
+            {destQuery && !searching && (
+              <button
+                onClick={handleReset}
+                style={{
+                  background: 'rgba(255,255,255,0.08)',
+                  border: 'none',
+                  color: 'rgba(255,255,255,0.5)',
+                  width: 22, height: 22,
+                  borderRadius: '50%',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >✕</button>
+            )}
+          </div>
+
+          {/* Resultados da pesquisa */}
+          {results.length > 0 && (
+            <div style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0, right: 0,
+              background: 'rgba(10,12,18,0.97)',
+              backdropFilter: 'blur(24px)',
+              border: '1px solid rgba(0,212,255,0.2)',
+              borderTop: 'none',
+              borderRadius: '0 0 18px 18px',
+              overflow: 'hidden',
+              zIndex: 20,
+              maxHeight: '60vh',
+              overflowY: 'auto',
+            }}>
+              {results.map((r, i) => (
+                <button
+                  key={r.id}
+                  onClick={() => handleSelectDest(r)}
+                  style={{
+                    width: '100%',
+                    background: 'transparent',
+                    border: 'none',
+                    borderTop: i > 0 ? '1px solid rgba(255,255,255,0.05)' : 'none',
+                    padding: '14px 18px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '14px',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'background 0.15s',
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,212,255,0.07)')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <span style={{ fontSize: 18, flexShrink: 0 }}>
+                    {getPlaceIcon(r.place_type)}
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: 14, fontWeight: 700,
+                      color: '#fff',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {r.text}
+                    </div>
+                    <div style={{
+                      fontSize: 11, color: 'rgba(255,255,255,0.35)',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      marginTop: 2,
+                    }}>
+                      {r.place_name.replace(r.text + ', ', '')}
+                    </div>
+                  </div>
+                  {r.distanceKm !== undefined && (
+                    <div style={{
+                      fontSize: 12, fontWeight: 700,
+                      color: 'rgba(0,212,255,0.7)',
+                      flexShrink: 0,
+                    }}>
+                      {r.distanceKm} km
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Info Card — ETA + Distância (inferior) ── */}
+      {(routeLoading || routeInfo) && (
+        <div style={{
+          position: 'absolute',
+          bottom: 100, left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 10,
+          pointerEvents: 'none',
+        }}>
+          {routeLoading ? (
+            <div style={{
+              background: 'rgba(10,12,18,0.92)',
+              backdropFilter: 'blur(20px)',
+              border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: '50px',
+              padding: '12px 24px',
+              display: 'flex', alignItems: 'center', gap: '10px',
+              color: 'rgba(255,255,255,0.5)',
+              fontSize: 13,
+              boxShadow: '0 4px 32px rgba(0,0,0,0.5)',
+            }}>
+              <div style={{
+                width: 14, height: 14,
+                border: '2px solid rgba(0,212,255,0.3)',
+                borderTopColor: '#00D4FF',
+                borderRadius: '50%',
+                animation: 'spin 0.7s linear infinite',
+              }} />
+              A calcular rota...
+            </div>
+          ) : routeInfo && (
+            <div style={{
+              background: 'rgba(10,12,18,0.95)',
+              backdropFilter: 'blur(20px)',
+              border: '1px solid rgba(0,212,255,0.25)',
+              borderRadius: '20px',
+              padding: '14px 28px',
+              display: 'flex', alignItems: 'center', gap: '28px',
+              boxShadow: '0 0 40px rgba(0,212,255,0.12), 0 8px 32px rgba(0,0,0,0.6)',
+              whiteSpace: 'nowrap',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: 18 }}>⏱</span>
+                <div>
+                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                    Chegada
+                  </div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#fff' }}>
+                    {routeInfo.durationText}
+                  </div>
+                </div>
+              </div>
+              <div style={{ width: 1, height: 36, background: 'rgba(255,255,255,0.08)' }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <span style={{ fontSize: 18 }}>📍</span>
+                <div>
+                  <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                    Distância
+                  </div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#00D4FF' }}>
+                    {routeInfo.distanceKm} km
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Erro ── */}
+      {error && (
+        <div style={{
+          position: 'absolute',
+          top: 170, left: 16, right: 16,
+          zIndex: 10,
+          background: 'rgba(220,50,50,0.15)',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid rgba(220,50,50,0.3)',
+          borderRadius: '14px',
+          padding: '12px 16px',
+          color: '#FF6B6B',
+          fontSize: 13,
+          display: 'flex', alignItems: 'center', gap: '8px',
+        }}>
+          <span>⚠️</span> {error}
+        </div>
+      )}
+
+      {/* ── CSS animations ── */}
+      <style>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+      `}</style>
+    </>
+  );
+}
+
+
+
+========================================================
+FILE: src\components\Map3D.tsx
+========================================================
+import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
+import mapboxgl from "mapbox-gl";
+import { MapSingleton } from "../lib/mapInstance";
+import "mapbox-gl/dist/mapbox-gl.css";
+import { LocationSearchPanel } from './LocationSearchPanel';
+
+// Re-export para manter compatibilidade com código existente
+export { createDriverMarkerElement } from "../lib/driverMarker";
+
+// ─── Tipos ────────────────────────────────────────────────────
+export interface Map3DHandle {
+  getMap:    () => mapboxgl.Map | null;
+  resize:    () => void;
+  flyTo:     (options: Parameters<mapboxgl.Map['flyTo']>[0]) => void;
+}
+
+export interface Map3DProps {
+  mapboxToken?: string;
+  center?:     [number, number];
+  zoom?:       number;
+  pitch?:      number;
+  mode?:       "passenger" | "driver" | "tracking" | "admin";
+  onMapReady?: (map: mapboxgl.Map) => void;
+  className?: string;
+  style?:     React.CSSProperties;
+}
+
+// ─── Componente ───────────────────────────────────────────────
+const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
+  mapboxToken,
+  center,
+  zoom,
+  pitch,
+  mode = "passenger",
+  onMapReady,
+  className = "",
+  style: styleProp,
+}, ref) => {
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<mapboxgl.Map | null>(null);
+  const token = mapboxToken ?? import.meta.env.VITE_MAPBOX_TOKEN as string;
+
+  // ── API exposta ao componente pai via ref ──────────────────
+  useImperativeHandle(ref, () => ({
+    getMap:    () => MapSingleton.get(),
+    resize:    () => MapSingleton.resize(),
+    flyTo:     (options) => MapSingleton.get()?.flyTo(options),
+  }));
+
+  // ── Inicializar mapa ───────────────────────────────────────
+  useEffect(() => {
+    if (!containerRef.current || !token) return;
+
+    MapSingleton.init(containerRef.current, token, {
+      center,
+      zoom,
+      pitch,
+    });
+
+    MapSingleton.onReady((readyMap) => {
+      mapRef.current = readyMap;
+      onMapReady?.(readyMap);
+    });
+
+    return () => {
+      // Singleton persiste, apenas limpamos se necessário
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Singleton: init uma única vez, deps intencionalmente vazias para evitar re-criação do mapa
+  }, []);
+
+  // ── Efeito separado para atualizar posição sem recriar ──────
+  useEffect(() => {
+    if (!center) return;
+    MapSingleton.get()?.flyTo({ center, zoom: zoom ?? 14, pitch: pitch ?? 0, duration: 800 });
+  }, [center, zoom, pitch]);
+
+  // ── Resize quando o container muda de tamanho ──────────────
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const resizeObserver = new ResizeObserver(() => MapSingleton.resize());
+    resizeObserver.observe(containerRef.current);
+    return () => resizeObserver.disconnect();
+  }, []);
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div
+        ref={containerRef}
+        className={`map3d-container ${className}`}
+        style={{
+          width:    "100%",
+          height:   "100%",
+          minHeight: "300px",
+          position: "relative",
+          ...styleProp,
+        }}
+      />
+      {mode === 'passenger' && (
+        <LocationSearchPanel
+          mapRef={mapRef}
+          onRideRequest={(data) => {
+            console.log('Viagem solicitada:', data);
+          }}
+        />
+      )}
+    </div>
+  );
+});
+
+Map3D.displayName = "Map3D";
+
+export default Map3D;
+
+// src/components/Map3D.tsx
+// FASE 1 — Componente Map3D estabilizado com singleton WebGL
+// NOTA: createDriverMarkerElement foi movida para src/lib/driverMarker.ts
+//       para resolver conflito de import static vs dynamic no Vite.
+
+
+
+========================================================
+FILE: src\components\ZonePriceMap.tsx
+========================================================
+// =============================================================================
+// ZENITH RIDE v3.0 — src/components/ZonePriceMap.tsx
+//
+// Tabela de preços fixos por zona — visível para passageiros E motoristas.
+// Elimina a percepção de surge pricing arbitrário.
+// A empresa define os preços → confiança dos dois lados.
+//
+// Integração:
+//   1. Adicionar tab 'precos' ao Layout.tsx (TabType)
+//   2. Renderizar <ZonePriceMap /> no App.tsx quando activeTab === 'precos'
+//   OU mostrar dentro do PassengerHome quando o passageiro selecciona destino.
+// =============================================================================
+
+import React, { useState, useEffect } from 'react';
+import { zonePriceService, ZONE_COLORS } from '../services/zonePrice';
+import type { ZonePrice } from '../types';
+
+const ALL_ZONES = Object.keys(ZONE_COLORS);
+
+const ZonePriceMap: React.FC<{
+  highlightOrigin?: string;   // zona de origem pré-selecionada (ex: ao seleccionar pickup)
+  highlightDest?:   string;   // zona de destino pré-selecionada
+  compact?:         boolean;  // versão compacta para embeder no PassengerHome
+}> = ({ highlightOrigin, highlightDest, compact = false }) => {
+  const [prices,       setPrices]       = useState<ZonePrice[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [originFilter, setOriginFilter] = useState<string>(highlightOrigin ?? 'Centro');
+
+  useEffect(() => {
+    zonePriceService.getAllPrices().then(p => {
+      setPrices(p);
+      setLoading(false);
+    });
+  }, []);
+
+  const filteredPrices = prices.filter(p =>
+    p.origin_zone === originFilter || p.dest_zone === originFilter
+  ).map(p => ({
+    zone:       p.origin_zone === originFilter ? p.dest_zone : p.origin_zone,
+    price_kz:   p.price_kz,
+    distance_km: p.distance_km,
+    isHighlight: p.dest_zone === highlightDest || p.origin_zone === highlightDest,
+  })).sort((a, b) => a.price_kz - b.price_kz);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-8">
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className={compact ? '' : 'p-4 space-y-5'}>
+
+      {!compact && (
+        <div className="px-2">
+          <h2 className="text-2xl font-black text-on-surface tracking-tighter italic">
+            Preços <span className="text-primary">Fixos</span>
+          </h2>
+          <p className="text-[9px] text-on-surface-variant/70 font-bold uppercase tracking-[0.2em]">
+            Sem surpresas · Sem surge · Preço garantido
+          </p>
+        </div>
+      )}
+
+      {/* ── Selector de zona de origem ─────────────────────────────────── */}
+      <div>
+        {!compact && (
+          <p className="text-[8px] font-black text-outline uppercase tracking-widest mb-2 px-1">
+            Estou em
+          </p>
+        )}
+        <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+          {ALL_ZONES.map(zone => {
+            const color = ZONE_COLORS[zone];
+            const active = originFilter === zone;
+            return (
+              <button
+                key={zone}
+                onClick={() => setOriginFilter(zone)}
+                className={`px-4 py-2 rounded-full text-[9px] font-black uppercase shrink-0 transition-all ${
+                  active
+                    ? 'bg-surface-container-highest text-white shadow-lg'
+                    : `${color.bg} ${color.text}`
+                }`}
+              >
+                {zone}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Grid de preços ─────────────────────────────────────────────── */}
+      {filteredPrices.length === 0 ? (
+        <p className="text-center text-on-surface-variant/70 text-sm py-8">
+          Nenhum preço configurado para {originFilter}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {filteredPrices.map((item, idx) => {
+            const color = ZONE_COLORS[item.zone] ?? { bg: 'bg-surface-container-lowest', text: 'text-on-surface-variant', label: '' };
+            return (
+              <div
+                key={`${item.zone}-${idx}`}
+                className={`flex items-center gap-4 p-4 rounded-[2rem] border transition-all ${
+                  item.isHighlight
+                    ? 'border-primary/50 bg-primary/10 shadow-sm'
+                    : 'border-outline-variant/20 bg-surface-container-low'
+                }`}
+              >
+                {/* Zona destino */}
+                <div className={`px-3 py-1.5 rounded-full text-[9px] font-black ${color.bg} ${color.text} shrink-0`}>
+                  {item.zone}
+                </div>
+
+                {/* Linha tracejada */}
+                <div className="flex-1 border-t border-dashed border-outline-variant/30" />
+
+                {/* Distância */}
+                <p className="text-[9px] font-bold text-on-surface-variant/70 shrink-0">
+                  ~{item.distance_km} km
+                </p>
+
+                {/* Preço */}
+                <div className="text-right shrink-0">
+                  <p className="font-black text-on-surface text-sm">
+                    {item.price_kz.toLocaleString('pt-AO')} Kz
+                  </p>
+                  {item.isHighlight && (
+                    <p className="text-[7px] text-primary font-black uppercase">Seleccionado</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Nota de transparência ─────────────────────────────────────── */}
+      {!compact && (
+        <div className="bg-primary/10 border border-primary/30 rounded-[2rem] p-4 flex gap-3 items-start">
+          <span className="text-xl">✅</span>
+          <div>
+            <p className="text-[10px] font-black text-primary">Preço que vês = preço que pagas</p>
+            <p className="text-[9px] text-primary font-bold leading-relaxed">
+              Os preços são fixos por zona e não mudam com a hora ou a procura. Podes confiar no que está aqui.
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default ZonePriceMap;
+
+
+
+========================================================
+FILE: src\components\KazeMascot.tsx
+========================================================
+// =============================================================================
+// ZENITH RIDE v3.1 — KazeMascot.tsx
+// FIXES v3.1:
+//   1. Tabs: VOZ adicionada de volta (estava oculta)
+//   2. Mensagem de erro: mostra o texto real do geminiService (com diagnóstico)
+//   3. Indicador online/offline mais claro
+// =============================================================================
+
+import React, { useState, useEffect, useRef } from 'react';
+import { geminiService } from '../services/geminiService';
+import { UserRole, RideStatus } from '../types';
+
+interface KazeMascotProps {
+  role:        UserRole;
+  rideStatus:  RideStatus;
+  dataSaver:   boolean;
+  userName?:   string;
+}
+
+const MASCOT_IMG = 'https://img.icons8.com/3d-fluency/180/robot-3.png';
+
+const KAZE_GREETINGS: Record<string, string[]> = {
+  passenger: [
+    'Olá! Sou o Kaze, o teu assistente de corridas em Luanda. Como posso ajudar?',
+    'Pronto para a tua próxima corrida? Diz-me onde queres ir!',
+    'Bem-vindo ao Zenith Ride! Posso ajudar-te a encontrar o melhor trajecto.',
+  ],
+  driver: [
+    'Força motorista! O Kaze está contigo na estrada.',
+    'Boa corrida! Lembra-te: segurança em primeiro lugar.',
+    'O trânsito de Luanda está aí. O Kaze tem dicas para ti!',
+  ],
+};
+
+const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, userName }) => {
+  const [isOpen,      setIsOpen]      = useState(false);
+  const [mode,        setMode]        = useState<'chat' | 'voice' | 'explore'>('chat');
+  const [messages,    setMessages]    = useState<{ role: 'user' | 'model'; text: string; sources?: any[] }[]>([]);
+  const [inputValue,  setInputValue]  = useState('');
+  const [isThinking,  setIsThinking]  = useState(false);
+  const [thought,     setThought]     = useState<string | null>(null);
+  const [isLive,      setIsLive]      = useState(false);
+  const [voiceError,  setVoiceError]  = useState<string | null>(null);
+  const [kazeOnline,  setKazeOnline]  = useState<boolean | null>(null); // null = a verificar
+
+  const chatRef   = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll ao adicionar mensagens
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, isThinking]);
+
+  // Mostrar mensagem de boas-vindas ao abrir o chat pela primeira vez
+  useEffect(() => {
+    if (isOpen && messages.length === 0) {
+      const greetings = KAZE_GREETINGS[role] ?? KAZE_GREETINGS.passenger;
+      const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+      const name = userName ? `, ${userName.split(' ')[0]}` : '';
+      setMessages([{
+        role: 'model',
+        text: `Olá${name}! ${greeting}`,
+      }]);
+      setKazeOnline(true);
+    }
+  }, [isOpen]);
+
+  // Pensamentos espontâneos — só quando há corrida activa e não está em modo silencioso
+  useEffect(() => {
+    if (dataSaver || rideStatus === RideStatus.IDLE) return;
+
+    const generate = async () => {
+      try {
+        const insight = await geminiService.getKazeInsight({
+          role,
+          status: rideStatus,
+          name:   userName,
+        });
+        if (insight.text) {
+          setThought(insight.text);
+          setTimeout(() => setThought(null), 10000);
+        }
+      } catch {
+        // Silêncio se offline — não mostrar erro
+      }
+    };
+
+    const timer    = setTimeout(generate, 5000);
+    const interval = setInterval(generate, 90000);
+    return () => { clearTimeout(timer); clearInterval(interval); };
+  }, [rideStatus, dataSaver, role, userName]);
+
+  // ------------------------------------------------------------------
+  const handleSendText = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputValue.trim() || isThinking) return;
+
+    const userText = inputValue.trim();
+    setInputValue('');
+    setMessages(prev => [...prev, { role: 'user', text: userText }]);
+    setIsThinking(true);
+
+    try {
+      if (mode === 'explore') {
+        const result = await geminiService.exploreLuanda(userText);
+        setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
+        // FIX: só marcar online se não há mensagem de erro no texto
+        setKazeOnline(!result.text.startsWith('⚠️') && !result.text.startsWith('❌'));
+      } else {
+        if (!chatRef.current) chatRef.current = geminiService.createKazeChat();
+        const response = await chatRef.current.sendMessage(userText);
+        // FIX: mostrar a mensagem real (que já inclui diagnóstico do geminiService)
+        setMessages(prev => [...prev, { role: 'model', text: response.text }]);
+        const isError = response.text.startsWith('⚠️') || response.text.startsWith('❌') || response.text.startsWith('🔒') || response.text.startsWith('⏱️');
+        setKazeOnline(!isError);
+      }
+    } catch (err) {
+      console.warn('[KazeMascot] Erro ao enviar:', err);
+      setKazeOnline(false);
+      setMessages(prev => [...prev, {
+        role: 'model',
+        text: err instanceof Error ? err.message : '❌ Erro desconhecido. Tenta de novo.',
+      }]);
+    } finally {
+      setIsThinking(false);
+    }
+  };
+
+  const startVoiceMode = async () => {
+    setMode('voice');
+    setIsLive(false);
+    try {
+      const session = await geminiService.connectKazeLive({
+        onmessage: () => {},
+        onclose: () => setIsLive(false),
+      });
+      if (session) { setIsLive(true); setVoiceError(null); }
+      else { setIsLive(false); setVoiceError('Modo de voz temporariamente indisponível.'); }
+    } catch { setIsLive(false); setVoiceError('Activa a Edge Function gemini-proxy no painel Supabase.'); }
+  };
+
+  const isDriver = role === UserRole.DRIVER;
+
+  return (
+    <div className="fixed bottom-2 left-1/2 -translate-x-1/2 z-[600] flex flex-col items-center pointer-events-none">
+
+      {/* Balão de pensamento espontâneo */}
+      {thought && !isOpen && (
+        <div
+          className="mb-4 bg-surface-container/95 backdrop-blur-xl text-white p-5 rounded-[2.5rem] border-2 border-primary shadow-2xl max-w-[240px] animate-in slide-in-from-bottom-10 fade-in duration-700 pointer-events-auto cursor-pointer"
+          onClick={() => setIsOpen(true)}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
+            <p className="text-[10px] font-black text-primary uppercase tracking-widest">Kaze · Lukeni</p>
+          </div>
+          <p className="text-xs font-bold italic">"{thought}"</p>
+        </div>
+      )}
+
+      {/* Painel principal */}
+      {isOpen && (
+        <div className="mb-4 w-[90vw] max-w-sm h-[60vh] max-h-[500px] bg-surface-container/98 backdrop-blur-3xl rounded-[3rem] border border-white/10 shadow-[0_40px_100px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden animate-in zoom-in-95 pointer-events-auto">
+
+          {/* Header */}
+          <div className="p-6 border-b border-white/5 flex justify-between items-center bg-gradient-to-r from-blue-900/40 to-transparent">
+            <div className="flex items-center gap-3">
+              <div className="w-14 h-14 bg-surface-container-low/10 rounded-2xl flex items-center justify-center p-1 shadow-lg border border-white/10 relative">
+                <img src={MASCOT_IMG} alt="Kaze" className="w-full h-full object-contain drop-shadow-lg" />
+                <div className="absolute inset-0 bg-primary/15 blur-lg rounded-full animate-pulse -z-10" />
+              </div>
+              <div>
+                <h4 className="text-white font-black text-xs uppercase tracking-tighter">KAZE 2.5</h4>
+                <span className="text-[8px] text-primary font-black uppercase flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
+                  {isDriver ? 'MOTORISTA ONLINE' : 'VIGILANTE ONLINE'}
+                </span>
+              </div>
+            </div>
+            <button onClick={() => setIsOpen(false)} className="w-8 h-8 rounded-lg bg-surface-container-low/5 text-white/40 flex items-center justify-center hover:text-white transition-all">✕</button>
+          </div>
+
+          {/* Tabs de modo */}
+          <div className="flex bg-surface-container/50 p-1 mx-4 mt-4 rounded-xl border border-white/5">
+            {(['chat', 'explore', 'voice'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => m === 'voice' ? startVoiceMode() : setMode(m)}
+                className={`flex-1 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest transition-all ${
+                  mode === m
+                    ? 'bg-primary/20 text-primary shadow-glow'
+                    : 'text-on-surface-variant hover:text-white'
+                }`}
+              >
+                {m === 'chat' ? 'Chat' : m === 'explore' ? 'Luanda' : 'Voz'}
+              </button>
+            ))}
+          </div>
+
+          {/* Corpo */}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 no-scrollbar">
+            {mode !== 'voice' ? (
+              <>
+                {messages.length === 0 && (
+                  <div className="h-full flex flex-col items-center justify-center text-center py-10">
+                    <img src={MASCOT_IMG} className="w-24 h-24 opacity-40 mb-6" alt="Kaze" />
+                    <p className="text-[10px] font-black uppercase text-primary/60 tracking-[0.2em] leading-relaxed max-w-[180px]">
+                      {mode === 'explore' ? 'TRÂNSITO EM TEMPO REAL' : 'ASSISTENTE VIGILANTE PRONTO'}
+                    </p>
+                  </div>
+                )}
+                {messages.map((m, i) => (
+                  <div key={i} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
+                    <div className={`max-w-[90%] p-4 rounded-3xl text-[11px] font-bold leading-relaxed shadow-sm ${
+                      m.role === 'user'
+                        ? 'bg-primary/15 text-primary rounded-tr-none border border-primary/20'
+                        : 'bg-surface-container/60 text-on-surface border border-white/10 backdrop-blur-md rounded-tl-none'
+                    }`}>
+                      {m.text}
+                      {m.sources && m.sources.length > 0 && (
+                        <div className="mt-3 pt-3 border-t border-white/10 space-y-2">
+                          <p className="text-[8px] font-black text-primary/50 uppercase tracking-widest">Fontes:</p>
+                          {m.sources.map((s: any, si: number) => (
+                            <a key={si} href={s.uri} target="_blank" rel="noreferrer"
+                              className="flex items-center gap-2 p-2 bg-surface-container-low/5 rounded-lg text-[9px] text-primary/70 hover:bg-surface-container-low/10 transition-colors">
+                              <span className="opacity-60">📍</span>
+                              <span className="truncate flex-1">{s.title}</span>
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {isThinking && (
+                  <div className="flex items-center gap-2 p-4 bg-primary/8 backdrop-blur-md rounded-2xl w-fit border border-primary/15">
+                    <div className="flex gap-1">
+                      {[0, 200, 400].map(d => (
+                        <div key={d} className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: `${d}ms` }} />
+                      ))}
+                    </div>
+                    <span className="text-[8px] font-black text-primary uppercase tracking-widest ml-2">Analisando Luanda...</span>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center space-y-8">
+                <div className="relative">
+                  <div className={`absolute -inset-10 bg-primary/12 rounded-full blur-3xl transition-all duration-1000 ${isLive ? 'scale-150 opacity-40' : 'scale-100 opacity-20'}`} />
+                  <div className={`w-36 h-36 rounded-full flex items-center justify-center border-4 border-white/5 shadow-2xl overflow-hidden bg-surface-container/50 backdrop-blur-xl ${isLive ? 'border-primary/50' : ''}`}>
+                    <img src={MASCOT_IMG} className={`w-24 h-24 object-contain transition-transform duration-500 ${isLive ? 'scale-110' : 'scale-90 opacity-50'}`} alt="Kaze" />
+                  </div>
+                </div>
+                <div className="text-center">
+                  <p className="text-white font-black text-xs uppercase tracking-[0.3em] animate-pulse">SISTEMA VOZ KAZE</p>
+                  <p className="text-[10px] text-primary/60 font-black uppercase mt-2 tracking-widest">
+                    {isLive ? 'Fale agora com o Kaze' : 'Pronto para sincronizar'}
+                  </p>
+                </div>
+                {!isLive && (
+                  <button onClick={startVoiceMode}
+                    className="gilded-gradient text-on-primary px-10 py-5 rounded-[2rem] font-black text-[10px] uppercase tracking-[0.2em] shadow-[0_20px_40px_rgba(230,195,100,0.25)] hover:scale-105 active:scale-95 transition-all">
+                    Sintonizar Kaze
+                  </button>
+                )}
+                {voiceError && (
+                  <p className="text-[11px] text-error mt-3 px-6">{voiceError}</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Input */}
+          {mode !== 'voice' && (
+            <div className="p-4 bg-black/20 border-t border-white/5 backdrop-blur-xl">
+              <form onSubmit={handleSendText} className="flex gap-2">
+                <input
+                  className="flex-1 bg-surface-container-low/5 border border-white/10 rounded-2xl px-5 py-4 text-xs text-white outline-none focus:border-primary transition-all font-bold placeholder-white/20"
+                  placeholder={mode === 'explore' ? 'Onde há trânsito agora?' : 'Falar com Kaze...'}
+                  value={inputValue}
+                  onChange={e => setInputValue(e.target.value)}
+                />
+                <button type="submit"
+                  className="w-14 h-14 gilded-gradient text-on-primary rounded-2xl flex items-center justify-center text-xl shadow-xl active:scale-95 transition-all">
+                  ➔
+                </button>
+              </form>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Botão flutuante */}
+      {/* O Avatar / Gatilho integrado no centro do navbar */}
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`w-16 h-16 rounded-full overflow-hidden border-4 flex items-center justify-center shadow-[0_10px_40px_rgba(0,0,0,0.5)] transition-all pointer-events-auto active:scale-95 z-[601] ${
+          isOpen ? 'bg-primary border-primary scale-110 shadow-[0_20px_50px_rgba(37,99,235,0.7)]' : 'bg-[#0B0B0B] border-[#0A0A0A] hover:bg-surface-container-low hover:border-primary/50'
+        }`}
+      >
+        <div className="absolute inset-0 bg-gradient-to-t from-blue-900/40 to-transparent" />
+        <img
+          src={MASCOT_IMG}
+          alt="Kaze Mascot"
+          className={`w-10 h-10 object-contain drop-shadow-md transition-all duration-500 relative z-10 ${isOpen || isThinking ? 'scale-110' : ''}`}
+        />
+        {/* Glow indicator if alive */}
+        {kazeOnline === true && (
+          <span className="absolute bottom-2 right-3 w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_#4ade80] animate-pulse z-20" />
+        )}
+      </button>
+    </div>
+  );
+};
+
+export default KazeMascot;
+
+
+
+========================================================
+FILE: src\components\KazePreditivo.tsx
+========================================================
+// =============================================================================
+// ZENITH RIDE v3.0 — src/components/KazePreditivo.tsx
+//
+// Banner inteligente que aparece quando o passageiro abre a app.
+// Analisa o histórico e sugere a corrida mais provável para aquela hora.
+//
+// Integração em PassengerHome.tsx (ANTES do card de rota, só em IDLE):
+//   import KazePreditivo from './KazePreditivo';
+//
+//   {ride.status === RideStatus.IDLE && (
+//     <KazePreditivo
+//       userId={userId}
+//       onAccept={(pred) => {
+//         setPickupName(pred.origin_address);
+//         setPickupCoords({ lat: pred.origin_lat, lng: pred.origin_lng });
+//         setDestName(pred.dest_address);
+//         setDestCoords({ lat: pred.dest_lat, lng: pred.dest_lng });
+//       }}
+//     />
+//   )}
+// =============================================================================
+
+import React, { useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import { zonePriceService } from '../services/zonePrice';
+import type { RidePrediction, ZonePrice } from '../types';
+
+const getLuandaHour = () => (new Date().getUTCHours() + 1) % 24;
+
+interface KazePreditivoProps {
+  userId:   string;
+  onAccept: (pred: RidePrediction) => void;
+}
+
+const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept }) => {
+  const [prediction, setPrediction] = useState<RidePrediction | null>(null);
+  const [zonePrice,  setZonePrice]  = useState<ZonePrice | null>(null);
+  const [dismissed,  setDismissed]  = useState(false);
+  const [loading,    setLoading]    = useState(true);
+
+  useEffect(() => {
+    loadPrediction();
+  }, [userId]);
+
+  const loadPrediction = async () => {
+    setLoading(true);
+    try {
+      // Hora actual (Angola = UTC+1)
+      const currentHour = getLuandaHour();
+
+      // Busca as corridas mais frequentes, com preferência pela hora actual
+      const { data, error } = await supabase
+        .from('ride_predictions')
+        .select('*')
+        .eq('user_id', userId)
+        .gte('frequency', 2)                       // mínimo 2 vezes para sugerir
+        .order('frequency', { ascending: false })
+        .limit(5);
+
+      if (error || !data || data.length === 0) {
+        setLoading(false);
+        return;
+      }
+
+      // Score: frequência × coincidência de hora
+      const scored = (data as RidePrediction[]).map(p => ({
+        ...p,
+        score: p.frequency * (p.best_hour !== null && Math.abs(p.best_hour - currentHour) <= 1 ? 2 : 1),
+      }));
+
+      scored.sort((a, b) => b.score - a.score);
+      const best = scored[0];
+      setPrediction(best);
+
+      // Tenta obter preço fixo por zona
+      const zp = await zonePriceService.getZonePrice(best.origin_address, best.dest_address);
+      setZonePrice(zp);
+    } catch (err) {
+      // Silencioso - componente simplesmente não aparece
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading || !prediction || dismissed) return null;
+
+  // Mensagem personalizada do Kaze
+  const currentHour = getLuandaHour();
+  const greeting =
+    currentHour < 12 ? 'Bom dia' :
+    currentHour < 19 ? 'Boa tarde' : 'Boa noite';
+
+  const isUsualTime = prediction.best_hour !== null &&
+    Math.abs(prediction.best_hour - currentHour) <= 1;
+
+  const kazeMsg = isUsualTime
+    ? `${greeting}, mano! Já é a tua hora habitual para ${prediction.dest_address.split(',')[0]}.`
+    : `${greeting}! Já foi ${prediction.frequency}x a ${prediction.dest_address.split(',')[0]}. Vamos de novo?`;
+
+  const displayPrice = zonePrice?.price_kz ?? prediction.avg_price_kz;
+
+  return (
+    <div className="mx-4 mb-4 animate-in slide-in-from-top duration-500">
+      <div className="bg-[#0A0A0A] rounded-[2.5rem] p-5 border border-white/5 relative overflow-hidden">
+        {/* Glow decorativo */}
+        <div className="absolute top-0 right-0 w-32 h-32 bg-primary/10 rounded-full blur-[50px] pointer-events-none" />
+
+        {/* Header Kaze */}
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center text-lg font-black text-white shadow-lg">
+            K
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[9px] font-black text-primary uppercase tracking-widest mb-0.5">
+              Kaze Preditivo ✦
+            </p>
+            <p className="text-[11px] font-bold text-white/80 leading-snug">
+              {kazeMsg}
+            </p>
+          </div>
+          <button
+            onClick={() => setDismissed(true)}
+            className="w-8 h-8 rounded-full bg-surface-container-low/5 text-white/30 text-sm flex items-center justify-center hover:bg-surface-container-low/10 transition-all shrink-0"
+          >
+            ✕
+          </button>
+        </div>
+
+        {/* Card de rota */}
+        <div className="bg-surface-container-low/5 rounded-[1.5rem] p-4 mb-4 space-y-2">
+          <div className="flex items-center gap-3">
+            <div className="w-2 h-2 rounded-full bg-primary shrink-0" />
+            <p className="text-[11px] font-bold text-white/70 truncate">{prediction.origin_address}</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="w-2 h-2 rounded-full bg-red-400 shrink-0" />
+            <p className="text-[11px] font-bold text-white truncate">{prediction.dest_address}</p>
+          </div>
+        </div>
+
+        {/* Footer: preço + frequência + botão */}
+        <div className="flex items-center gap-3">
+          {/* Frequência */}
+          <div className="flex-1">
+            <p className="text-[8px] text-white/40 font-black uppercase tracking-widest">
+              Feito {prediction.frequency}× · {zonePrice ? 'Preço fixo' : 'Estimativa'}
+            </p>
+            {displayPrice && (
+              <p className="text-lg font-black text-white tracking-tighter">
+                {Math.round(displayPrice).toLocaleString('pt-AO')} Kz
+                {zonePrice && (
+                  <span className="text-[8px] text-primary ml-1 font-black">✓ ZONA</span>
+                )}
+              </p>
+            )}
+          </div>
+
+          {/* CTA */}
+          <button
+            onClick={() => onAccept(prediction)}
+            className="bg-primary text-white px-6 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-[0_8px_20px_rgba(37,99,235,0.4)] active:scale-95 transition-all"
+          >
+            USAR AGORA
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default KazePreditivo;
+
+
+
+========================================================
+FILE: src\lib\mapInstance.ts
+========================================================
+// src/lib/mapInstance.ts
+// FASE 1 — Singleton do Mapbox para reutilização de contexto WebGL
+// Evita: múltiplos contextos WebGL, ecrã preto, crashes de memória
+
+import mapboxgl from "mapbox-gl";
+
+export let mapInstance: mapboxgl.Map | null = null;
+
+// ─── Tipos ────────────────────────────────────────────────────
+interface MapConfig {
+  center?:   [number, number]; // [lng, lat]
+  zoom?:     number;
+  style?:    string;
+  pitch?:    number;
+  bearing?:  number;
+}
+
+interface MapSingletonState {
+  map:          mapboxgl.Map | null;
+  container:    HTMLElement | null;
+  isReady:      boolean;
+  pendingResize: boolean;
+}
+
+// ─── Estado interno do singleton ───────────────────────────────
+const state: MapSingletonState = {
+  map:           null,
+  container:     null,
+  isReady:       false,
+  pendingResize: false,
+};
+
+// Callbacks registados para notificar componentes quando o mapa estiver pronto
+const readyCallbacks: Array<(map: mapboxgl.Map) => void> = [];
+
+// ─── Configuração padrão Luanda ────────────────────────────────
+const DEFAULT_CONFIG: Required<MapConfig> = {
+  center:  [13.2344, -8.8383], // Luanda centro
+  zoom:    13,
+  style:   "mapbox://styles/mapbox/dark-v11",
+  pitch:   45,
+  bearing: 0,
+};
+
+// ─── MapSingleton ─────────────────────────────────────────────
+export const MapSingleton = {
+
+  // ── Inicializar ou reutilizar instância ────────────────────
+  init(container: HTMLElement, token: string, config: MapConfig = {}): mapboxgl.Map | null {
+    // Caso 1: Mesma instância, mesmo container → só resize
+    if (state.map && state.container === container) {
+      this.resize();
+      return state.map;
+    }
+
+    // Caso 2: Instância existe mas container mudou → destroy + recreate
+    if (state.map && state.container !== container) {
+      this._destroy();
+    }
+
+    // Caso 3: Sem instância → criar nova
+    mapboxgl.accessToken = token;
+
+    const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+
+    try {
+      const map = new mapboxgl.Map({
+        container,
+        style:            mergedConfig.style,
+        center:           mergedConfig.center,
+        zoom:             mergedConfig.zoom,
+        pitch:            mergedConfig.pitch,
+        bearing:          mergedConfig.bearing,
+        // ── Optimizações para Angola (RAM limitada, 3G) ────────
+        maxTileCacheSize: 50,           // Limitar cache de tiles — protege RAM
+        fadeDuration:     0,            // Sem fade — mais rápido em 3G
+        antialias:        false,        // Desactivar antialiasing — poupa GPU
+        trackResize:      true,         // Auto-resize ao redimensionar janela
+      });
+      mapInstance = map;
+
+      state.map       = map;
+      state.container = container;
+      state.isReady   = false;
+
+      // Marcar como pronto quando o estilo carregar
+      map.once("load", () => {
+        state.isReady = true;
+        // Executar callbacks pendentes
+        readyCallbacks.forEach(cb => cb(map));
+        readyCallbacks.length = 0;
+        this.resize();
+      });
+
+      return map;
+    } catch (err: any) {
+      console.warn("Failed to initialize WebGL or Mapbox:", err.message);
+      // Fallback gracioso: evitar crash da SPA
+      container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;background:#1e293b;color:#94a3b8;font-size:12px;text-align:center;padding:20px;">O teu navegador não suporta mapas em 3D (WebGL). Activa a aceleração de hardware.</div>';
+      return null;
+    }
+  },
+
+  get(): mapboxgl.Map | null {
+    return state.map;
+  },
+
+  onReady(callback: (map: mapboxgl.Map) => void): void {
+    if (state.isReady && state.map) {
+      callback(state.map);
+    } else {
+      readyCallbacks.push(callback);
+    }
+  },
+
+  resize(): void {
+    if (!state.map) return;
+    requestAnimationFrame(() => {
+      if (state.map) {
+        state.map.resize();
+      }
+    });
+  },
+
+  destroy(): void {
+    this._destroy();
+  },
+
+  _destroy(): void {
+    if (state.map) {
+      state.map.remove();
+      mapInstance = null;  // Limpar referência global exportada
+      state.map       = null;
+      state.container = null;
+      state.isReady   = false;
+      readyCallbacks.length = 0;
+    }
+  },
+};
+
+
+
+========================================================
+FILE: src\services\geminiService.ts
+========================================================
+// =============================================================================
+// ZENITH RIDE v3.1 — geminiService.ts (FRONTEND)
+// FIXES v3.1:
+//   1. createKazeChat: histórico usa role 'model' (não 'assistant') — formato Gemini correcto
+//   2. callProxy: expõe o erro HTTP real em vez de esconder
+//   3. Mensagens de erro mais informativas com diagnóstico
+//   4. Timeout aumentado de 8s para 12s (Edge Functions frias demoram mais)
+// BUG #11 CORRIGIDO (2ª passagem):
+//   GeminiChatService estava embrulhada dentro do catch de exploreLuanda.
+//   Movida para o nível do módulo.
+// =============================================================================
+
+import { supabase, edgeFunctionUrl } from '../lib/supabase';
+import type { LocationResult, AutonomousCommand } from '../types';
+
+// =============================================================================
+// Conversores de formato de histórico
+// O histórico interno usa campo `content`, mas a API Gemini espera `parts: [{text}]`
+// =============================================================================
+
+interface ChatMessage {
+  role:    'user' | 'model';
+  content: string;
+}
+
+interface GeminiHistoryEntry {
+  role:  'user' | 'model';
+  parts: Array<{ text: string }>;
+}
+
+function toGeminiHistory(history: ChatMessage[]): GeminiHistoryEntry[] {
+  return history.map(({ role, content }) => ({
+    role,
+    parts: [{ text: content }],
+  }));
+}
+
+// =============================================================================
+// HELPER: chamar Edge Function com auth automático + timeout de 12s
+// =============================================================================
+async function callProxy<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error('Utilizador não autenticado. Faz login primeiro.');
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+
+  try {
+    const res = await fetch(edgeFunctionUrl('gemini-proxy'), {
+      method:  'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${session.access_token}`,
+      },
+      body:   JSON.stringify({ action, ...payload }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      let errorMsg = `Erro HTTP ${res.status}`;
+      try {
+        const body = await res.json();
+        errorMsg = body?.message ?? body?.error ?? errorMsg;
+      } catch { /* ignorar se body não é JSON */ }
+      throw new Error(errorMsg);
+    }
+
+    return res.json() as Promise<T>;
+
+  } catch (e: any) {
+    clearTimeout(timeout);
+    if (e.name === 'AbortError') {
+      throw new Error('A IA demorou demasiado a responder (cold start). Aguarda 5s e tenta de novo.');
+    }
+    throw e;
+  }
+}
+
+// =============================================================================
+// ✅ BUG #11 CORRIGIDO: Classe GeminiChatService ao nível do módulo (não dentro de geminiService)
+// =============================================================================
+export class GeminiChatService {
+  private history: ChatMessage[] = [];
+
+  async sendMessage(userText: string, authToken: string): Promise<string> {
+    this.history.push({ role: 'user', content: userText });
+
+    // Converter histórico para formato Gemini ANTES de enviar (excluindo a mensagem actual)
+    const geminiHistory = toGeminiHistory(this.history.slice(0, -1));
+
+    const response = await fetch(edgeFunctionUrl('gemini-proxy'), {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({
+        action:  'kaze_chat',
+        message: userText,
+        history: geminiHistory,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Erro desconhecido');
+      throw new Error(`[GeminiService] Edge Function erro ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+
+    const modelText: string =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text ??
+      data?.text ?? '';
+
+    if (!modelText) {
+      throw new Error('[GeminiService] Resposta vazia do modelo.');
+    }
+
+    this.history.push({ role: 'model', content: modelText });
+    this.trimHistory(20);
+
+    return modelText;
+  }
+
+  clearHistory(): void {
+    this.history = [];
+  }
+
+  private trimHistory(maxMessages: number): void {
+    if (this.history.length > maxMessages) {
+      this.history = this.history.slice(-maxMessages);
+    }
+  }
+}
+
+// =============================================================================
+export const geminiService = {
+
+  // ------------------------------------------------------------------
+  // Pesquisa de locais (usado na pesquisa de destino)
+  // ------------------------------------------------------------------
+  async searchLocations(query: string): Promise<LocationResult[]> {
+    try {
+      const r = await callProxy<{ locations: LocationResult[] }>('search_locations', { query });
+      return r.locations ?? [];
+    } catch (e) { console.error('[geminiService.searchLocations]', e); return []; }
+  },
+
+  // ------------------------------------------------------------------
+  // Explorar Luanda com Google Search grounding
+  // ------------------------------------------------------------------
+  async exploreLuanda(query: string): Promise<{ text: string; sources: { uri: string; title: string }[] }> {
+    try {
+      return await callProxy('explore_luanda', { query });
+    } catch (err: any) {
+      const isNoFunction = err?.message?.includes('404') || err?.message?.includes('not found');
+      return {
+        text: isNoFunction
+          ? '⚠️ A Edge Function gemini-proxy não está activa no teu projecto Supabase. Vai ao painel Supabase → Edge Functions → Deploy.'
+          : `Mano, a rede está a dar mambo: ${err?.message ?? 'erro desconhecido'}. Tenta de novo!`,
+        sources: [],
+      };
+    }
+  },
+
+  // Insight do Kaze (CONDICIONAL: só chamar quando ride.status !== IDLE)
+  // ------------------------------------------------------------------
+  async getKazeInsight(context: {
+    role: string; status: string; name?: string; extraText?: string;
+  }): Promise<{ text: string; type: 'info' | 'motivation' | 'safety' }> {
+    try {
+      return await callProxy('kaze_insight', { context });
+    } catch { return { text: 'Fica firme na via!', type: 'motivation' }; }
+  },
+
+  // ------------------------------------------------------------------
+  // Simulação de ganhos (motorista)
+  // ------------------------------------------------------------------
+  async simulateEarnings(driverProfile: { rating: number; totalRides: number; level: string }): Promise<{
+    dailyEstimateKz: number; weeklyEstimateKz: number; bestZones: string[]; tips: string;
+  }> {
+    try {
+      return await callProxy('simulate_earnings', { driverProfile });
+    } catch {
+      return { dailyEstimateKz: 24500, weeklyEstimateKz: 145000, bestZones: ['Viana', 'Kilamba'], tips: 'Foca nas horas de ponta.' };
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // Decisões autónomas (admin — Vigilante Engine)
+  // ------------------------------------------------------------------
+  async getAutonomousDecisions(context: {
+    role: string; activeRideStatus: string; multiplier: number;
+    activeRides?: number; availableDrivers?: number;
+    system_load?: number; luanda_time?: string; hot_zones?: string[];
+  }): Promise<AutonomousCommand[]> {
+    try {
+      const r = await callProxy<{ commands: AutonomousCommand[] }>('autonomous_decisions', { context });
+      return r.commands ?? [];
+    } catch {
+      return [{
+        id: crypto.randomUUID(),
+        type: 'ROUTE_OPTIMIZE',
+        target: 'Viana',
+        reason: 'Análise proactiva',
+        intensity: 1,
+        timestamp: Date.now(),
+        status: 'LOGGED',
+      }];
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // Chat com Kaze (multi-turno) — via objeto factory
+  // ✅ BUG #11 CORRIGIDO: converter histórico para formato Gemini antes de enviar
+  // ------------------------------------------------------------------
+  createKazeChat() {
+    const history: ChatMessage[] = [];
+    return {
+      async sendMessage(message: string): Promise<{ text: string }> {
+        history.push({ role: 'user', content: message });
+        try {
+          // Converter para formato Gemini [{role, parts:[{text}]}]
+          const geminiHistory = toGeminiHistory(history.slice(0, -1));
+
+          const r = await callProxy<{ text: string }>('kaze_chat', {
+            message,
+            history: geminiHistory,
+          });
+          history.push({ role: 'model', content: r.text });
+          return r;
+        } catch (err: any) {
+          const isAuth    = err?.message?.includes('autenticado');
+          const isTimeout = err?.message?.includes('demorou');
+          const is404     = err?.message?.includes('404') || err?.message?.includes('not found');
+
+          const errorText = is404
+            ? '⚠️ A Edge Function gemini-proxy não está deployada no Supabase. Vai ao painel → Edge Functions e faz deploy.'
+            : isAuth
+            ? '🔒 Sessão expirada. Sai e volta a entrar.'
+            : isTimeout
+            ? '⏱️ A IA demorou a responder. É normal no primeiro pedido (cold start). Tenta de novo.'
+            : `❌ ${err?.message ?? 'Erro desconhecido.'}`;
+
+          return { text: errorText };
+        }
+      },
+      getHistory:   () => [...history],
+      clearHistory: () => { history.length = 0; },
+    };
+  },
+
+  // ------------------------------------------------------------------
+  // POST-RIDE REVIEW
+  // ------------------------------------------------------------------
+  async callPostRideReview(params: {
+    driver_name: string; price_kz: number;
+    distance_km: number; duration_min: number;
+    step: 'opening' | 'collect_rating' | 'collect_comment';
+  }): Promise<{ text: string }> {
+    try {
+      return await callProxy('post_ride_review', params);
+    } catch { return { text: 'Obrigado pela corrida!' }; }
+  },
+
+  // ------------------------------------------------------------------
+  // Token para Gemini Live API (voz)
+  // ------------------------------------------------------------------
+  async getKazeLiveToken(): Promise<{ ephemeral_token: string }> {
+    try {
+      return await callProxy('get_live_token', {});
+    } catch (e: any) {
+      console.error('[geminiService.getKazeLiveToken]', e);
+      throw new Error(e?.message ?? 'Kaze Live não disponível no servidor.');
+    }
+  },
+
+  // ------------------------------------------------------------------
+  // Conectar Kaze ao Live (voz bidirecional)
+  // ------------------------------------------------------------------
+  async connectKazeLive(callbacks: {
+    onmessage: (msg: any) => void;
+    onclose: () => void;
+  }): Promise<{ close: () => void }> {
+    try {
+      const tokenData = await geminiService.getKazeLiveToken();
+      if (!tokenData?.ephemeral_token) throw new Error('Token efémero inválido.');
+      console.log('[KazeLive] Token obtido, usar SDK Gemini Live com este token');
+      return { close: () => callbacks.onclose() };
+    } catch (e) {
+      console.error('[geminiService.connectKazeLive] falha:', e);
+      throw e;
+    }
+  },
+};
+
+
+
+========================================================
+FILE: src\services\zonePrice.ts
+========================================================
+// =============================================================================
+// ZENITH RIDE v3.0 — src/services/zonePrice.ts
+// Preços fixos por zona — a arma secreta contra o surge pricing percebido
+//
+// Estratégia de negócio:
+//   - Passageiro vê preço ANTES de pedir → confiança
+//   - Motorista sabe exactamente quanto vai ganhar → satisfação
+//   - MotoGo cobra 15% de comissão fixa → previsível para os 3
+//
+// Integração:
+//   import { zonePriceService } from './services/zonePrice';
+//   const price = zonePriceService.lookupPrice('Viana', 'Talatona');
+// =============================================================================
+
+import { supabase } from '../lib/supabase';
+import type { ZonePrice } from '../types';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAPA DE ZONAS DE LUANDA
+// Bairros → Zona canónica (para lookup de preços)
+// ─────────────────────────────────────────────────────────────────────────────
+export const LUANDA_ZONE_MAP: Record<string, string> = {
+  // Viana
+  'Viana':                    'Viana',
+  'Petrangol':                'Viana',
+  'Cacuaco':                  'Viana',
+  'Km 30':                    'Viana',
+  'Catete':                   'Viana',
+
+  // Kilamba
+  'Kilamba':                  'Kilamba',
+  'Kilamba Kiaxi':            'Kilamba',
+  'Zango':                    'Kilamba',
+  'Zango 1':                  'Kilamba',
+  'Zango 2':                  'Kilamba',
+
+  // Talatona
+  'Talatona':                 'Talatona',
+  'Benfica Sul':              'Talatona',
+  'Camama':                   'Talatona',
+  'Golf':                     'Talatona',
+  'Belas':                    'Talatona',
+  'Belas Shopping':           'Talatona',
+
+  // Centro / Ilha / Miramar
+  'Centro':                   'Centro',
+  'Ilha de Luanda':           'Centro',
+  'Ilha':                     'Centro',
+  'Ingombota':                'Centro',
+  'Mutamba':                  'Centro',
+  'Largo do Kinaxixi':        'Centro',
+  'Praia do Bispo':           'Centro',
+
+  // Miramar
+  'Miramar':                  'Miramar',
+  'Alvalade':                 'Miramar',
+  'Maianga':                  'Maianga',
+  'Patrice Lumumba':          'Maianga',
+
+  // Cazenga
+  'Cazenga':                  'Cazenga',
+  'Palanca':                  'Cazenga',
+  'Vila Alice':               'Cazenga',
+  'Rocha Pinto':              'Cazenga',
+
+  // Rangel
+  'Rangel':                   'Rangel',
+  'Hoji ya Henda':            'Rangel',
+  'Golfe':                    'Rangel',
+
+  // Samba
+  'Samba':                    'Samba',
+  'Golf 2':                   'Samba',
+  'Camanga':                  'Samba',
+
+  // Benfica
+  'Benfica':                  'Benfica',
+  'Cacuaco Norte':            'Benfica',
+
+  // Luanda Norte
+  'Luanda Norte':             'Luanda Norte',
+  'Viana Norte':              'Luanda Norte',
+  'Sequele':                  'Luanda Norte',
+};
+
+// Cores das zonas para visualização no mapa de preços
+export const ZONE_COLORS: Record<string, { bg: string; text: string; label: string }> = {
+  'Centro':       { bg: 'bg-primary/10', text: 'text-primary',   label: 'Central' },
+  'Maianga':      { bg: 'bg-primary/8',  text: 'text-primary/80',   label: 'Central' },
+  'Miramar':      { bg: 'bg-primary/8',  text: 'text-primary/80',   label: 'Central' },
+  'Cazenga':      { bg: 'bg-primary/6',  text: 'text-primary/70',  label: 'Próximo' },
+  'Rangel':       { bg: 'bg-primary/6',  text: 'text-primary/70',  label: 'Próximo' },
+  'Samba':        { bg: 'bg-primary/8',  text: 'text-primary/80',  label: 'Médio' },
+  'Benfica':      { bg: 'bg-primary/8',  text: 'text-primary/80',  label: 'Médio' },
+  'Talatona':     { bg: 'bg-primary/10', text: 'text-primary',  label: 'Médio' },
+  'Kilamba':      { bg: 'bg-orange-50',  text: 'text-orange-700', label: 'Longo' },
+  'Viana':        { bg: 'bg-red-50',     text: 'text-red-700',    label: 'Longo' },
+  'Luanda Norte': { bg: 'bg-red-50',     text: 'text-red-700',    label: 'Longo' },
+};
+
+// Cache em memória para evitar hits repetidos ao Supabase
+const priceCache = new Map<string, ZonePrice | null>();
+
+class ZonePriceService {
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Detecta a zona canónica a partir de um endereço/nome de local
+  // ─────────────────────────────────────────────────────────────────────────
+  detectZone(address: string): string | null {
+    const normalized = address.toLowerCase();
+
+    // Busca directa — procurar por palavras-chave mais específicas primeiro
+    const entries = Object.entries(LUANDA_ZONE_MAP).slice().sort((a, b) => b[0].length - a[0].length);
+    for (const [keyword, zone] of entries) {
+      if (normalized.includes(keyword.toLowerCase())) {
+        return zone;
+      }
+    }
+
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Lookup de preço fixo por par de zonas (com cache)
+  // ─────────────────────────────────────────────────────────────────────────
+  async getZonePrice(originAddress: string, destAddress: string): Promise<ZonePrice | null> {
+    const originZone = this.detectZone(originAddress);
+    const destZone   = this.detectZone(destAddress);
+
+    if (!originZone || !destZone || originZone === destZone) return null;
+
+    const cacheKey = `${originZone}→${destZone}`;
+    if (priceCache.has(cacheKey)) return priceCache.get(cacheKey) ?? null;
+
+    // Tenta a direcção directa
+    const { data } = await supabase
+      .from('zone_prices')
+      .select('origin_zone, dest_zone, price_kz, distance_km')
+      .eq('origin_zone', originZone)
+      .eq('dest_zone', destZone)
+      .eq('active', true)
+      .single();
+
+    if (data) {
+      const result = data as ZonePrice;
+      priceCache.set(cacheKey, result);
+      return result;
+    }
+
+    // Tenta a direcção inversa (o preço é simétrico)
+    const { data: reverse } = await supabase
+      .from('zone_prices')
+      .select('origin_zone, dest_zone, price_kz, distance_km')
+      .eq('origin_zone', destZone)
+      .eq('dest_zone', originZone)
+      .eq('active', true)
+      .single();
+
+    if (reverse) {
+      const result: ZonePrice = {
+        origin_zone: originZone,
+        dest_zone:   destZone,
+        price_kz:    (reverse as ZonePrice).price_kz,
+        distance_km: (reverse as ZonePrice).distance_km,
+      };
+      priceCache.set(cacheKey, result);
+      return result;
+    }
+
+    priceCache.set(cacheKey, null);
+    return null;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Carrega todos os preços para o mapa de zonas (usada na tab "Preços")
+  // ─────────────────────────────────────────────────────────────────────────
+  async getAllPrices(): Promise<ZonePrice[]> {
+    const { data } = await supabase
+      .from('zone_prices')
+      .select('origin_zone, dest_zone, price_kz, distance_km')
+      .eq('active', true)
+      .order('origin_zone');
+
+    return (data ?? []) as ZonePrice[];
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Limpa cache (usar quando admin actualiza preços)
+  // ─────────────────────────────────────────────────────────────────────────
+  clearCache() { priceCache.clear(); }
+
+  getZoneColor(zone: string) {
+    return ZONE_COLORS[zone] ?? { bg: 'bg-surface-container-low', text: 'text-on-surface-variant', label: 'Zona' };
+  }
+}
+
+export const zonePriceService = new ZonePriceService();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MULTIPLICADORES DE VEÍCULO
+// ─────────────────────────────────────────────────────────────────────────────
+export type VehicleType = 'standard' | 'moto' | 'comfort' | 'xl';
+
+const VEHICLE_MULTIPLIER: Record<VehicleType, number> = {
+  standard: 1.0,
+  moto:     0.40,  // 40% do preço normal
+  comfort:  1.40,
+  xl:       1.80,
+};
+
+export function applyVehicleMultiplier(basePriceKz: number, type: VehicleType): number {
+  return Math.round(basePriceKz * VEHICLE_MULTIPLIER[type]);
+}
+
+export const MOTO_SAFETY_WARNING =
+  `Por favor, certifica-te de que:\n\n` +
+  `• Tens capacete disponível (obrigatório por lei)\n` +
+  `• A zona de partida e chegada é segura\n` +
+  `• Evita distâncias superiores a 20 km por razões de segurança\n\n` +
+  `A Zenith recomenda o uso de moto-táxi apenas em percursos urbanos conhecidos.`;
+
+
+
+========================================================
+FILE: src\services\routeService.ts
+========================================================
+// src/services/routeService.ts
+// ══════════════════════════════════════════════════════
+// ZENITH RIDE — Mapbox Directions API
+// Responsabilidade: calcular distância e duração REAIS
+// por estrada (não em linha recta) entre dois pontos.
+//
+// REGRA DE USO: chamar UMA vez por pedido de corrida,
+// nunca em loops nem em onChange de inputs.
+// ══════════════════════════════════════════════════════
+
+import { getRoute as getMapboxRoute } from '../lib/mapbox-directions';
+
+export interface RouteLatLng {
+  lat: number;
+  lng: number;
+}
+
+function haversineKm(a: RouteLatLng, b: RouteLatLng): number {
+  const R    = 6371;
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
+  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
+  const sin2 =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((a.lat * Math.PI) / 180) *
+    Math.cos((b.lat * Math.PI) / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(sin2), Math.sqrt(1 - sin2));
+}
+
+export interface RouteResult {
+  distanceKm:           number;  // distância real por estrada
+  durationMin:          number;  // duração com trânsito actual
+  durationMinNoTraffic: number;  // duração sem trânsito (para comparação)
+  polyline:             string;  // polyline codificada para desenhar no mapa (vazio se usar Mapbox e não converter)
+  trafficFactor:        number;  // ratio duração_com / duração_sem
+}
+
+// Cache simples — evita chamadas duplicadas acidentais
+let lastCallKey    = '';
+let lastCallResult: RouteResult | null = null;
+
+export const routeService = {
+
+  async getRoute(origin: RouteLatLng, dest: RouteLatLng): Promise<RouteResult> {
+    // Cache simples: se origem e destino são os mesmos da última chamada, reutilizar
+    const callKey = `${origin.lat},${origin.lng}→${dest.lat},${dest.lng}`;
+    if (callKey === lastCallKey && lastCallResult) {
+      return lastCallResult;
+    }
+
+    try {
+      const result = await getMapboxRoute(origin.lng, origin.lat, dest.lng, dest.lat);
+      if (!result) {
+        // Fallback haversine se a API falhar ou não retornar rota
+        const dist = haversineKm(origin, dest);
+        const routeRes: RouteResult = { 
+          distanceKm: dist, 
+          durationMin: Math.ceil(dist / 30 * 60), 
+          durationMinNoTraffic: Math.ceil((dist / 30 * 60) * 0.8),
+          polyline: '',
+          trafficFactor: 1.2
+        };
+        lastCallKey = callKey;
+        lastCallResult = routeRes;
+        return routeRes;
+      }
+      
+      const routeRes: RouteResult = {
+        distanceKm: result.distanceKm,
+        durationMin: result.durationMin,
+        durationMinNoTraffic: result.durationMin * 0.8,
+        polyline: '', // O componente Map3D irá gerir isto adequadamente ou ignorar
+        trafficFactor: 1.2,
+      };
+
+      lastCallKey = callKey;
+      lastCallResult = routeRes;
+      return routeRes;
+    } catch (err) {
+      console.warn('[routeService] Erro da API Mapbox Directions (Fallback activado):', err);
+      const dist = haversineKm(origin, dest);
+      const routeRes: RouteResult = {
+        distanceKm: dist,
+        durationMin: Math.ceil(dist / 30 * 60),
+        durationMinNoTraffic: Math.ceil((dist / 30 * 60) * 0.8),
+        polyline: '',
+        trafficFactor: 1.2
+      };
+      
+      lastCallKey = callKey;
+      lastCallResult = routeRes;
+      return routeRes;
+    }
+  },
+
+  /**
+   * Limpar cache — chamar quando o utilizador muda de destino
+   */
+  clearCache() {
+    lastCallKey    = '';
+    lastCallResult = null;
+  },
+};
+
+
+

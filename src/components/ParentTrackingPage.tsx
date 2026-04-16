@@ -6,6 +6,7 @@ import { useEffect, useState, useRef, Suspense } from "react";
 import React from "react";
 import { useParams } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { parseSupabasePoint } from "../services/rideService";
 import type { Map3DHandle } from "./Map3D";
 import { DriverTracker } from "../lib/driverTracker";
 
@@ -87,12 +88,20 @@ export default function ParentTrackingPage() {
           filter: `driver_id=eq.${ride.driverId}`,
         },
         (payload) => {
-          const newLoc = payload.new as { lat: number; lng: number; heading?: number };
-          if (trackerRef.current) {
+          const row = payload.new as Record<string, unknown>;
+          // Parse location geography field (ou fallback para lat/lng directo)
+          let coords: { lat: number; lng: number } | null = null;
+          if (row.location) {
+            coords = parseSupabasePoint(row.location);
+          }
+          if (!coords && typeof row.lat === 'number' && typeof row.lng === 'number') {
+            coords = { lat: row.lat as number, lng: row.lng as number };
+          }
+          if (coords && trackerRef.current) {
             trackerRef.current.updateLocation({
-              lng:     newLoc.lng,
-              lat:     newLoc.lat,
-              heading: newLoc.heading,
+              lng:     coords.lng,
+              lat:     coords.lat,
+              heading: typeof row.heading === 'number' ? row.heading : undefined,
             });
           }
         }

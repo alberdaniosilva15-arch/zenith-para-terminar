@@ -4,6 +4,8 @@
 
 import mapboxgl from "mapbox-gl";
 
+export let mapInstance: mapboxgl.Map | null = null;
+
 // ─── Tipos ────────────────────────────────────────────────────
 interface MapConfig {
   center?:   [number, number]; // [lng, lat]
@@ -44,7 +46,7 @@ const DEFAULT_CONFIG: Required<MapConfig> = {
 export const MapSingleton = {
 
   // ── Inicializar ou reutilizar instância ────────────────────
-  init(container: HTMLElement, token: string, config: MapConfig = {}): mapboxgl.Map {
+  init(container: HTMLElement, token: string, config: MapConfig = {}): mapboxgl.Map | null {
     // Caso 1: Mesma instância, mesmo container → só resize
     if (state.map && state.container === container) {
       this.resize();
@@ -75,6 +77,7 @@ export const MapSingleton = {
         antialias:        false,        // Desactivar antialiasing — poupa GPU
         trackResize:      true,         // Auto-resize ao redimensionar janela
       });
+      mapInstance = map;
 
       state.map       = map;
       state.container = container;
@@ -94,7 +97,7 @@ export const MapSingleton = {
       console.warn("Failed to initialize WebGL or Mapbox:", err.message);
       // Fallback gracioso: evitar crash da SPA
       container.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;background:#1e293b;color:#94a3b8;font-size:12px;text-align:center;padding:20px;">O teu navegador não suporta mapas em 3D (WebGL). Activa a aceleração de hardware.</div>';
-      return null as any; // Map3D lida com null de forma safe?
+      return null;
     }
   },
 
@@ -126,6 +129,7 @@ export const MapSingleton = {
   _destroy(): void {
     if (state.map) {
       state.map.remove();
+      mapInstance = null;  // Limpar referência global exportada
       state.map       = null;
       state.container = null;
       state.isReady   = false;

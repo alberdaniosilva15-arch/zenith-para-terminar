@@ -17,6 +17,7 @@ export default defineConfig({
     port: 5173,
   },
   build: {
+    sourcemap: 'hidden', // gera source maps para debugging sem expor código no browser
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
@@ -27,7 +28,6 @@ export default defineConfig({
           zustand:  ['zustand'],
           h3:       ['h3-js'],
           supabase: ['@supabase/supabase-js'],
-          purify:   ['dompurify'],
         },
       },
     },
