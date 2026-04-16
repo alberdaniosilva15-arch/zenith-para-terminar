@@ -13,12 +13,20 @@ const fmtKz = (v: number) =>
   : v >= 1_000   ? `${(v/1_000).toFixed(0)}k Kz`
   : `${Math.round(v)} Kz`;
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+interface TooltipPayloadItem { dataKey: string; name: string; value: number; }
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: TooltipPayloadItem[];
+  label?: string;
+}
+
+const CustomTooltip: React.FC<CustomTooltipProps> = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   return (
     <div style={{ background:'var(--bg3)', border:'1px solid var(--border2)', borderRadius:'8px', padding:'10px 14px', fontSize:'11px' }}>
       <p style={{ color:'var(--text3)', marginBottom:'6px' }}>{label}</p>
-      {payload.map((p: any, i: number) => (
+      {payload.map((p, i) => (
         <p key={i} style={{ color: p.dataKey === 'receita' ? 'var(--amber)' : 'var(--green)' }}>
           {p.name}: {p.dataKey.includes('corridas') ? p.value : fmtKz(p.value)}
         </p>
@@ -57,16 +65,24 @@ const Projections: React.FC = () => {
     lucro:   Math.round(p.rides * p.fare * 30 * (comm/100) * (1-opex/100) / 1000),
   }));
 
-  const Slider = ({ label, value, min, max, step, unit = '', onChange }: any) => (
-    <div className="slider-wrap">
-      <div className="slider-header">
-        <span className="slider-label">{label}</span>
-        <span className="slider-value">{value}{unit}</span>
-      </div>
-      <input type="range" min={min} max={max} step={step} value={value}
-        onChange={e => onChange(parseFloat(e.target.value))} />
+// ── Slider component (extracted to avoid defining inside render) ──────────────
+interface SliderProps {
+  label: string; value: number; min: number; max: number;
+  step: number; unit?: string; onChange: (v: number) => void;
+}
+
+const Slider: React.FC<SliderProps> = ({ label, value, min, max, step, unit = '', onChange }) => (
+  <div className="slider-wrap">
+    <div className="slider-header">
+      <span className="slider-label">{label}</span>
+      <span className="slider-value">{value}{unit}</span>
     </div>
-  );
+    <input type="range" min={min} max={max} step={step} value={value}
+      onChange={e => onChange(parseFloat(e.target.value))} />
+  </div>
+);
+
+// ── Projecções (Zenith Engine Pro — separador Receita & Lucro) ────────────────
 
   return (
     <div className="grid-2 gap-24">

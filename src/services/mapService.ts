@@ -9,6 +9,7 @@
 // =============================================================================
 
 import type { LatLng, LocationResult } from '../types';
+import { haversineKm as _haversineKm, haversineMeters as _haversineMeters } from '../lib/geo';
 
 const MAPBOX_TOKEN   = import.meta.env.VITE_MAPBOX_TOKEN   as string | undefined;
 
@@ -45,17 +46,9 @@ export const LUANDA_STATIC_LOCATIONS: LocationResult[] = [
 // Cache de geocoding (evitar chamadas repetidas)
 const geocodeCache = new Map<string, LatLng>();
 
-// ─── Helper: distância Haversine ─────────────────────────────────────────────
+// ─── Helper: distância Haversine (delega para geo.ts centralizado) ───────────
 function haversineKm(a: LatLng, b: LatLng): number {
-  const R    = 6371;
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const sin2 =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((a.lat * Math.PI) / 180) *
-    Math.cos((b.lat * Math.PI) / 180) *
-    Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(sin2), Math.sqrt(1 - sin2));
+  return _haversineKm(a.lat, a.lng, b.lat, b.lng);
 }
 
 // ─── Encontrar bairro mais próximo das coordenadas ────────────────────────────
@@ -205,7 +198,7 @@ export const mapService = {
     // FIX v3.1: Mapbox Geocoding API sempre chamada se houver token (removemos o bloqueio de localResults >= 5)
     if (MAPBOX_TOKEN) {
       try {
-        const remoteResults = await mapboxForwardGeocode(`${query} Luanda Angola`);
+        const remoteResults = await mapboxForwardGeocode(query);
         // Remover duplicados: não mostrar resultado Mapbox se já existe na lista local com nome idêntico
         const deduplicated = remoteResults.filter(r =>
           !localResults.some(l => l.name.toLowerCase().includes(r.name.toLowerCase().substring(0, 10)))
@@ -236,7 +229,7 @@ export const mapService = {
           };
           reject(new Error(msgs[err.code] ?? 'GPS falhou.'));
         },
-        { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
       );
     });
   },
@@ -252,18 +245,12 @@ export const mapService = {
     let lastLat    = 0;
     let lastLng    = 0;
     let retryCount = 0;
-    let watchId: number;
+    let watchId: number | undefined;
     const MIN_MS   = 5000; // 5 segundos mínimo entre updates
     const MIN_M    = 10;   // 10 metros — sensível a trânsito lento de Luanda
 
-    const haversineM = (la1: number, lo1: number, la2: number, lo2: number) => {
-      const R    = 6371000;
-      const dLat = (la2 - la1) * Math.PI / 180;
-      const dLng = (lo2 - lo1) * Math.PI / 180;
-      const a    = Math.sin(dLat/2)**2 +
-                   Math.cos(la1 * Math.PI / 180) * Math.cos(la2 * Math.PI / 180) * Math.sin(dLng/2)**2;
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    };
+    const haversineM = (la1: number, lo1: number, la2: number, lo2: number) =>
+      _haversineMeters(la1, lo1, la2, lo2);
 
     const startWatch = () => {
       watchId = navigator.geolocation.watchPosition(
@@ -289,16 +276,16 @@ export const mapService = {
           if (retryCount < 3) {
             retryCount++;
             setTimeout(() => {
-              navigator.geolocation.clearWatch(watchId);
+              if (watchId !== undefined) navigator.geolocation.clearWatch(watchId);
               startWatch();
             }, 3000);
           }
         },
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 2000 }
       );
     };
 
     startWatch();
-    return () => navigator.geolocation.clearWatch(watchId);
+    return () => { if (watchId !== undefined) navigator.geolocation.clearWatch(watchId); };
   },
 };

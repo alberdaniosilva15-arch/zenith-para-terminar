@@ -49,7 +49,9 @@ const Layout: React.FC<LayoutProps> = ({
   const location = useLocation();
   const navigate = useNavigate();
 
-  const tabs: TabType[] = isDriver
+  const tabs: TabType[] = isAdmin
+    ? ['home', 'social', 'contrato', 'rides', 'wallet', 'profile']
+    : isDriver
     ? ['home', 'social', 'rides', 'wallet', 'profile']
     : ['home', 'social', 'precos', 'contrato', 'rides', 'wallet', 'profile'];
 
@@ -110,8 +112,8 @@ const Layout: React.FC<LayoutProps> = ({
         {children}
       </main>
 
-      {/* ── Bottom Nav (oculta no Admin) ─────────────────────────── */}
-      {!isAdmin && (
+      {/* ── Bottom Nav ─────────────────────────── */}
+      {(
         <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md z-50 bg-[#000000] border-t border-primary/30 flex justify-around items-center h-20 px-4">
           {tabs.map(tab => {
             const active = location.pathname === TAB_ROUTES[tab];

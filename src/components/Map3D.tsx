@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useEffect, useRef, forwardRef, useImperativeHandle } from "react";
 import mapboxgl from "mapbox-gl";
 import { MapSingleton } from "../lib/mapInstance";
 import "mapbox-gl/dist/mapbox-gl.css";
@@ -30,7 +30,6 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
   center,
   zoom,
   pitch,
-  mode = "passenger",
   onMapReady,
   className = "",
   style: styleProp,
@@ -63,8 +62,7 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
     return () => {
       // Singleton persiste, apenas limpamos se necessário
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // init apenas uma vez
+  }, []);
 
   // ── Efeito separado para atualizar posição sem recriar ──────
   useEffect(() => {
@@ -81,17 +79,19 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
   }, []);
 
   return (
-    <div
-      ref={containerRef}
-      className={`map3d-container ${className}`}
-      style={{
-        width:    "100%",
-        height:   "100%",
-        minHeight: "300px",
-        position: "relative",
-        ...styleProp,
-      }}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div
+        ref={containerRef}
+        className={`map3d-container ${className}`}
+        style={{
+          width:    "100%",
+          height:   "100%",
+          minHeight: "300px",
+          position: "relative",
+          ...styleProp,
+        }}
+      />
+    </div>
   );
 });
 

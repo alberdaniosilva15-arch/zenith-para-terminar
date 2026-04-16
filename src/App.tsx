@@ -7,7 +7,7 @@
 //   4. CORREÇÃO BUG 8: useLocation removido das importações (não era usado)
 // =============================================================================
 
-import React, { useState, useEffect, Suspense, useCallback } from 'react';
+import React, { useState, useEffect, Suspense, useCallback, useRef } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useRide } from './hooks/useRide';
@@ -28,6 +28,10 @@ import ParentTrackingPage from './components/ParentTrackingPage';
 import { geminiService } from './services/geminiService';
 import Toast from './components/Toast';
 import { MapSingleton } from "./lib/mapInstance";
+
+// Vigilante Engine só corre em produção com flag explicitamente activado
+// (protege contra custos não controlados no Gemini em MVP gratuito)
+const VIGILANTE_ENABLED = import.meta.env.VITE_VIGILANTE_ENABLED === 'true';
 
 // ─── TAB RESIZE HOOK ─────────────────────────────────────────
 function useMapTabResize() {
@@ -179,29 +183,30 @@ const AppInner: React.FC = () => {
 
   useMapTabResize();
 
-  // Vigilante Engine — só para admins, a cada 2 minutos
+  // Ref sincronizado para evitar stale closure no Vigilante Engine
+  const rideRef = useRef(ride);
+  rideRef.current = ride;
+
+  // Vigilante Engine — só para admins E quando activado por flag, a cada 2 minutos
   useEffect(() => {
-    if (role !== UserRole.ADMIN || !dbUser) return;
+    if (!VIGILANTE_ENABLED || role !== UserRole.ADMIN || !dbUser) return;
 
     const runVigilante = async () => {
       const commands = await geminiService.getAutonomousDecisions({
         role:             role,
-        activeRideStatus: ride.status,
-        multiplier:       ride.surgeMultiplier,
+        activeRideStatus: rideRef.current.status,
+        multiplier:       rideRef.current.surgeMultiplier,
       });
       if (commands.length > 0) setLastCommand(commands[0]);
     };
 
     runVigilante();
+    const interval = setInterval(runVigilante, 2 * 60 * 1000);
+    return () => clearInterval(interval);
   }, [role, dbUser?.id]);
 
   if (authLoading) {
-    return (
-      <div className="min-h-screen bg-[#0B0B0B] flex flex-col items-center justify-center gap-6">
-        <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-        <p className="text-white/60 text-xs font-black uppercase tracking-widest">Zenith Ride</p>
-      </div>
-    );
+    return <FullPageSpinner label="A iniciar Zenith Ride…" />;
   }
 
   const kazeActive = !kazeSilent;
@@ -316,20 +321,24 @@ const App: React.FC = () => {
   // v3.0: rota pública /track/:token — sem AuthProvider
   const pathMatch = window.location.pathname.match(/^\/track\/([0-9a-f-]{36})$/);
   
-  // ✅ BUG #2 CORRIGIDO: ParentTrackingPage envolvido em BrowserRouter
+  // ✅ Rota pública com Routes/Route para que ParentTrackingPage use useParams() correctamente
   if (pathMatch) {
     return (
-      <BrowserRouter>
-        <Suspense fallback={<FullPageSpinner label="A carregar rastreamento…" />}>
-          <ParentTrackingPage />
-        </Suspense>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <Routes>
+          <Route path="/track/:token" element={
+            <Suspense fallback={<FullPageSpinner label="A carregar rastreamento…" />}>
+              <ParentTrackingPage />
+            </Suspense>
+          } />
+        </Routes>
       </BrowserRouter>
     );
   }
 
   // Envolver com BrowserRouter de forma segura para migração progressiva
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AuthProvider>
         <AppInner />
       </AuthProvider>

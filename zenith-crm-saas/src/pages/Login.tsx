@@ -3,21 +3,26 @@ import { useAdminAuth } from '../hooks/useAdminAuth';
 import { Mail, KeyRound, ArrowRight, ShieldCheck, CheckCircle2 } from 'lucide-react';
 
 const Login: React.FC = () => {
-  const { signIn, signInWithGoogle, signInWithMagicLink, signUpAdmin, error } = useAdminAuth();
+  const { signIn, signInWithGoogle, signInWithMagicLink, error } = useAdminAuth();
   
   const [view, setView]          = useState<'login' | 'magic'>('login');
   const [email, setEmail]        = useState('');
   const [password, setPassword]  = useState('');
   const [loading, setLoading]    = useState(false);
   const [successMsg, setSuccess] = useState('');
+  const [localError, setLocalError] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setSuccess('');
+    setLocalError('');
     
     if (view === 'login') {
-      await signIn(email, password);
+      const result = await signIn(email, password);
+      if (result.error) {
+        setLocalError(result.error);
+      }
     } else if (view === 'magic') {
       const ok = await signInWithMagicLink(email);
       if (ok) setSuccess('Verifica a tua caixa de e-mail para entrares com o link mágico!');
@@ -48,9 +53,9 @@ const Login: React.FC = () => {
         )}
 
         {/* Mensagem Erro */}
-        {error && (
+        {(error || localError) && (
           <div style={{ background: 'rgba(255, 68, 68, 0.1)', border: '1px solid rgba(255, 68, 68, 0.2)', borderRadius: '8px', padding: '12px', fontSize: '12px', color: 'var(--red)', marginBottom: '16px' }}>
-            {error}
+            {error || localError}
           </div>
         )}
 

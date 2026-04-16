@@ -87,7 +87,8 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
     return () => { mounted = false; cleanup(); };
   }, [contractId]);
 
-  const loadActiveSession = async () => {
+  // loadActiveSession — reutilizada em expireSession para confirmar que não há nova sessão
+  const loadActiveSession = async (): Promise<void> => {
     const { data } = await supabase
       .from('school_tracking_sessions')
       .select('*')
@@ -97,7 +98,6 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
-
     setSession(data as SchoolTrackingSession | null);
   };
 
@@ -132,6 +132,8 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
       .update({ status: 'expired' })
       .eq('id', session.id);
     setSession(null);
+    // Recarregar para confirmar que não há nova sessão activa criada entretanto
+    await loadActiveSession();
   };
 
   const trackingUrl = session

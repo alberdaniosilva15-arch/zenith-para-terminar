@@ -4,7 +4,7 @@ import { supabase } from '../lib/supabase';
 import { ShieldCheck, Plus, AlertTriangle, CheckCircle2 } from 'lucide-react';
 
 const Admins: React.FC = () => {
-  const { admin } = useAdminAuth();
+  const { user } = useAdminAuth();
   
   const [emailToPromote, setEmailToPromote] = useState('');
   const [loading, setLoading] = useState(false);
@@ -12,7 +12,7 @@ const Admins: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState('');
 
   // Segurança local de Ecrã: Se não for o dono, renderizamos bloqueio.
-  if (admin?.email !== 'Alberdaniosilva15@gmail.com') {
+  if (user?.email !== 'Alberdaniosilva15@gmail.com') {
     return (
       <div className="crm-page fade-in" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '60vh', textAlign: 'center' }}>
         <ShieldCheck size={48} color="var(--red)" style={{ marginBottom: '16px' }} />

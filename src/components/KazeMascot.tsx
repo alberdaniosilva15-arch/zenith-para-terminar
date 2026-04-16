@@ -142,12 +142,12 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
   const isDriver = role === UserRole.DRIVER;
 
   return (
-    <div className="fixed bottom-24 right-4 z-[600] flex flex-col items-end pointer-events-none">
+    <div className="fixed bottom-2 left-1/2 -translate-x-1/2 z-[600] flex flex-col items-center pointer-events-none">
 
       {/* Balão de pensamento espontâneo */}
       {thought && !isOpen && (
         <div
-          className="mb-4 bg-surface-container/95 backdrop-blur-xl text-white p-5 rounded-[2.5rem] rounded-br-none border-2 border-primary shadow-2xl max-w-[240px] animate-in slide-in-from-right-10 fade-in duration-700 pointer-events-auto cursor-pointer"
+          className="mb-4 bg-surface-container/95 backdrop-blur-xl text-white p-5 rounded-[2.5rem] border-2 border-primary shadow-2xl max-w-[240px] animate-in slide-in-from-bottom-10 fade-in duration-700 pointer-events-auto cursor-pointer"
           onClick={() => setIsOpen(true)}
         >
           <div className="flex items-center gap-2 mb-2">
@@ -160,7 +160,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
 
       {/* Painel principal */}
       {isOpen && (
-        <div className="mb-4 w-80 h-[580px] bg-surface-container/98 backdrop-blur-3xl rounded-[3rem] rounded-br-none border border-white/10 shadow-[0_40px_100px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden animate-in slide-in-from-bottom-10 pointer-events-auto">
+        <div className="mb-4 w-[90vw] max-w-sm h-[60vh] max-h-[500px] bg-surface-container/98 backdrop-blur-3xl rounded-[3rem] border border-white/10 shadow-[0_40px_100px_rgba(0,0,0,0.8)] flex flex-col overflow-hidden animate-in zoom-in-95 pointer-events-auto">
 
           {/* Header */}
           <div className="p-6 border-b border-white/5 flex justify-between items-center bg-gradient-to-r from-blue-900/40 to-transparent">
@@ -291,20 +291,22 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
       )}
 
       {/* Botão flutuante */}
+      {/* O Avatar / Gatilho integrado no centro do navbar */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-20 h-20 bg-surface-container rounded-[2.5rem] flex items-center justify-center shadow-[0_30px_60px_rgba(0,0,0,0.5)] border-4 transition-all pointer-events-auto ${
-          isOpen ? 'border-primary scale-90' : 'border-white/10 hover:border-primary hover:scale-105'
-        } active:scale-95 group relative overflow-hidden`}
+        className={`w-16 h-16 rounded-full overflow-hidden border-4 flex items-center justify-center shadow-[0_10px_40px_rgba(0,0,0,0.5)] transition-all pointer-events-auto active:scale-95 z-[601] ${
+          isOpen ? 'bg-primary border-primary scale-110 shadow-[0_20px_50px_rgba(37,99,235,0.7)]' : 'bg-[#0B0B0B] border-[#0A0A0A] hover:bg-surface-container-low hover:border-primary/50'
+        }`}
       >
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-600/30 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-        <div className="w-12 h-12 relative z-10 transform transition-all duration-500 group-hover:scale-125 group-hover:rotate-6">
-          <img src={MASCOT_IMG} alt="Kaze" className="w-full h-full object-contain drop-shadow-[0_0_8px_rgba(96,165,240,0.5)]" />
-        </div>
-        {!isOpen && (
-          <div className="absolute top-3 right-3 w-4 h-4 bg-primary rounded-full border-2 border-[#0B0B0B] animate-bounce">
-            <div className="w-full h-full bg-primary rounded-full animate-ping" />
-          </div>
+        <div className="absolute inset-0 bg-gradient-to-t from-blue-900/40 to-transparent" />
+        <img
+          src={MASCOT_IMG}
+          alt="Kaze Mascot"
+          className={`w-10 h-10 object-contain drop-shadow-md transition-all duration-500 relative z-10 ${isOpen || isThinking ? 'scale-110' : ''}`}
+        />
+        {/* Glow indicator if alive */}
+        {kazeOnline === true && (
+          <span className="absolute bottom-2 right-3 w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_#4ade80] animate-pulse z-20" />
         )}
       </button>
     </div>

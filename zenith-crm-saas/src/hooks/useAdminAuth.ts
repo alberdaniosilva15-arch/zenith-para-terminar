@@ -1,17 +1,18 @@
 // src/hooks/useAdminAuth.ts
 // FASE 0 — Autenticação Admin com validação server-side obrigatória
-// NUNCA confiar no role local. Sempre validar via RPC.
+// NUNCA confiar no role local. Sempre validar via RPC is_admin_secure.
+// v3.1: Todos os bypasses removidos — autenticação real exclusiva.
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { supabase } from "../lib/supabase"; // ajustado para o caminho do projecto
+import { supabase } from "../lib/supabase";
 import type { User, Session } from "@supabase/supabase-js";
 import { useNavigate } from "react-router-dom";
 
 // ─── Tipos ────────────────────────────────────────────────────
 export type AdminAuthState =
-  | "loading"      // a verificar
-  | "authenticated" // admin confirmado
-  | "unauthorized" // autenticado mas não é admin
+  | "loading"        // a verificar
+  | "authenticated"  // admin confirmado
+  | "unauthorized"   // autenticado mas não é admin
   | "unauthenticated"; // sem sessão
 
 interface UseAdminAuthReturn {
@@ -22,24 +23,27 @@ interface UseAdminAuthReturn {
   signIn:       (email: string, password: string) => Promise<{ error: string | null }>;
   signOut:      () => Promise<void>;
   promoteAdmin: (masterKey: string, userId: string) => Promise<{ error: string | null }>;
+  error:        string | null;
+  signInWithGoogle: () => Promise<void>;
+  signInWithMagicLink: (email: string) => Promise<boolean>;
+  signUpAdmin: () => Promise<void>;
 }
 
 // ─── Constantes ───────────────────────────────────────────────
-// URL da Edge Function — usa variável de ambiente, nunca hardcode
 const ADMIN_GATE_URL = import.meta.env.VITE_ADMIN_GATE_URL as string;
-// Intervalo de re-validação do role no servidor (ms) — a cada 5 min
-const REVALIDATE_INTERVAL = 5 * 60 * 1000;
+const REVALIDATE_INTERVAL = 5 * 60 * 1000; // 5 min
 
 // ─── Hook ─────────────────────────────────────────────────────
 export function useAdminAuth(): UseAdminAuthReturn {
+  // ✅ v3.1: Estado inicial é "loading" — sem bypass
   const [state, setState] = useState<AdminAuthState>("loading");
   const [user,  setUser]  = useState<User | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
-  // Ref para o intervalo de re-validação
   const revalidateTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Validação server-side do role admin ────────────────────
+  // ── Validação server-side do role admin via RPC ────────────
   const verifyAdminOnServer = useCallback(async (): Promise<boolean> => {
     try {
       const { data, error } = await supabase.rpc("is_admin_secure");
@@ -60,7 +64,6 @@ export function useAdminAuth(): UseAdminAuthReturn {
   const forceSignOut = useCallback(async (reason: string) => {
     console.warn(`[useAdminAuth] Logout forçado — motivo: ${reason}`);
 
-    // Parar re-validação periódica
     if (revalidateTimerRef.current) {
       clearInterval(revalidateTimerRef.current);
       revalidateTimerRef.current = null;
@@ -69,11 +72,12 @@ export function useAdminAuth(): UseAdminAuthReturn {
     await supabase.auth.signOut();
     setUser(null);
     setState("unauthorized");
+    setError("A tua conta não tem permissões de administrador.");
     navigate("/login?error=unauthorized");
   }, [navigate]);
 
-  // ── Re-validação periódica (verifica se role foi revogado) ──
-  const startPeriodicRevalidation = useCallback((currentUser: User) => {
+  // ── Re-validação periódica ──────────────────────────────────
+  const startPeriodicRevalidation = useCallback((_currentUser: User) => {
     if (revalidateTimerRef.current) {
       clearInterval(revalidateTimerRef.current);
     }
@@ -93,6 +97,7 @@ export function useAdminAuth(): UseAdminAuthReturn {
     if (!session?.user) {
       setUser(null);
       setState("unauthenticated");
+      setError(null);
 
       if (revalidateTimerRef.current) {
         clearInterval(revalidateTimerRef.current);
@@ -103,12 +108,12 @@ export function useAdminAuth(): UseAdminAuthReturn {
 
     setState("loading");
     setUser(session.user);
+    setError(null);
 
     // OBRIGATÓRIO: validar no servidor — nunca confiar no JWT local
     const isAdmin = await verifyAdminOnServer();
 
     if (!isAdmin) {
-      // Utilizador autenticado mas NÃO é admin → logout imediato
       await forceSignOut(`Utilizador ${session.user.email} não tem role admin`);
       return;
     }
@@ -119,12 +124,10 @@ export function useAdminAuth(): UseAdminAuthReturn {
 
   // ── Subscrição a mudanças de sessão ────────────────────────
   useEffect(() => {
-    // Verificar sessão actual ao montar
     supabase.auth.getSession().then(({ data: { session } }) => {
       processSession(session);
     });
 
-    // Ouvir mudanças futuras (login, logout, token refresh)
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       (_event, session) => {
         processSession(session);
@@ -145,15 +148,20 @@ export function useAdminAuth(): UseAdminAuthReturn {
     password: string
   ): Promise<{ error: string | null }> => {
     setState("loading");
+    setError(null);
 
     const { error } = await supabase.auth.signInWithPassword({ email, password });
 
     if (error) {
       setState("unauthenticated");
-      return { error: error.message };
+      const msg = error.message === 'Invalid login credentials'
+        ? 'Email ou password incorrectos.'
+        : error.message;
+      setError(msg);
+      return { error: msg };
     }
 
-    // processSession é chamado automaticamente pelo onAuthStateChange
+    // processSession será chamado pelo onAuthStateChange
     return { error: null };
   }, []);
 
@@ -167,6 +175,7 @@ export function useAdminAuth(): UseAdminAuthReturn {
     await supabase.auth.signOut();
     setUser(null);
     setState("unauthenticated");
+    setError(null);
     navigate("/login");
   }, [navigate]);
 
@@ -203,13 +212,40 @@ export function useAdminAuth(): UseAdminAuthReturn {
     }
   }, []);
 
+  // ── OAuth / Magic Link ─────────────────────────────────────
+  const signInWithGoogle = useCallback(async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) setError(error.message);
+  }, []);
+
+  const signInWithMagicLink = useCallback(async (email: string) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin },
+    });
+    if (error) {
+      setError(error.message);
+      return false;
+    }
+    return true;
+  }, []);
+
+  const signUpAdmin = useCallback(async () => {}, []);
+
   return {
     state,
     user,
     isAdmin:   state === "authenticated",
     isLoading: state === "loading",
+    error,
     signIn,
     signOut,
     promoteAdmin,
+    signInWithGoogle,
+    signInWithMagicLink,
+    signUpAdmin,
   };
 }

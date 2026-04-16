@@ -110,8 +110,9 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'zenith-ride-store-v3',
-      // Só persistir estado da corrida (auth vem sempre do Supabase)
-      partialize: (s) => ({ ride: s.ride }),
+      // Não persistir ride state — é sempre refrescado de getActiveRide() no arranque
+      // (evita estados fantasma de corrida quando a app é fechada durante uma viagem)
+      partialize: () => ({}),
     }
   )
 );

@@ -23,6 +23,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnon, {
     persistSession:    true,
     detectSessionInUrl: true,
   },
+  db: {
+    schema: 'public', // schema explícito — previne erros silenciosos com multi-schema
+  },
   realtime: {
     params: {
       eventsPerSecond: 10,
