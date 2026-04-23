@@ -13,7 +13,8 @@ interface RideRequestFormProps {
   calculating: boolean;
   onCalculatePrice: () => void;
   onCallTaxi: () => void;
-  onConfirmRideRequest: () => void;
+  onConfirmRideRequest: (finalPriceKz: number) => void;
+  onNegotiate?: (proposedPrice: number) => void;
   selectedVehicle?: VehicleType;
   onVehicleChange?: (v: VehicleType) => void;
 }
@@ -29,11 +30,19 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
   onCalculatePrice,
   onCallTaxi,
   onConfirmRideRequest,
+  onNegotiate,
   selectedVehicle: initialVehicle = 'standard',
   onVehicleChange,
 }) => {
   const [selectedVehicle, setSelectedVehicle] = useState<VehicleType>(initialVehicle);
+  const [showNegotiate, setShowNegotiate] = useState(false);
+  const [proposedPrice, setProposedPrice] = useState('');
   const [showMotoWarning, setShowMotoWarning] = useState(false);
+  const [hasInsurance, setHasInsurance] = useState(false);
+
+  const MOTO_INSURANCE_PRICE = 50;
+  const baseFare = fareData ? Number(fareData.fare_kz) : 0;
+  const finalFare = baseFare + (hasInsurance ? MOTO_INSURANCE_PRICE : 0);
 
   const handleVehicleChange = (type: VehicleType) => {
     if (type === 'moto' && selectedVehicle !== 'moto') {
@@ -112,7 +121,7 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
                 Preço estimado
               </p>
               <p className="text-3xl font-black mt-1" style={{ color: '#E6C364' }}>
-                {Number(fareData.fare_kz).toLocaleString('pt-AO')} Kz
+                {finalFare.toLocaleString('pt-AO')} Kz
               </p>
             </div>
             {priceTimer > 0 && (
@@ -141,6 +150,27 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
               ))}
             </div>
           )}
+
+          {/* Seguro MotoGo Basic Toggle */}
+          <div 
+            onClick={() => setHasInsurance(!hasInsurance)}
+            className={`flex items-center justify-between p-3 rounded-xl cursor-pointer border transition-all ${
+              hasInsurance 
+                ? 'border-primary bg-primary/10' 
+                : 'border-white/10 bg-white/5 hover:bg-white/10'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${hasInsurance ? 'border-primary bg-primary' : 'border-white/30'}`}>
+                {hasInsurance && <span className="text-white text-[10px] font-black">✓</span>}
+              </div>
+              <div className="flex flex-col">
+                <span className="text-xs font-black text-white leading-tight">Seguro MotoGo Basic</span>
+                <span className="text-[9px] font-bold text-white/50 leading-tight">Protecção em viagem</span>
+              </div>
+            </div>
+            <span className="text-xs font-black text-primary">+50 Kz</span>
+          </div>
 
           {/* Detalhes da rota */}
           {routeData && (
@@ -193,15 +223,83 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
           ) : 'CHAMAR TÁXI'}
         </button>
       ) : (
-        // Botão de pedir corrida com preço confirmado
-        <button
-          onClick={onConfirmRideRequest}
-          disabled={priceTimer === 0}
-          className="w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-40"
-          style={{ background: '#E6C364', color: '#050505', boxShadow: '0 20px 50px rgba(230,195,100,0.35)' }}
-        >
-          🚖 PEDIR CORRIDA — {Number(fareData.fare_kz).toLocaleString('pt-AO')} Kz
-        </button>
+        <div className="space-y-3">
+          {/* Botão de pedir corrida com preço confirmado */}
+          <button
+            onClick={() => onConfirmRideRequest(finalFare)}
+            disabled={priceTimer === 0}
+            className="w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-40"
+            style={{ background: '#E6C364', color: '#050505', boxShadow: '0 20px 50px rgba(230,195,100,0.35)' }}
+          >
+            🚖 PEDIR CORRIDA — {finalFare.toLocaleString('pt-AO')} Kz
+          </button>
+
+          {/* Botão Negociar — estilo InDriver */}
+          {!showNegotiate ? (
+            <button
+              onClick={() => { setShowNegotiate(true); setProposedPrice(String(Math.round(baseFare * 0.85) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0))); }}
+              className="w-full py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest border-2 border-dashed transition-all active:scale-98"
+              style={{ borderColor: 'rgba(230,195,100,0.4)', color: '#E6C364', background: 'rgba(230,195,100,0.05)' }}
+            >
+              🤝 Podemos negociar?
+            </button>
+          ) : (
+            <div className="rounded-2xl p-4 space-y-3" style={{ background: 'rgba(230,195,100,0.08)', border: '1px solid rgba(230,195,100,0.25)' }}>
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#E6C364' }}>A tua proposta</p>
+                <button onClick={() => setShowNegotiate(false)} className="text-[9px] font-black text-white/40 uppercase">✕ Fechar</button>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 relative">
+                  <input
+                    type="number"
+                    value={proposedPrice}
+                    onChange={e => setProposedPrice(e.target.value)}
+                    className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-xl font-black text-white outline-none text-center focus:border-[#E6C364]/50"
+                    placeholder="0"
+                    min={100}
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-black text-white/40">Kz</span>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {[0.8, 0.85, 0.9, 0.95].map(pct => {
+                  const val = Math.round(baseFare * pct) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0);
+                  return (
+                    <button
+                      key={pct}
+                      onClick={() => setProposedPrice(String(val))}
+                      className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${
+                        proposedPrice === String(val)
+                          ? 'bg-[#E6C364] text-black'
+                          : 'bg-white/5 text-white/50'
+                      }`}
+                    >
+                      -{Math.round((1 - pct) * 100)}%
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[8px] text-white/30 font-bold text-center">
+                Motoristas próximos verão a tua proposta e decidem se aceitam
+              </p>
+              <button
+                onClick={() => {
+                  const price = parseInt(proposedPrice);
+                  if (!isNaN(price) && price >= 100) {
+                    onNegotiate?.(price);
+                    setShowNegotiate(false);
+                  }
+                }}
+                disabled={!proposedPrice || parseInt(proposedPrice) < 100}
+                className="w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all active:scale-98 disabled:opacity-40"
+                style={{ background: '#E6C364', color: '#050505' }}
+              >
+                🚀 LANÇAR PROPOSTA — {proposedPrice ? parseInt(proposedPrice).toLocaleString('pt-AO') : '0'} Kz
+              </button>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

@@ -1349,8 +1349,12 @@ CREATE POLICY "score: admin vê tudo"
   ON public.motogo_scores FOR SELECT USING (public.is_admin());
 
 -- ─── public.school_tracking_sessions ─────────────────────────────────────────
-CREATE POLICY "tracking: leitura pública"
-  ON public.school_tracking_sessions FOR SELECT USING (true);
+CREATE POLICY "tracking: dono lê"
+  ON public.school_tracking_sessions FOR SELECT
+  USING (EXISTS (
+    SELECT 1 FROM public.contracts c
+    WHERE c.id = contract_id AND c.user_id = auth.uid()
+  ));
 
 CREATE POLICY "tracking: dono cria"
   ON public.school_tracking_sessions FOR INSERT

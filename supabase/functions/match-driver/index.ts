@@ -94,7 +94,7 @@ Deno.serve(async (req: Request) => {
 
       const { data: h3Drivers, error: h3Err } = await supabaseAdmin.rpc(
         'find_drivers_h3',
-        { p_h3_indexes: hexes, p_limit: 8, p_cooldown_s: DRIVER_COOLDOWN_S }
+        { p_h3_indexes: hexes, p_limit: 8 }
       );
 
       if (h3Err) {

@@ -101,7 +101,8 @@ const Calculator: React.FC = () => {
 
   const save = async () => {
     setSaving(true);
-    const { id, ...rest } = cfg;
+    const rest = { ...cfg };
+    delete (rest as { id?: string }).id;
     await supabase.from('pricing_config')
       .update({ ...rest, updated_at: new Date().toISOString() })
       .eq('is_active', true);
@@ -235,7 +236,12 @@ const ZoneEditor: React.FC = () => {
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const savePrice = async (p: ZonePrice, newVal: number) => {
     await supabase.from('zone_prices')

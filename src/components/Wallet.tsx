@@ -25,7 +25,7 @@ const TX_ICONS: Record<string, string> = {
 };
 
 const Wallet: React.FC<WalletProps> = ({ userId }) => {
-  const { role } = useAuth();
+  const { role, profile } = useAuth();
   const isDriver = role === UserRole.DRIVER;
 
   const [wallet,       setWallet]       = useState<DbWallet | null>(null);
@@ -49,7 +49,8 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
   const [withdrawLoading,   setWithdrawLoading]   = useState(false);
 
   // v3.0: tabs da carteira
-  const [walletTab, setWalletTab] = useState<'transactions' | 'partners'>('transactions');
+  const [walletTab, setWalletTab] = useState<'transactions' | 'partners' | 'advance'>('transactions');
+  const [showZenithPay, setShowZenithPay] = useState(false);
 
   // ------------------------------------------------------------------
   const loadData = useCallback(async (pageNum = 0) => {
@@ -139,9 +140,18 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
       {/* Card de saldo */}
       <div className={`text-white p-8 rounded-[3rem] shadow-2xl relative overflow-hidden ${isDriver ? 'bg-[#0A0A0A]' : 'bg-surface-container-highest'}`}>
         <div className={`absolute -right-10 -top-10 w-48 h-48 opacity-20 rounded-full blur-[80px] ${isDriver ? 'bg-red-600' : 'bg-primary'}`} />
-        <p className={`text-[9px] font-black uppercase tracking-[0.2em] mb-3 ${isDriver ? 'text-error' : 'text-primary'}`}>
-          {isDriver ? 'LUCRO LÍQUIDO' : 'SALDO ZENITH'}
-        </p>
+        <div className="flex justify-between items-start mb-3">
+          <p className={`text-[9px] font-black uppercase tracking-[0.2em] ${isDriver ? 'text-error' : 'text-primary'}`}>
+            {isDriver ? 'LUCRO LÍQUIDO' : 'SALDO ZENITH'}
+          </p>
+          <button 
+            onClick={() => setShowZenithPay(true)}
+            className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 transition-all rounded-full px-3 py-1.5"
+          >
+            <span className="text-xs">📱</span>
+            <span className="text-[9px] font-black uppercase tracking-widest text-white">ZenithPay</span>
+          </button>
+        </div>
         <h2 className="text-5xl font-black mb-2 tracking-tighter italic">
           {balance.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}
           <span className="text-lg font-medium opacity-40"> Kz</span>
@@ -226,17 +236,89 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
         </div>
       )}
 
+      {/* Modal ZenithPay NFC/QR */}
+      {showZenithPay && (
+        <div className="fixed inset-0 z-[150] bg-black/80 backdrop-blur-md flex items-center justify-center p-6">
+          <div className="bg-surface-container-low w-full max-w-sm rounded-[2rem] p-8 border border-outline-variant/20 shadow-2xl animate-in zoom-in-95 duration-300">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h3 className="text-xl font-black text-on-surface">ZenithPay <span className="text-primary">QR</span></h3>
+                <p className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant/70">Pagamento Aproximado</p>
+              </div>
+              <button 
+                onClick={() => setShowZenithPay(false)}
+                className="w-10 h-10 bg-surface-container rounded-full flex items-center justify-center font-black active:scale-90 transition-all"
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div className="bg-white p-4 rounded-3xl mx-auto w-48 h-48 flex items-center justify-center mb-6">
+              {/* QR Code Placeholder (Dicebear) */}
+              <img 
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=zenithpay://${userId}`} 
+                alt="ZenithPay QR" 
+                className="w-full h-full object-cover rounded-xl"
+              />
+            </div>
+            
+            <p className="text-center text-xs font-bold text-on-surface-variant mb-6 leading-relaxed">
+              Aproxima o telemóvel do dispositivo do motorista ou permite que ele leia este QR Code para pagar a corrida automaticamente sem Internet.
+            </p>
+            
+            <div className="flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-primary/70">
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+              NFC & QR Activos
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* v3.0: Tabs da carteira */}
       <div className="flex gap-2">
-        {(['transactions', 'partners'] as const).map(tab => (
-          <button key={tab} onClick={() => setWalletTab(tab)}
+        {(['transactions', 'partners', 'advance'] as const).map(tab => (
+          <button key={tab} onClick={() => setWalletTab(tab as any)}
             className={`flex-1 py-3 rounded-full text-[9px] font-black uppercase tracking-widest transition-all ${
               walletTab === tab ? 'bg-surface-container-highest text-white shadow-lg' : 'bg-surface-container-low text-outline'
             }`}>
-            {tab === 'transactions' ? '📋 Transacções' : '🤝 Parceiros'}
+            {tab === 'transactions' ? '📋 Movimentos' : tab === 'partners' ? '🤝 Parceiros' : '💸 Adiantamento'}
           </button>
         ))}
       </div>
+
+      {/* Cash Advance */}
+      {walletTab === 'advance' && (
+        <div className="space-y-4 animate-in slide-in-from-right duration-300">
+          <div className="bg-surface-container-low p-6 rounded-[2rem] border border-outline-variant/20">
+            <h3 className="text-sm font-black text-on-surface mb-2">MotoGo Cash Advance</h3>
+            <p className="text-xs font-bold text-on-surface-variant/70 mb-6 leading-relaxed">
+              Disponível apenas para motoristas nível <strong className="text-primary">Diamante</strong>. 
+              Pede até 20.000 Kz de adiantamento descontado automaticamente das tuas próximas corridas (taxa 0%).
+            </p>
+
+            {role !== UserRole.DRIVER ? (
+              <p className="text-[10px] font-black uppercase text-error text-center p-4 bg-error-container/10 rounded-2xl">
+                Apenas para Motoristas.
+              </p>
+            ) : profile?.level !== 'Diamante' ? (
+              <p className="text-[10px] font-black uppercase text-error text-center p-4 bg-error-container/10 rounded-2xl">
+                Requer nível Diamante. Toca em "Perfil" para veres o teu nível actual.
+              </p>
+            ) : (balance < 0) ? (
+              <p className="text-[10px] font-black uppercase text-error text-center p-4 bg-error-container/10 rounded-2xl">
+                Regulariza o teu saldo negativo antes de pedires um novo adiantamento.
+              </p>
+            ) : (
+             <button 
+                onClick={() => alert("Funcionalidade em testes! O teu pedido será processado rapidamente pela equipa Zenith.")} 
+                className="w-full py-4 text-[10px] font-black uppercase tracking-widest bg-primary text-white rounded-2xl shadow-sm"
+              >
+                SOLICITAR 20.000 KZ
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Histórico */}
       {walletTab === 'transactions' && (

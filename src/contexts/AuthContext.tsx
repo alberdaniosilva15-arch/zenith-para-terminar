@@ -1,11 +1,9 @@
 // =============================================================================
-// ZENITH RIDE v3.1 — AuthContext
+// ZENITH RIDE v3.1 â€” AuthContext
 // FIXES v3.1:
-//   1. loadUserData: retries aumentados de 3 → 5 (delay até 4.8s)
-//   2. Fallback de emergência: se todos os retries falharem, cria
-//      dbUser/profile básico local para não deixar o utilizador preso
-//   3. CORREÇÃO BUG 11: loadUserData agora usa while loop para retry,
-//      garantindo que a Promise só resolve APÓS todos os retries terminarem
+//   1. loadUserData: retries aumentados de 3 â†’ 5 (delay atÃ© 4.8s)
+//   2. CORREÃ‡ÃƒO BUG 11: loadUserData agora usa while loop para retry,
+//      garantindo que a Promise sÃ³ resolve APÃ“S todos os retries terminarem
 //      (elimina race condition com init())
 // =============================================================================
 
@@ -23,6 +21,52 @@ import type { DbUser, DbProfile, AppError } from '../types';
 import { UserRole } from '../types';
 import { useAppStore } from '../store/useAppStore';
 
+const CLIENT_ONLY_STORAGE_KEYS = [
+  'zenith-ride-store-v3',
+  'oauth_role_intent',
+  'zenith_ia_provider',
+  'zenith_ia_model',
+];
+
+function clearBrowserAuthStorage(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  clearKnownStorage(window.localStorage);
+  clearKnownStorage(window.sessionStorage);
+}
+
+function clearKnownStorage(storage: Storage): void {
+  for (const key of CLIENT_ONLY_STORAGE_KEYS) {
+    storage.removeItem(key);
+  }
+
+  const keysToRemove: string[] = [];
+  for (let index = 0; index < storage.length; index += 1) {
+    const key = storage.key(index);
+    if (!key) {
+      continue;
+    }
+
+    if (isSupabaseAuthStorageKey(key)) {
+      keysToRemove.push(key);
+    }
+  }
+
+  for (const key of keysToRemove) {
+    storage.removeItem(key);
+  }
+}
+
+function isSupabaseAuthStorageKey(key: string): boolean {
+  return (
+    /^sb-.*-auth-token$/.test(key) ||
+    key.startsWith('supabase.auth.') ||
+    key.includes('-auth-token')
+  );
+}
+
 // =============================================================================
 // TIPOS DO CONTEXTO
 // =============================================================================
@@ -37,7 +81,7 @@ interface AuthContextValue {
   authError: AppError | null;
   clearAuthError: () => void;
 
-  // Acções
+  // AcÃ§Ãµes
   signIn:      (email: string, password: string) => Promise<AppError | null>;
   signInWithGoogle: (role: UserRole) => Promise<AppError | null>;
   signUp:      (email: string, password: string, name: string, role: UserRole) => Promise<AppError | null>;
@@ -65,12 +109,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateProfileStore = useAppStore(s => s.updateProfile);
   const isInitRef = useRef(false);
   const pendingAuthEventRef = useRef<{ event: string; newSession: Session | null } | null>(null);
+  const syncedDbUserIdRef = useRef<string | null>(null);
+
+  const clearSyncedUserState = useCallback(() => {
+    syncedDbUserIdRef.current = null;
+    clearUser();
+  }, [clearUser]);
+
+  const syncSessionBoundary = useCallback((nextSession: Session | null) => {
+    const nextUserId = nextSession?.user?.id ?? null;
+    const hasSwitchedUser = syncedDbUserIdRef.current !== nextUserId;
+
+    if (hasSwitchedUser) {
+      clearSyncedUserState();
+    }
+
+    setSession(nextSession);
+    setAuthUser(nextSession?.user ?? null);
+
+    if (hasSwitchedUser && nextUserId) {
+      setLoading(true);
+    }
+
+    return { nextUserId, hasSwitchedUser };
+  }, [clearSyncedUserState]);
+
+  const purgeClientSession = useCallback(() => {
+    setSession(null);
+    setAuthUser(null);
+    clearSyncedUserState();
+    setAuthError(null);
+    setLoading(false);
+    clearBrowserAuthStorage();
+  }, [clearSyncedUserState]);
 
   // ------------------------------------------------------------------
   // Carregar dados do utilizador a partir do ID do Supabase Auth
-  // Tem retry automático (5 tentativas, 600ms entre cada) para lidar com
+  // Tem retry automÃ¡tico (5 tentativas, 600ms entre cada) para lidar com
   // a race condition entre o trigger handle_new_user e o signIn/signUp.
-  // CORREÇÃO BUG 11: Promise encadeada correctamente — não resolve antes dos retries
+  // CORREÃ‡ÃƒO BUG 11: Promise encadeada correctamente â€” nÃ£o resolve antes dos retries
   // ------------------------------------------------------------------
   const loadUserData = useCallback(async (userId: string, attempt = 0): Promise<void> => {
     const MAX_ATTEMPTS = 4;
@@ -88,13 +165,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (userErr) {
           if (isPermissionError(userErr)) {
-            throw new Error('Sem permissão para carregar dados do utilizador. Contacte o suporte.');
+            throw new Error('Sem permissÃ£o para carregar dados do utilizador. Contacte o suporte.');
           }
           throw userErr;
         }
         if (profErr) {
           if (isPermissionError(profErr)) {
-            throw new Error('Sem permissão para carregar perfil. Contacte o suporte.');
+            throw new Error('Sem permissÃ£o para carregar perfil. Contacte o suporte.');
           }
           throw profErr;
         }
@@ -111,16 +188,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         if (!finalUserRow) {
-          const delay = BASE_DELAY_MS * Math.pow(2, attempt);
-          console.log(`[AuthContext] Dados não encontrados, retry ${attempt + 2}/${MAX_ATTEMPTS} em ${delay}ms`);
-          await new Promise(r => setTimeout(r, delay));
-          attempt++;
-          continue;
+          // AUTO-REPAIR: Se o trigger handle_new_user falhou, criar os registos manualmente
+          if (attempt < MAX_ATTEMPTS - 1) {
+            console.warn('[AuthContext] Utilizador não encontrado — a tentar auto-repair via ensure_user_exists');
+            const { data: { user: authU } } = await supabase.auth.getUser();
+            if (authU) {
+              const metaName = (authU.user_metadata?.name as string) ?? '';
+              const metaRole = (authU.user_metadata?.role as string) ?? 'passenger';
+              const { error: ensureErr } = await supabase.rpc('ensure_user_exists', {
+                p_user_id: authU.id,
+                p_email: authU.email ?? '',
+                p_name: metaName,
+                p_role: metaRole,
+              });
+              if (ensureErr) console.warn('[AuthContext] ensure_user_exists falhou:', ensureErr);
+            }
+            throw new Error('Auto-repair executado — a reententar carregamento...');
+          }
+          throw new Error('Dados do utilizador não encontrados. Contacta o suporte.');
         }
 
-        // ✅ BUG #6 CORRIGIDO: effectiveUser é sempre o finalUserRow real
-        // O ?? foi removido porque era código morto e enganoso
-        const effectiveUser: DbUser = finalUserRow;
+        const rawRole = (finalUserRow as { role?: unknown }).role;
+        if (!isValidUserRole(rawRole)) {
+          throw new Error(`Role invÃ¡lido recebido da BD: ${String(rawRole ?? 'null')}`);
+        }
+
+        const suspendedUntil = (finalUserRow as { suspended_until?: string | null }).suspended_until ?? null;
+        if (isSuspended(suspendedUntil)) {
+          clearSyncedUserState();
+          setAuthError({
+            code: 'account_suspended',
+            message: formatSuspendedMessage(suspendedUntil),
+            details: suspendedUntil,
+          });
+          setLoading(false);
+          return;
+        }
+
+        // âœ… BUG #6 CORRIGIDO: effectiveUser Ã© sempre o finalUserRow real
+        // O ?? foi removido porque era cÃ³digo morto e enganoso
+        const effectiveUser: DbUser = {
+          ...(finalUserRow as DbUser),
+          role: rawRole,
+        };
 
         const effectiveProfile: DbProfile = profileRow ?? {
           id: userId,
@@ -144,10 +254,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           updated_at: new Date().toISOString(),
         };
 
+        syncedDbUserIdRef.current = effectiveUser.id;
         setUser(effectiveUser, effectiveProfile);
         setAuthError(null);
         setLoading(false);
-        return; // Sucesso - sai da função
+        return; // Sucesso - sai da funÃ§Ã£o
       } catch (err: any) {
         console.warn(`[AuthContext] loadUserData attempt ${attempt + 1} falhou:`, err.message);
         if (attempt < MAX_ATTEMPTS - 1) {
@@ -158,68 +269,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           console.error('[AuthContext] Todos os retries falharam:', err);
           
-          // AUTO-RECOVER (Fallback TOTAL: Bypass completo à BD com Perfil em Memória)
-          // SEGURANÇA: role é sempre PASSENGER — nunca ler de user_metadata (pode ser manipulado)
-          console.warn('[AuthContext] DB restringe inserções via Frontend sem trigger. A aplicar Bypass de interface com Perfil Local.');
-          try {
-            const { data: { session } } = await supabase.auth.getSession();
-            if (session?.user) {
-               const dummyUser: DbUser = {
-                 id: userId,
-                 email: session.user.email ?? '',
-                 role: UserRole.PASSENGER, // SEGURANÇA: sempre PASSENGER — nunca confiar em user_metadata para role
-                 created_at: new Date().toISOString(),
-                 updated_at: new Date().toISOString(),
-               };
-               const dummyProfile: DbProfile = {
-                 id: userId,
-                 user_id: userId,
-                 name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Utilizador',
-                 avatar_url: null,
-                 bio: null,
-                 phone: null,
-                 rating: 5.0,
-                 total_rides: 0,
-                 phone_privacy: false,
-                 emergency_contact_name: null,
-                 emergency_contact_phone: null,
-                 level: 'Novato' as const,
-                 km_total: null,
-                 km_to_next_perk: null,
-                 free_km_available: null,
-                 last_known_lat: null,
-                 last_known_lng: null,
-                 created_at: new Date().toISOString(),
-                 updated_at: new Date().toISOString(),
-               };
-               
-               setUser(dummyUser, dummyProfile);
-               setAuthError(null);
-               setLoading(false);
-               return;
-            }
-          } catch (bypassErr) {
-             console.error('[AuthContext] Bypass falhou.', bypassErr);
-          }
-
-          clearUser();
-          setAuthError({ code: 'db_user_load_failed', message: 'Falha crítica de autenticação na leitura da BD. Limpe o cache.' });
+          clearSyncedUserState();
+          setAuthError({
+            code: 'db_user_sync_failed',
+            message: 'Não foi possível sincronizar a tua conta com a base de dados. Tenta novamente ou volta ao login.',
+            details: err instanceof Error ? err.message : String(err ?? 'unknown'),
+          });
           setLoading(false);
           return;
         }
       }
     }
-  }, [setUser, clearUser]);
+  }, [setUser, clearSyncedUserState]);
 
   // ------------------------------------------------------------------
-  // Inicializar: recuperar sessão existente + subscrever a mudanças
+  // Inicializar: recuperar sessÃ£o existente + subscrever a mudanÃ§as
   // ------------------------------------------------------------------
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
       console.log('[AuthContext] init');
-      // 1) Tentar detectar sessão diretamente a partir da URL (link mágico)
+      // 1) Tentar detectar sessÃ£o diretamente a partir da URL (link mÃ¡gico)
       try {
         console.log('[AuthContext] checking getSessionFromUrl');
         if (typeof (supabase.auth as any).getSessionFromUrl === 'function') {
@@ -228,8 +299,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.log('[AuthContext] urlSession:', urlSession);
           if (!mounted) return;
           if (urlSession?.user) {
-            setSession(urlSession);
-            setAuthUser(urlSession.user);
+            syncSessionBoundary(urlSession);
             setAuthError(null);
             await loadUserData(urlSession.user.id);
             setLoading(false);
@@ -238,16 +308,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const pending = pendingAuthEventRef.current;
             pendingAuthEventRef.current = null;
             if (pending && mounted) {
-              // Ignorar se é o mesmo utilizador já carregado (evita double-load)
+              // Ignorar se Ã© o mesmo utilizador jÃ¡ carregado (evita double-load)
               const sameUserId = pending.newSession?.user?.id === urlSession?.user?.id;
               if (!sameUserId) {
-                setSession(pending.newSession);
-                setAuthUser(pending.newSession?.user ?? null);
+                syncSessionBoundary(pending.newSession);
                 if (pending.newSession?.user) {
                   setAuthError(null);
                   await loadUserData(pending.newSession.user.id);
                 } else {
-                  clearUser();
+                  clearSyncedUserState();
                 }
                 setLoading(false);
               }
@@ -256,19 +325,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
       } catch (e) {
-        // Não bloquear; prosseguir para getSession normal
+        // NÃ£o bloquear; prosseguir para getSession normal
         console.warn('[AuthContext] getSessionFromUrl falhou:', e);
       }
 
-      // 2) Fallback: recuperar sessão existente (localStorage)
+      // 2) Fallback: recuperar sessÃ£o existente (localStorage)
       const { data: { session: initialSession } } = await supabase.auth.getSession();
       console.log('[AuthContext] initialSession:', initialSession);
 
       if (!mounted) return;
 
       if (initialSession?.user) {
-        setSession(initialSession);
-        setAuthUser(initialSession.user);
+        syncSessionBoundary(initialSession);
         setAuthError(null);
         await loadUserData(initialSession.user.id);
       }
@@ -278,16 +346,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const pending = pendingAuthEventRef.current;
       pendingAuthEventRef.current = null;
       if (pending && mounted) {
-        // Ignorar se é o mesmo utilizador já carregado (evita double-load)
+        // Ignorar se Ã© o mesmo utilizador jÃ¡ carregado (evita double-load)
         const sameUserId = pending.newSession?.user?.id === initialSession?.user?.id;
         if (!sameUserId) {
-          setSession(pending.newSession);
-          setAuthUser(pending.newSession?.user ?? null);
+          syncSessionBoundary(pending.newSession);
           if (pending.newSession?.user) {
             setAuthError(null);
             await loadUserData(pending.newSession.user.id);
           } else {
-            clearUser();
+            clearSyncedUserState();
           }
           setLoading(false);
         }
@@ -308,14 +375,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
 
-        setSession(newSession);
-        setAuthUser(newSession?.user ?? null);
+        syncSessionBoundary(newSession);
 
         if (newSession?.user) {
           setAuthError(null);
           await loadUserData(newSession.user.id);
         } else {
-          clearUser();
+          clearSyncedUserState();
+          setAuthError(null);
         }
 
         setLoading(false);
@@ -326,7 +393,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       mounted = false;
       subscription.unsubscribe();
     };
-  }, [loadUserData]);
+  }, [loadUserData, syncSessionBoundary, clearSyncedUserState]);
 
   // ------------------------------------------------------------------
   // SIGN IN
@@ -398,19 +465,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ------------------------------------------------------------------
   const signOut = useCallback(async () => {
     try {
+      // 1. Marcar que estamos a fazer signOut (previne re-autenticaÃ§Ã£o pelo listener)
       pendingAuthEventRef.current = null;
-      await supabase.auth.signOut();
-      setSession(null);
-      setAuthUser(null);
-      clearUser();
-      // ✅ BUG #12 CORRIGIDO: garantir que loading=false após logout
-      setLoading(false);
+      isInitRef.current = false; // Bloqueia o listener de re-autenticar
+
+      // 2. Limpar a sessÃ£o local imediatamente para a UI largar a conta antiga.
+      purgeClientSession();
+
+      // 3. Pedir ao Supabase para esquecer a sessÃ£o apenas neste dispositivo.
+      await supabase.auth.signOut({ scope: 'local' });
+
+      // 4. ReforÃ§ar a limpeza no browser e abrir o login num estado fresco.
+      clearBrowserAuthStorage();
+      window.location.replace('/login?cleared=1');
     } catch (err) {
       console.error('[Auth] Erro ao fazer signOut:', err);
-      setLoading(false);
-      clearUser();
+      purgeClientSession();
+      window.location.replace('/login?cleared=1');
     }
-  }, [clearUser]);
+  }, [purgeClientSession]);
 
   // ------------------------------------------------------------------
   // UPDATE PROFILE
@@ -418,7 +491,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateProfile = useCallback(async (
     data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone'>>
   ): Promise<AppError | null> => {
-    if (!dbUser) return { code: 'not_authenticated', message: 'Utilizador não autenticado.' };
+    if (!dbUser) return { code: 'not_authenticated', message: 'Utilizador nÃ£o autenticado.' };
 
     const { error } = await supabase
       .from('profiles')
@@ -435,14 +508,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // VALOR DO CONTEXTO
   // ------------------------------------------------------------------
   const clearAuthError = useCallback(() => setAuthError(null), []);
+  const hasStaleUserData = Boolean(authUser && dbUser && dbUser.id !== authUser.id);
+  const safeDbUser = hasStaleUserData ? null : dbUser;
+  const safeProfile = hasStaleUserData ? null : profile;
 
   const value: AuthContextValue = {
     session,
     authUser,
-    dbUser,
-    profile,
-    role: (dbUser?.role as UserRole) ?? UserRole.PASSENGER,
-    loading,
+    dbUser: safeDbUser,
+    profile: safeProfile,
+    role: safeDbUser && isValidUserRole((safeDbUser as { role?: unknown }).role)
+      ? safeDbUser.role
+      : UserRole.PASSENGER,
+    loading: loading || hasStaleUserData,
     authError,
     clearAuthError,
     signIn,
@@ -468,21 +546,21 @@ export const useAuth = (): AuthContextValue => {
 };
 
 // =============================================================================
-// HELPER: traduzir erros de auth para português
+// HELPER: traduzir erros de auth para portuguÃªs
 // =============================================================================
 function translateAuthError(msg: string): string {
   const map: Record<string, string> = {
     'Invalid login credentials':           'Email ou password incorrectos.',
     'Email not confirmed':                 'Confirma o teu email antes de entrar.',
-    'User already registered':             'Este email já tem uma conta.',
+    'User already registered':             'Este email jÃ¡ tem uma conta.',
     'Password should be at least 6 characters': 'A password deve ter pelo menos 6 caracteres.',
     'signup_disabled':                     'Registo temporariamente desactivado.',
   };
-  return map[msg] ?? `Erro de autenticação: ${msg}`;
+  return map[msg] ?? `Erro de autenticaÃ§Ã£o: ${msg}`;
 }
 
 // ------------------------------------------------------------------
-// Utilitário — detectar erros de permissão Supabase/PostgREST
+// UtilitÃ¡rio â€” detectar erros de permissÃ£o Supabase/PostgREST
 // ------------------------------------------------------------------
 function isPermissionError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
@@ -494,4 +572,30 @@ function isPermissionError(err: unknown): boolean {
     message.toLowerCase().includes('permission denied') ||
     message.toLowerCase().includes('jwt')
   );
+}
+
+function isValidUserRole(role: unknown): role is UserRole {
+  return (
+    role === UserRole.PASSENGER ||
+    role === UserRole.DRIVER ||
+    role === UserRole.ADMIN
+  );
+}
+
+function isSuspended(suspendedUntil: string | null | undefined): boolean {
+  if (!suspendedUntil) return false;
+  const ts = Date.parse(suspendedUntil);
+  if (Number.isNaN(ts)) return false;
+  return ts > Date.now();
+}
+
+function formatSuspendedMessage(suspendedUntil: string | null | undefined): string {
+  if (!suspendedUntil) {
+    return 'A tua conta estÃ¡ suspensa.';
+  }
+  const date = new Date(suspendedUntil);
+  if (Number.isNaN(date.getTime())) {
+    return 'A tua conta estÃ¡ suspensa.';
+  }
+  return `A tua conta estÃ¡ suspensa atÃ© ${date.toLocaleString('pt-AO')}.`;
 }

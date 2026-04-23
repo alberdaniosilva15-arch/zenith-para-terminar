@@ -12,12 +12,14 @@ createRoot(document.getElementById('root')!).render(
   </StrictMode>
 );
 
-// Registo simples de Service Worker (Fase 6 suporte offline)
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').then(
-      (registration) => console.log('SW registado com scope:', registration.scope),
-      (err) => console.log('Erro de registo de SW:', err)
-    );
-  });
-}
+// FIX: Remover splash screen nativo quando React monta
+requestAnimationFrame(() => {
+  const splash = document.getElementById('zenith-splash');
+  if (splash) {
+    splash.classList.add('hide');
+    setTimeout(() => splash.remove(), 500);
+  }
+});
+
+// FIX: Remover registo de SW inexistente (sw.js não existe — causa erro 404 silencioso)
+// Service Worker será implementado correctamente na Fase 6

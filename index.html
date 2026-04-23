@@ -16,11 +16,97 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Zenith Ride" />
-    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined" rel="stylesheet" />
+
+    <!-- FIX: Preload da fonte Material Symbols para evitar FOUT (Flash of Unstyled Text) -->
+    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined&display=swap" as="style" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined&display=swap" rel="stylesheet" />
+
+    <!-- FIX: Ocultar ícones enquanto a fonte não carrega (evita texto "bolt", "explore", etc.) -->
+    <style>
+      .material-symbols-outlined {
+        font-family: 'Material Symbols Outlined', sans-serif;
+        /* Torna invisível até a fonte carregar — mostra só quando .fonts-ready está no html */
+        opacity: 0;
+        transition: opacity 0.2s ease;
+      }
+      html.fonts-ready .material-symbols-outlined {
+        opacity: 1;
+      }
+      /* Splash screen ultra-leve enquanto o JS carrega */
+      #zenith-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #050912;
+        gap: 16px;
+        transition: opacity 0.4s ease;
+      }
+      #zenith-splash.hide {
+        opacity: 0;
+        pointer-events: none;
+      }
+      #zenith-splash .spinner {
+        width: 40px;
+        height: 40px;
+        border: 3px solid rgba(255,255,255,0.1);
+        border-top-color: #3b82f6;
+        border-radius: 50%;
+        animation: zspin 0.8s linear infinite;
+      }
+      #zenith-splash p {
+        color: rgba(255,255,255,0.4);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        font-family: system-ui, sans-serif;
+      }
+      @keyframes zspin { to { transform: rotate(360deg); } }
+    </style>
+
     <title>Zenith Ride</title>
   </head>
   <body>
+    <!-- Splash screen nativo — desaparece quando React monta -->
+    <div id="zenith-splash">
+      <div class="spinner"></div>
+      <p>Zenith Ride</p>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- FIX: Limpar Service Worker quebrado (sw.js foi removido) -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then(function(regs) {
+          regs.forEach(function(r) { r.unregister(); });
+        });
+        // Limpar caches antigos do SW
+        if (caches) {
+          caches.keys().then(function(names) {
+            names.forEach(function(n) { caches.delete(n); });
+          });
+        }
+      }
+    </script>
+
+    <!-- FIX: Detectar quando a fonte Material Symbols está pronta -->
+    <script>
+      // Marca a classe fonts-ready no html assim que a fonte Material Symbols carregar
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(function() {
+          document.documentElement.classList.add('fonts-ready');
+        });
+      } else {
+        // Fallback para browsers antigos — mostra após 1.5s
+        setTimeout(function() {
+          document.documentElement.classList.add('fonts-ready');
+        }, 1500);
+      }
+    </script>
   </body>
 </html>

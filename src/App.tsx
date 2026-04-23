@@ -1,18 +1,19 @@
 // =============================================================================
-// ZENITH RIDE v3.1 — App.tsx
-// FIXES v3.1:
-//   1. Ecrã "a finalizar registo" agora tem botão Sair + timeout de 15s
-//   2. Se profile não carregar em 15s, mostra opções de diagnóstico
-//   3. CORREÇÃO BUG 1: Routes aninhado removido — agora há apenas UM Routes dentro de Layout
-//   4. CORREÇÃO BUG 8: useLocation removido das importações (não era usado)
+// ZENITH RIDE v3.2 — App.tsx
+// FIXES v3.2:
+//   1. Ecrã "a finalizar registo" com botão Sair + timeout de 15s
+//   2. CORREÇÃO CRÍTICA: Removida promoção automática a admin — app principal
+//      é EXCLUSIVAMENTE para passageiros e motoristas. Acesso admin via CRM.
+//   3. Routes aplanados — apenas UM <Routes> dentro de ProtectedRoute
+//   4. Removido AdminDashboard embutido (usar zenith-crm-saas em vez disso)
 // =============================================================================
 
-import React, { useState, useEffect, Suspense, useCallback, useRef } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useState, useEffect, Suspense, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useRide } from './hooks/useRide';
 import Layout from './components/Layout';
-import { UserRole, TabType, AutonomousCommand } from './types';
+import { UserRole, TabType } from './types';
 import PassengerHome from './components/PassengerHome';
 import DriverHome from './components/DriverHome';
 import RidesHistory from './components/RidesHistory';
@@ -25,13 +26,9 @@ const SocialFeed = React.lazy(() => import('./components/SocialFeed'));
 import PostRideReview from './components/PostRideReview';
 import ZonePriceMap from './components/ZonePriceMap';
 import ParentTrackingPage from './components/ParentTrackingPage';
-import { geminiService } from './services/geminiService';
 import Toast from './components/Toast';
 import { MapSingleton } from "./lib/mapInstance";
 
-// Vigilante Engine só corre em produção com flag explicitamente activado
-// (protege contra custos não controlados no Gemini em MVP gratuito)
-const VIGILANTE_ENABLED = import.meta.env.VITE_VIGILANTE_ENABLED === 'true';
 
 // ─── TAB RESIZE HOOK ─────────────────────────────────────────
 function useMapTabResize() {
@@ -78,10 +75,6 @@ function TabAwarePanel({ children, activeTab, thisTab }: TabAwarePanelProps) {
   );
 }
 
-// =============================================================================
-// LAZY COMPONENTS (FASE 2)
-// =============================================================================
-const AdminDashboard = React.lazy(() => import('./components/AdminDashboard'));
 
 // =============================================================================
 // PREPARATION ROUTE (FASE 2)
@@ -167,6 +160,7 @@ const StuckRegistrationScreen: React.FC<{ onSignOut: () => void }> = ({ onSignOu
 // =============================================================================
 const AppInner: React.FC = () => {
   const { dbUser, profile, role, loading: authLoading, session, signOut } = useAuth();
+  const location = useLocation();
 
   const {
     ride, auction, postRide, loading,
@@ -178,32 +172,20 @@ const AppInner: React.FC = () => {
 
   const [dataSaver,   setDataSaver]   = useState(false);
   const [kazeSilent,  setKazeSilent]  = useState(false);
-  const [lastCommand, setLastCommand] = useState<AutonomousCommand | null>(null);
   const [activeTab,   setActiveTab]   = useState<TabType>('home');
+  const isRecoveryRoute = hasRecoveryType(location.search, location.hash);
+  const isSessionResetRoute = hasSessionResetRequest(location.pathname, location.search);
 
   useMapTabResize();
 
-  // Ref sincronizado para evitar stale closure no Vigilante Engine
-  const rideRef = useRef(ride);
-  rideRef.current = ride;
+  // v3.2: effectiveRole — no app principal, utilizadores admin são tratados como passageiro.
+  // O painel admin dedicado é o zenith-crm-saas (projecto separado).
+  const effectiveRole =
+    role === UserRole.ADMIN ? UserRole.PASSENGER : role;
 
-  // Vigilante Engine — só para admins E quando activado por flag, a cada 2 minutos
-  useEffect(() => {
-    if (!VIGILANTE_ENABLED || role !== UserRole.ADMIN || !dbUser) return;
-
-    const runVigilante = async () => {
-      const commands = await geminiService.getAutonomousDecisions({
-        role:             role,
-        activeRideStatus: rideRef.current.status,
-        multiplier:       rideRef.current.surgeMultiplier,
-      });
-      if (commands.length > 0) setLastCommand(commands[0]);
-    };
-
-    runVigilante();
-    const interval = setInterval(runVigilante, 2 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [role, dbUser?.id]);
+  if (isSessionResetRoute && !isRecoveryRoute) {
+    return <SessionResetScreen onSignOut={signOut} />;
+  }
 
   if (authLoading) {
     return <FullPageSpinner label="A iniciar Zenith Ride…" />;
@@ -216,10 +198,12 @@ const AppInner: React.FC = () => {
       <Route 
         path="/login" 
         element={
-          dbUser ? <Navigate to="/" replace /> : (
+          isSessionResetRoute && !isRecoveryRoute ? <SessionResetScreen onSignOut={signOut} /> : (
+            dbUser && !isRecoveryRoute ? <Navigate to="/" replace /> : (
             session ? (
-              <StuckRegistrationScreen onSignOut={signOut} />
+              isRecoveryRoute ? <Login /> : <StuckRegistrationScreen onSignOut={signOut} />
             ) : <Login />
+          )
           )
         } 
       />
@@ -227,7 +211,7 @@ const AppInner: React.FC = () => {
       <Route path="*" element={
         <ProtectedRoute>
           <Layout
-            role={role}
+            role={effectiveRole}
             dataSaver={dataSaver}
             onDataSaverToggle={() => setDataSaver(v => !v)}
             kazeSilent={kazeSilent}
@@ -235,53 +219,48 @@ const AppInner: React.FC = () => {
             userName={profile?.name}
             userRating={profile?.rating}
           >
-            {role === UserRole.ADMIN ? (
-              <Suspense fallback={<div className="flex items-center justify-center p-8 text-white"><div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" /></div>}>
-                <AdminDashboard lastCommand={lastCommand} />
-              </Suspense>
-            ) : (
-              <Routes>
-                {role === UserRole.PASSENGER ? (
-                  <Route path="/" element={
-                    <TabAwarePanel activeTab={activeTab} thisTab="home">
-                      <PassengerHome
-                        ride={ride}
-                        auction={auction}
-                        userId={dbUser?.id ?? ''}
-                        onStartAuction={startAuction}
-                        onSelectDriver={selectDriver}
-                        onCancelAuction={cancelAuction}
-                        onRequestRide={requestRide}
-                        onCancelRide={cancelRide}
-                        dataSaver={dataSaver}
-                      />
-                    </TabAwarePanel>
-                  } />
-                ) : (
-                  <Route path="/" element={
-                    <DriverHome
+            <Routes>
+              {effectiveRole === UserRole.PASSENGER ? (
+                <Route path="/" element={
+                  <TabAwarePanel activeTab={activeTab} thisTab="home">
+                    <PassengerHome
                       ride={ride}
-                      onAcceptRide={acceptRide}
-                      onConfirmRide={confirmRide}
-                      onDeclineRide={declineRide}
-                      onAdvanceStatus={advanceStatus}
-                      driverId={dbUser?.id ?? ''}
+                      auction={auction}
+                      userId={dbUser?.id ?? ''}
+                      onStartAuction={startAuction}
+                      onSelectDriver={selectDriver}
+                      onCancelAuction={cancelAuction}
+                      onRequestRide={requestRide}
+                      onCancelRide={cancelRide}
+                      dataSaver={dataSaver}
+                      emergencyPhone={profile?.emergency_contact_phone ?? undefined}
                     />
-                  } />
-                )}
-                <Route path="/rides" element={<RidesHistory userId={dbUser?.id ?? ''} />} />
-                <Route path="/wallet" element={<Wallet userId={dbUser?.id ?? ''} />} />
-                <Route path="/profile" element={dbUser ? <Profile dbUser={dbUser} profile={profile} onSignOut={signOut} /> : <></>} />
-                <Route path="/social" element={<Suspense fallback={<div className="flex justify-center p-4 text-white/50"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}><SocialFeed userId={dbUser?.id ?? ''} userName={profile?.name ?? ''} role={role} /></Suspense>} />
-                <Route path="/contrato" element={<Contract />} />
-                <Route path="/precos" element={<ZonePriceMap />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            )}
+                  </TabAwarePanel>
+                } />
+              ) : (
+                <Route path="/" element={
+                  <DriverHome
+                    ride={ride}
+                    onAcceptRide={acceptRide}
+                    onConfirmRide={confirmRide}
+                    onDeclineRide={declineRide}
+                    onAdvanceStatus={advanceStatus}
+                    driverId={dbUser?.id ?? ''}
+                  />
+                } />
+              )}
+              <Route path="/rides" element={<RidesHistory userId={dbUser?.id ?? ''} />} />
+              <Route path="/wallet" element={<Wallet userId={dbUser?.id ?? ''} />} />
+              <Route path="/profile" element={dbUser ? <Profile dbUser={dbUser} profile={profile} onSignOut={signOut} /> : <></>} />
+              <Route path="/social" element={<Suspense fallback={<div className="flex justify-center p-4 text-white/50"><span className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}><SocialFeed userId={dbUser?.id ?? ''} userName={profile?.name ?? ''} role={effectiveRole} /></Suspense>} />
+              <Route path="/contrato" element={<Contract />} />
+              <Route path="/precos" element={<ZonePriceMap />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
 
             {kazeActive && (
               <KazeMascot
-                role={role}
+                role={effectiveRole}
                 rideStatus={ride.status}
                 dataSaver={dataSaver}
                 userName={profile?.name}
@@ -314,19 +293,34 @@ function FullPageSpinner({ label = 'A carregar…' }: { label?: string }) {
   );
 }
 
+function SessionResetScreen({ onSignOut }: { onSignOut: () => Promise<void> }) {
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (startedRef.current) {
+      return;
+    }
+
+    startedRef.current = true;
+    void onSignOut();
+  }, [onSignOut]);
+
+  return <FullPageSpinner label="A limpar a sessão antiga…" />;
+}
+
 // =============================================================================
 // APP ROOT
 // =============================================================================
 const App: React.FC = () => {
-  // v3.0: rota pública /track/:token — sem AuthProvider
-  const pathMatch = window.location.pathname.match(/^\/track\/([0-9a-f-]{36})$/);
+  // v3.0: rota pública /track/:token (ou tracking) — sem AuthProvider
+  const pathMatch = window.location.pathname.match(/^\/(track|tracking)\/([0-9a-f-]{36})$/);
   
   // ✅ Rota pública com Routes/Route para que ParentTrackingPage use useParams() correctamente
   if (pathMatch) {
     return (
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
-          <Route path="/track/:token" element={
+          <Route path={`/${pathMatch[1]}/:token`} element={
             <Suspense fallback={<FullPageSpinner label="A carregar rastreamento…" />}>
               <ParentTrackingPage />
             </Suspense>
@@ -347,3 +341,31 @@ const App: React.FC = () => {
 };
 
 export default App;
+
+// v3.2: verifyAdminAccess e OWNER_ADMIN_EMAILS REMOVIDOS.
+// O acesso admin é exclusivo do zenith-crm-saas (projecto separado).
+// O app principal trata todos os utilizadores como passageiro ou motorista.
+
+function hasRecoveryType(search: string, hash: string): boolean {
+  const searchParams = new URLSearchParams(search);
+  if (searchParams.get('type') === 'recovery') {
+    return true;
+  }
+
+  const normalizedHash = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!normalizedHash) {
+    return false;
+  }
+
+  const hashParams = new URLSearchParams(normalizedHash);
+  return hashParams.get('type') === 'recovery';
+}
+
+function hasSessionResetRequest(pathname: string, search: string): boolean {
+  if (pathname === '/logout' || pathname === '/switch-account') {
+    return true;
+  }
+
+  const searchParams = new URLSearchParams(search);
+  return searchParams.get('logout') === '1' || searchParams.get('switch') === '1';
+}

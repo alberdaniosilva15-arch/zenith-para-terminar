@@ -17,7 +17,15 @@ interface PostRideReviewProps {
   onDismiss:    () => void;
 }
 
-type ReviewStep = 'loading' | 'opening' | 'rating' | 'comment' | 'done' | 'receipt';
+type ReviewStep = 'loading' | 'opening' | 'rating' | 'comment' | 'price_feedback' | 'done' | 'receipt';
+
+type PriceRating = 'too_cheap' | 'fair' | 'expensive' | 'too_expensive';
+const PRICE_OPTIONS: { value: PriceRating; label: string; emoji: string; color: string }[] = [
+  { value: 'too_cheap',     label: 'Muito barato',  emoji: '😊', color: 'bg-green-500/15 text-green-400 border-green-500/30' },
+  { value: 'fair',           label: 'Preço justo',   emoji: '👍', color: 'bg-primary/15 text-primary border-primary/30' },
+  { value: 'expensive',      label: 'Um pouco caro', emoji: '😐', color: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
+  { value: 'too_expensive',  label: 'Muito caro',    emoji: '😤', color: 'bg-red-500/15 text-red-400 border-red-500/30' },
+];
 
 const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onDismiss }) => {
   const [step,        setStep]        = useState<ReviewStep>('loading');
@@ -28,6 +36,8 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
   const [submitting,  setSubmitting]  = useState(false);
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const [pdfError,      setPdfError]      = useState<string | null>(null);
+  const [priceRating,   setPriceRating]   = useState<PriceRating | null>(null);
+  const [priceComment,  setPriceComment]  = useState('');
 
   const { driverName, priceKz, rideId } = postRide;
 
@@ -104,8 +114,28 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
     if (score === 0) return;
     setSubmitting(true);
     await onSubmit(score, comment.trim() || undefined);
-    setStep('done');
+    setStep('price_feedback'); // Vai para feedback de preço ANTES de done
     setSubmitting(false);
+  };
+
+  // ------------------------------------------------------------------
+  // Step 5: Feedback de preço da rota
+  // ------------------------------------------------------------------
+  const handlePriceFeedback = async () => {
+    if (priceRating && rideId) {
+      try {
+        await supabase.from('price_feedback').insert({
+          ride_id: rideId,
+          user_id: postRide.passengerId ?? '',
+          origin_zone: postRide.originAddress ?? null,
+          dest_zone: postRide.destAddress ?? null,
+          price_kz: priceKz ?? 0,
+          rating: priceRating,
+          comment: priceComment.trim() || null,
+        });
+      } catch { /* não bloquear o fluxo */ }
+    }
+    setStep('done');
   };
 
   const handleReceipt = async (mode: 'save' | 'share') => {
@@ -279,6 +309,53 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
                 className="w-full py-3 text-on-surface-variant/70 font-black text-[9px] uppercase tracking-widest"
               >
                 Submeter sem comentário
+              </button>
+            </div>
+          )}
+
+          {/* STEP: price_feedback — Opinião sobre o preço */}
+          {step === 'price_feedback' && (
+            <div className="space-y-4 animate-in fade-in duration-300">
+              <div className="text-center mb-2">
+                <p className="text-lg font-black text-on-surface">💰 O que achas do preço?</p>
+                <p className="text-[10px] text-on-surface-variant/70 font-bold mt-1">
+                  {priceKz ? `${priceKz.toLocaleString('pt-AO')} Kz` : ''} — A tua opinião ajuda-nos a melhorar
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {PRICE_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setPriceRating(opt.value)}
+                    className={`p-3 rounded-2xl border transition-all active:scale-95 text-center ${
+                      priceRating === opt.value
+                        ? `${opt.color} border-2 shadow-sm`
+                        : 'bg-surface-container-lowest border-outline-variant/20 text-on-surface-variant/70'
+                    }`}
+                  >
+                    <span className="text-2xl block mb-1">{opt.emoji}</span>
+                    <span className="text-[9px] font-black uppercase tracking-widest">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {priceRating && (
+                <textarea
+                  value={priceComment}
+                  onChange={e => setPriceComment(e.target.value)}
+                  placeholder="Comentário opcional sobre o preço..."
+                  maxLength={150}
+                  rows={2}
+                  className="w-full bg-surface-container-lowest border border-outline-variant/20 p-3 rounded-xl outline-none text-xs font-bold text-on-surface resize-none focus:ring-2 focus:ring-primary"
+                />
+              )}
+
+              <button
+                onClick={handlePriceFeedback}
+                className="w-full py-4 bg-primary text-white rounded-2xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all"
+              >
+                {priceRating ? 'ENVIAR OPINIÃO' : 'SALTAR'}
               </button>
             </div>
           )}

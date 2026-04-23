@@ -75,36 +75,51 @@ const MotoGoPayPartners: React.FC<MotoGoPayPartnersProps> = ({ userId, walletBal
     const discountedAmount = amount * (1 - partner.discount_pct / 100);
 
     // Debita da wallet (transacção tipo 'ride_payment' por ora — no futuro 'partner_payment')
-    let error = null;
+    const amountKz = Math.round(discountedAmount * 100) / 100;
     try {
-      const result = await supabase.rpc('process_partner_payment', {
-        p_user_id:    userId,
-        p_amount:     Math.round(discountedAmount * 100) / 100,
+      const { data, error } = await supabase.rpc('process_partner_payment', {
+        p_user_id: userId,
         p_partner_id: partner.id,
-        p_description: `Pagamento ${partner.name} — ${partner.discount_pct}% desconto`,
+        p_amount_kz: amountKz,
       });
-      error = result.error;
+
+      if (error) {
+        setPayMsg({ text: `Falha no pagamento: ${error.message}`, ok: false });
+        setPayingId(null);
+        setTimeout(() => setPayMsg(null), 5000);
+        return;
+      }
+
+      const paymentResult = Array.isArray(data) ? data[0] : data;
+      if (!paymentResult?.success) {
+        setPayingId(null);
+        setTimeout(() => setPayMsg(null), 5000);
+        setPayMsg({ text: 'Pagamento não concluído. Saldo insuficiente.', ok: false });
+        return;
+      }
+
+      const parsedBalance = Number(paymentResult.new_balance);
+      const balanceText = Number.isFinite(parsedBalance)
+        ? ` Saldo atual: ${Math.round(parsedBalance).toLocaleString('pt-AO')} Kz.`
+        : '';
+
+      setPayMsg({
+        text: `✓ Pago ${Math.round(amountKz).toLocaleString('pt-AO')} Kz com ${partner.discount_pct}% de desconto!${balanceText}`,
+        ok: true
+      });
+      setSelectedPartner(null);
+      setPayAmount('');
+      setPayingId(null);
+      setTimeout(() => setPayMsg(null), 5000);
+      return;
     } catch (err) {
-      error = { message: 'RPC não encontrada — pagamento simulado' };
+      const message = err instanceof Error ? err.message : 'Erro inesperado ao processar pagamento.';
+      setPayMsg({ text: `Falha no pagamento: ${message}`, ok: false });
+      setPayingId(null);
+      setTimeout(() => setPayMsg(null), 5000);
+      return;
     }
 
-    if (error) {
-      // Fallback: simula em modo demo se a RPC ainda não existe
-      setPayMsg({
-        text: `✓ Pagamento de ${Math.round(discountedAmount).toLocaleString('pt-AO')} Kz enviado para ${partner.name} (modo demo)`,
-        ok: true
-      });
-    } else {
-      setPayMsg({
-        text: `✓ Pago ${Math.round(discountedAmount).toLocaleString('pt-AO')} Kz com ${partner.discount_pct}% de desconto!`,
-        ok: true
-      });
-    }
-
-    setPayingId(null);
-    setSelectedPartner(null);
-    setPayAmount('');
-    setTimeout(() => setPayMsg(null), 5000);
   };
 
   const categories: Array<PartnerCategory | 'all'> = ['all', 'fuel', 'food', 'insurance', 'mechanic', 'supermarket'];

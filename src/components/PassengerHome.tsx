@@ -1,28 +1,35 @@
 // =============================================================================
-// ZENITH RIDE v3.1 — PassengerHome.tsx
-// FIXES v3.1:
-//   1. userLocation → posição GPS real passada ao Map3D (mapa centra correctamente)
-//   2. useGPS actualiza userLocation imediatamente → mapa move-se para o utilizador
-//   3. Map3D recebe userLocation={userLocation} em vez de ficara centrado em Luanda
+// ZENITH RIDE v3.2 — PassengerHome.tsx
+// REFACTOR v3.2:
+//   1. GPS automático ao montar — mapa centra no utilizador sem clicar nada
+//   2. Rota REAL via Mapbox Directions API (distância por estrada, não Haversine)
+//   3. Rota DESENHADA no mapa com animação (usa mapRoutingLayer existente)
+//   4. Pesquisa de locais agora passa posição actual para resultados relevantes
+//   5. RoutePreview mostra dados REAIS (km por estrada, minutos com trânsito)
 // =============================================================================
 
 import React, { useState, useCallback, useRef, useEffect, Suspense } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import LocationSearch from './passenger/LocationSearch';
 import RoutePreview from './passenger/RoutePreview';
 import AuctionList from './passenger/AuctionList';
 import RideRequestForm from './passenger/RideRequestForm';
 import ActiveRideCard from './passenger/ActiveRideCard';
+const ScheduleRide = React.lazy(() => import('./passenger/ScheduleRide'));
 const Map3D = React.lazy(() => import('./Map3D'));
 const AgoraCall = React.lazy(() => import('./AgoraCall'));
 import KazePreditivo  from './KazePreditivo';
 import FreePerkBanner from './FreePerkBanner';
+import { ReferralModal } from './ReferralModal';
 import ZonePriceMap   from './ZonePriceMap';
 import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
 import { zonePriceService } from '../services/zonePrice';
 import { rideService } from '../services/rideService';
 import { routeService, RouteResult } from '../services/routeService';
 import { supabase } from '../lib/supabase';
+import { MapSingleton } from '../lib/mapInstance';
+import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
 import type { RideState, AuctionState, AuctionDriver, LocationResult, LatLng } from '../types';
 import { RideStatus, UserRole } from '../types';
 
@@ -33,21 +40,24 @@ interface PassengerHomeProps {
   onStartAuction:  (pickupCoords: LatLng) => Promise<void>;
   onSelectDriver:  (driver: AuctionDriver) => void;
   onCancelAuction: () => void;
-  onRequestRide:   (pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng) => Promise<void>;
+  onRequestRide:   (pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng, proposedPrice?: number) => Promise<void>;
   onCancelRide:    (reason?: string) => Promise<void>;
   dataSaver:       boolean;
+  emergencyPhone?: string;
 }
 
 interface RouteInfo {
   distanceKm:  number;
   durationMin: number;
+  isReal:      boolean;   // true = vem da Directions API (estrada), false = Haversine
 }
 
 const PassengerHome: React.FC<PassengerHomeProps> = ({
   ride, auction, userId,
   onStartAuction, onSelectDriver, onCancelAuction,
-  onRequestRide, onCancelRide, dataSaver,
+  onRequestRide, onCancelRide, dataSaver, emergencyPhone
 }) => {
+  const navigate = useNavigate();
   const [selecting,    setSelecting]    = useState<'pickup' | 'dest' | null>(null);
   const [searchQuery,  setSearchQuery]  = useState('');
   const [results,      setResults]      = useState<LocationResult[]>([]);
@@ -59,9 +69,10 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [zonePrice,    setZonePrice]    = useState<number | null>(null);
   const [zoneNames,    setZoneNames]    = useState<{ origin: string; dest: string } | null>(null);
   const [routeInfo,    setRouteInfo]    = useState<RouteInfo | null>(null);
+  const [routeLoading, setRouteLoading] = useState(false);
   const [loadingRide,  setLoadingRide]  = useState(false);
   const [nearbyCount,  setNearbyCount]  = useState<number | null>(null);
-  // FIX v3.1: posição GPS real do utilizador — passada ao Map3D para centrar correctamente
+  // Posição GPS real do utilizador — passada ao Map3D para centrar correctamente
   const [userLocation, setUserLocation] = useState<LatLng | null>(null);
   // Engine Pro: rota real + preço calculado no servidor
   const [routeData,    setRouteData]    = useState<RouteResult | null>(null);
@@ -74,15 +85,100 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   } | null>(null);
   const [calculating,  setCalculating]  = useState(false);
   const [priceTimer,   setPriceTimer]   = useState<number>(0);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [showReferral, setShowReferral] = useState(false);
 
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const routeDrawnRef     = useRef(false); // evita redesenhar a mesma rota
 
-  // ── Quando destino muda: calcular distância + buscar preço de zona ──────────
+  // ── GPS AUTOMÁTICO ao montar — o mapa centra no utilizador sem clicar nada ──
   useEffect(() => {
-    if (!pickupCoords || !destCoords) { setRouteInfo(null); return; }
-    const info = mapService.calculateRouteInfo(pickupCoords, destCoords);
-    setRouteInfo(info);
+    let cancelled = false;
+    mapService.getCurrentPosition()
+      .then(async (coords) => {
+        if (cancelled) return;
+        setUserLocation(coords);
+        // Se não há pickup definido, usar a posição GPS como pickup
+        if (!pickupCoords) {
+          const address = await mapService.reverseGeocode(coords);
+          if (!cancelled) {
+            setPickupName(address);
+            setPickupCoords(coords);
+          }
+        }
+      })
+      .catch(() => {
+        // GPS indisponível — usar fallback silencioso Luanda Centro
+        if (!cancelled) {
+          setUserLocation({ lat: -8.8390, lng: 13.2343 });
+        }
+      });
+    return () => { cancelled = true; };
+  }, []); // executa UMA vez ao montar
+
+  // ── Quando destino muda: calcular ROTA REAL via Mapbox Directions ──────────
+  useEffect(() => {
+    if (!pickupCoords || !destCoords) {
+      setRouteInfo(null);
+      routeDrawnRef.current = false;
+      // Limpar rota do mapa se destino foi removido
+      MapSingleton.onReady((map) => clearRoute(map));
+      return;
+    }
+
+    let cancelled = false;
+    setRouteLoading(true);
+
+    // Mostrar estimativa rápida (Haversine) imediatamente enquanto a API carrega
+    const quickEstimate = mapService.calculateRouteInfo(pickupCoords, destCoords);
+    setRouteInfo({ ...quickEstimate, isReal: false });
+
+    // Buscar rota REAL via Mapbox Directions API
+    mapService.getRouteDistance(pickupCoords, destCoords)
+      .then((real) => {
+        if (cancelled) return;
+        setRouteInfo({
+          distanceKm:  real.distanceKm,
+          durationMin: real.durationMin,
+          isReal:      real.geometry !== null,
+        });
+
+        // Desenhar rota no mapa (esperar que esteja pronto)
+        const validGeo = real.geometry;
+        if (validGeo && !routeDrawnRef.current) {
+          MapSingleton.onReady((map) => {
+            if (routeDrawnRef.current) return;
+            clearRoute(map);
+          drawRoute(map, {
+            distanceKm:      real.distanceKm,
+            durationMinutes: real.durationMin,
+            durationText:    real.durationMin < 60
+              ? `${real.durationMin} min`
+              : `${Math.floor(real.durationMin / 60)}h ${real.durationMin % 60}min`,
+            geojson: {
+              type: 'Feature',
+              geometry: validGeo,
+              properties: {},
+            },
+            bbox: calculateBBox(validGeo.coordinates as [number, number][]),
+            });
+            routeDrawnRef.current = true;
+          });
+        }
+
+        setRouteLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) setRouteLoading(false);
+      });
+
+    return () => { cancelled = true; };
   }, [pickupCoords, destCoords]);
+
+  // Reset do flag de rota desenhada quando coords mudam
+  useEffect(() => {
+    routeDrawnRef.current = false;
+  }, [pickupCoords?.lat, pickupCoords?.lng, destCoords?.lat, destCoords?.lng]);
 
   // ── Buscar motoristas próximos para mostrar contador ─────────────────────────
   useEffect(() => {
@@ -94,7 +190,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     return () => { cancelled = true; };
   }, [pickupCoords]);
 
-  // ── Pesquisa com debounce ────────────────────────────────────────────────────
+  // ── Pesquisa com debounce — agora passa posição do utilizador ────────────────
   const handleSearch = useCallback((query: string) => {
     setSearchQuery(query);
     if (searchDebounceRef.current) {
@@ -108,13 +204,14 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     searchDebounceRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await mapService.searchPlaces(query);
+        // v3.2: passa posição do utilizador para resultados mais relevantes
+        const res = await mapService.searchPlaces(query, userLocation ?? undefined);
         setResults(res);
       } finally {
         setSearching(false);
       }
-    }, 400);
-  }, []);
+    }, 350);
+  }, [userLocation]);
 
   useEffect(() => {
     return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
@@ -152,7 +249,6 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       const address = await mapService.reverseGeocode(coords);
       setPickupName(address);
       setPickupCoords(coords);
-      // FIX v3.1: guardar posição real para o mapa centrar correctamente
       setUserLocation(coords);
       setSelecting(null);
     } catch (err: unknown) {
@@ -163,7 +259,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     }
   };
 
-  // ── Calcular rota real (Google Routes API) + preço Engine Pro ───────────────
+  // ── Calcular rota real (Mapbox Directions API) + preço Engine Pro ───────────
   const handleConfirmRoute = async () => {
     if (!pickupCoords || !destCoords) return;
     setCalculating(true);
@@ -171,14 +267,13 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     setRouteData(null);
     routeService.clearCache();
     try {
-      // 1. Rota real — chamada ÚNICA à Routes API
+      // 1. Rota real — chamada à Directions API
       const route = await routeService.getRoute(pickupCoords, destCoords);
       setRouteData(route);
 
       // 2. Preço calculado no servidor (Engine Pro protegido)
       const hour      = new Date().getHours();
       const isNight   = hour >= 22 || hour < 6;
-      // Detectar aeroporto FAAN (lat -8.8577, lng 13.2312) no raio de 1km
       const distToAirport = Math.sqrt(
         Math.pow(destCoords.lat - (-8.8577), 2) +
         Math.pow(destCoords.lng - 13.2312, 2)
@@ -186,7 +281,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       const isAirport = distToAirport < 1.0;
 
       const { data: fare, error: fareError } = await supabase.rpc(
-        'calculate_fare_engine_pro',
+        'calculate_fare_engine_pro_with_rate_limit',
         {
           p_distance_km:    route.distanceKm,
           p_duration_min:   route.durationMin,
@@ -204,6 +299,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       );
 
       if (fareError) throw new Error('Erro ao calcular preço. O servidor não respondeu.');
+      if (fare && fare.error) throw new Error(fare.error);
       setFareData(fare);
       setPriceTimer(120); // 2 minutos de lock
     } catch (err: unknown) {
@@ -216,7 +312,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     }
   };
 
-  // ── "VER MOTORISTAS" — pesquisa real de motoristas ─────────────────────────────
+  // ── "VER MOTORISTAS" — pesquisa real de motoristas ────────────────────────────
   const handleShowDrivers = async () => {
     if (!pickupCoords || !destName) return;
     await onStartAuction(pickupCoords);
@@ -231,6 +327,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
         const address = await mapService.reverseGeocode(coords);
         setPickupName(address);
         setPickupCoords(coords);
+        setUserLocation(coords);
       } catch { /* usar fallback se GPS falhar */ } finally {
         setSearching(false);
       }
@@ -262,12 +359,33 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     return () => clearInterval(interval);
   }, [priceTimer]);
 
-  // ── Confirmar motorista escolhido ───────────────────────────────────────────────
+  // ── Confirmar motorista escolhido ───────────────────────────────────────────
   const handleConfirmDriver = async () => {
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
     await onRequestRide(pickupName, pickupCoords, destName, destCoords);
     setLoadingRide(false);
+  };
+
+  // ── Solicitar Corrida (Preço base / normal) ─────────────────────────────────
+  const handleRequestNormalRide = async (finalPriceKz: number) => {
+    if (!pickupName || !destName || !pickupCoords || !destCoords) return;
+    setLoadingRide(true);
+    await onRequestRide(pickupName, pickupCoords, destName, destCoords, finalPriceKz);
+    setLoadingRide(false);
+  };
+
+  // ── Negociar preço (estilo InDriver) ────────────────────────────────────────
+  const handleNegotiate = async (proposedPrice: number) => {
+    if (!pickupCoords || !destName || !destCoords || !pickupName) return;
+    setLoadingRide(true);
+    try {
+      await onRequestRide(pickupName, pickupCoords, destName, destCoords, proposedPrice);
+    } catch (e) {
+      console.error('[PassengerHome] Negociação falhou:', e);
+    } finally {
+      setLoadingRide(false);
+    }
   };
 
   const isReady     = !!pickupName && !!destName;
@@ -300,7 +418,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           <div className="my-1 pl-3 border-l-2 border-dashed border-outline-variant/30">
             {routeInfo && (
               <p className="text-[9px] font-bold text-on-surface-variant/70 py-1">
-                📏 {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
+                {routeInfo.isReal ? '🛣️' : '📏'} {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
+                {routeInfo.isReal && <span className="text-primary ml-1">(por estrada)</span>}
               </p>
             )}
           </div>
@@ -374,6 +493,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
             pickupName={pickupName}
             destName={destName}
             routeInfo={routeInfo}
+            routeLoading={routeLoading}
             zonePrice={zonePrice}
             zoneNames={zoneNames}
             onSelectPickup={() => { setSelecting('pickup'); handleSearch(''); }}
@@ -388,6 +508,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
             searchQuery={searchQuery}
             results={results}
             searching={searching}
+            userLocation={userLocation}
             onSearchChange={handleSearch}
             onClose={() => { setSelecting(null); setSearchQuery(''); setResults([]); }}
             onUseGPS={useGPS}
@@ -416,6 +537,39 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                   }}
                 />
                 <FreePerkBanner userId={userId} />
+
+                {/* ── ZONA DE CONTRATOS E SERVIÇOS ── */}
+                <div className="mx-4 mb-4 grid grid-cols-2 gap-3">
+                  <button
+                    onClick={() => navigate('/contrato')}
+                    className="bg-[#0A0A0A] border border-primary/20 rounded-[2rem] p-5 text-left relative overflow-hidden group active:scale-95 transition-all"
+                  >
+                    <div className="absolute top-0 right-0 w-16 h-16 bg-primary/5 rounded-full blur-2xl group-hover:bg-primary/10 transition-all" />
+                    <span className="material-symbols-outlined text-primary mb-2 block">description</span>
+                    <p className="text-[10px] font-black text-primary uppercase tracking-widest">Contratos</p>
+                    <p className="text-[9px] text-white/40 font-bold leading-tight mt-1">Escolar, Familiar e Empresas</p>
+                  </button>
+
+                  <button
+                    onClick={() => setShowReferral(true)}
+                    className="bg-[#0A0A0A] border border-white/5 rounded-[2rem] p-5 text-left relative overflow-hidden group active:scale-95 transition-all"
+                  >
+                    <div className="absolute top-0 right-0 w-16 h-16 bg-white/5 rounded-full blur-2xl group-hover:bg-white/10 transition-all" />
+                    <span className="material-symbols-outlined text-white/60 mb-2 block">handshake</span>
+                    <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Traz o Mano</p>
+                    <p className="text-[9px] text-white/40 font-bold leading-tight mt-1">Ganha 500 Kz por convite</p>
+                  </button>
+                </div>
+
+                {/* Botão Agendar Corrida */}
+                {isReady && (
+                  <button
+                    onClick={() => setShowSchedule(true)}
+                    className="w-full py-3 bg-surface-container-low border border-outline-variant/30 text-on-surface-variant rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:border-primary/50 active:scale-98 transition-all"
+                  >
+                    📅 Agendar para depois
+                  </button>
+                )}
               </>
             )}
 
@@ -429,7 +583,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               calculating={calculating}
               onCalculatePrice={handleConfirmRoute}
               onCallTaxi={handleCallTaxi}
-              onConfirmRideRequest={handleShowDrivers}
+              onConfirmRideRequest={handleRequestNormalRide}
+              onNegotiate={handleNegotiate}
             />
 
             <ActiveRideCard
@@ -442,6 +597,29 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
             {/* Adicionado espaço livre para quando a doca inferior com o Kaze está presente */}
             <div className="h-10" />
           </div>
+        )}
+
+        {/* Modal de agendamento */}
+        {showSchedule && (
+          <Suspense fallback={null}>
+            <ScheduleRide
+              userId={userId}
+              pickupName={pickupName}
+              destName={destName}
+              pickupCoords={pickupCoords}
+              destCoords={destCoords}
+              onClose={() => setShowSchedule(false)}
+              onScheduled={() => setShowSchedule(false)}
+            />
+          </Suspense>
+        )}
+
+        {/* Modal Traz o Mano */}
+        {showReferral && (
+          <ReferralModal 
+            userId={userId} 
+            onClose={() => setShowReferral(false)} 
+          />
         )}
 
         {/* Kaze substituiu o FAB anterior e é injectado pelo App no topo */}
@@ -457,5 +635,12 @@ const RouteRow: React.FC<{ dot: string; value: string }> = ({ dot, value }) => (
     <p className="text-xs font-black text-on-surface-variant truncate">{value}</p>
   </div>
 );
+
+// ── Helper: calcular bounding box de coordenadas ────────────────────────────
+function calculateBBox(coords: [number, number][]): [number, number, number, number] {
+  const lngs = coords.map(c => c[0]);
+  const lats = coords.map(c => c[1]);
+  return [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)];
+}
 
 export default PassengerHome;

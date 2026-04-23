@@ -159,46 +159,82 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
       setError(null);
 
       try {
-        // Bias para Luanda — prioriza resultados de Angola
         const proximity = userPos
           ? `&proximity=${userPos.lng},${userPos.lat}`
           : `&proximity=13.2343,-8.8390`;
 
-        const url =
+        const bbox = '12.8,-9.5,14.3,-7.5';
+
+        // 1. Mapbox API — Focus em bairros e vias estruturantes + POIs grandes
+        const mbUrl =
           `https://api.mapbox.com/geocoding/v5/mapbox.places/` +
           `${encodeURIComponent(query)}.json` +
-          `?country=AO` +                    // ANGOLA APENAS
-          `&language=pt` +                   // Português
+          `?country=AO` +
+          `&language=pt` +
+          `&types=poi,address,neighborhood,locality,place` +
           `&limit=8` +
           proximity +
+          `&bbox=${bbox}` +
           `&access_token=${MAPBOX_TOKEN}`;
 
-        const res = await fetch(url);
-        const data = await res.json();
+        // 2. Photon API (OpenStreetMap) — Ibatível para Hospedarias, Colégios, Restaurantes africanos
+        const phUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&bbox=${bbox}&limit=12`;
 
-        const enriched: SearchResult[] = (data.features || []).map(
-          (f: any): SearchResult => {
-            const distKm = userPos
-              ? haversineKm(
-                  userPos.lat, userPos.lng,
-                  f.center[1], f.center[0]
-                )
-              : undefined;
-            return {
-              id: f.id,
-              place_name: f.place_name,
-              text: f.text,
-              place_type: f.place_type,
-              center: f.center,
-              distanceKm: distKm !== undefined
-                ? parseFloat(distKm.toFixed(1))
-                : undefined,
-            };
+        const [mbRes, phRes] = await Promise.allSettled([
+          fetch(mbUrl).then(r => r.json()),
+          fetch(phUrl).then(r => r.json()),
+        ]);
+
+        const mapboxFeatures = mbRes.status === 'fulfilled' ? (mbRes.value.features || []) : [];
+        const photonFeatures = phRes.status === 'fulfilled' ? (phRes.value.features || []) : [];
+
+        // Traduzir Mapbox
+        const mbParsed: SearchResult[] = mapboxFeatures.map((f: any) => ({
+          id: f.id,
+          place_name: f.place_name,
+          text: f.text,
+          place_type: f.place_type,
+          center: f.center,
+          distanceKm: userPos
+            ? parseFloat(haversineKm(userPos.lat, userPos.lng, f.center[1], f.center[0]).toFixed(1))
+            : undefined,
+        }));
+
+        // Traduzir Photon
+        const phParsed: SearchResult[] = photonFeatures.map((f: any) => {
+          const props = f.properties || {};
+          const label = props.name || props.street || props.city || 'Desconhecido';
+          const full = [label, props.street, props.city].filter(Boolean).join(', ');
+          return {
+            id: `photon-${props.osm_id || Math.random()}`,
+            place_name: full,
+            text: label,
+            place_type: ['poi'], // força ícone POI
+            center: f.geometry.coordinates as [number, number],
+            distanceKm: userPos
+              ? parseFloat(haversineKm(userPos.lat, userPos.lng, f.geometry.coordinates[1], f.geometry.coordinates[0]).toFixed(1))
+              : undefined,
+          };
+        });
+
+        // Combinar e ordenar interlavado ou apenas Photon primeiro (escolas/hospedarias vêm daqui)
+        // Usar Map para remover duplicados pelo nome exacto
+        const combinedMap = new Map<string, SearchResult>();
+        [...phParsed, ...mbParsed].forEach(item => {
+          if (!combinedMap.has(item.text.toLowerCase())) {
+            combinedMap.set(item.text.toLowerCase(), item);
           }
-        );
+        });
 
-        setResults(enriched);
-      } catch {
+        // Ordenar por distância
+        const finalResults = Array.from(combinedMap.values()).sort((a, b) => {
+          if (a.distanceKm && b.distanceKm) return a.distanceKm - b.distanceKm;
+          return 0;
+        });
+
+        setResults(finalResults.slice(0, 15));
+      } catch (err) {
+        console.warn('Geocoding error:', err);
         setError('Erro na pesquisa — verifica a ligação');
       } finally {
         setSearching(false);

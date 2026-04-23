@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Search, Eye, Ban, RefreshCw } from 'lucide-react';
+import { Search, Eye, Ban, RefreshCw, ShieldAlert, Users } from 'lucide-react';
+import { DriversDocs } from './DriversDocs';
 
 interface Driver {
   id: string;
@@ -33,6 +34,32 @@ interface DriverProfile extends Driver {
     from_name: string | null;
   }[];
   earnings_30d: number;
+}
+
+interface DriverListRow {
+  user_id: string;
+  name: string;
+  phone: string | null;
+  rating: number | null;
+  total_rides: number | null;
+  level: string | null;
+  users?: { suspended_until: string | null }[] | null;
+  driver_locations?: { status: string | null; updated_at: string | null }[] | null;
+  motogo_scores?: { score: number | null }[] | null;
+}
+
+interface DriverScoreRow {
+  score: number | null;
+}
+
+interface DriverEarningRow {
+  price_kz: number | null;
+}
+
+interface DriverRatingRow {
+  score: number;
+  comment: string | null;
+  created_at: string;
 }
 
 const statusCls = (s: string) => {
@@ -72,7 +99,7 @@ const DriversList: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect })
       .eq('users.role', 'driver')
       .order('rating', { ascending: false });
 
-    const rows = (data ?? []).map((r: any) => ({
+    const rows = ((data ?? []) as DriverListRow[]).map(r => ({
       id:              r.user_id,
       name:            r.name,
       phone:           r.phone,
@@ -82,13 +109,18 @@ const DriversList: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect })
       status:          r.driver_locations?.[0]?.status ?? 'offline',
       last_seen:       r.driver_locations?.[0]?.updated_at ?? null,
       motogo_score:    r.motogo_scores?.[0]?.score ?? null,
-      suspended_until: r.users?.suspended_until ?? null,
+      suspended_until: r.users?.[0]?.suspended_until ?? null,
     }));
     setDrivers(rows);
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const filtered = drivers.filter(d => {
     const matchSearch = !search ||
@@ -134,7 +166,7 @@ const DriversList: React.FC<{ onSelect: (id: string) => void }> = ({ onSelect })
           <thead>
             <tr>
               <th>Motorista</th><th>Telefone</th><th>Estado</th>
-              <th>Rating</th><th>Corridas</th><th>MotoScore</th><th>Acções</th>
+              <th>Rating</th><th>Corridas</th><th>Zenith Score</th><th>Acções</th>
             </tr>
           </thead>
           <tbody>
@@ -234,15 +266,15 @@ const DriverProfile: React.FC<{ driverId: string; onBack: () => void }> = ({ dri
         supabase.from('driver_locations').select('status, updated_at').eq('driver_id', driverId).maybeSingle(),
         supabase.from('motogo_scores').select('score, score_label, rides_component, rating_component').eq('driver_id', driverId).maybeSingle(),
       ]);
-      const earnings30d = (earns ?? []).reduce((s: number, r: any) => s + (r.price_kz ?? 0), 0) * 0.85;
+      const earnings30d = ((earns ?? []) as DriverEarningRow[]).reduce((s, r) => s + (r.price_kz ?? 0), 0) * 0.85;
       setProfile({
         id: driverId, name: prof?.name ?? '—', phone: prof?.phone ?? null,
         email: '', rating: prof?.rating ?? 0, total_rides: prof?.total_rides ?? 0,
         level: prof?.level ?? 'Novato', status: dloc?.status ?? 'offline',
-        last_seen: dloc?.updated_at ?? null, motogo_score: (score as any)?.score ?? null,
+        last_seen: dloc?.updated_at ?? null, motogo_score: (score as DriverScoreRow | null)?.score ?? null,
         suspended_until: null, earnings_30d: earnings30d,
         recent_rides: (rides ?? []) as DriverProfile['recent_rides'],
-        ratings_received: (ratings ?? []).map((r: any) => ({
+        ratings_received: ((ratings ?? []) as DriverRatingRow[]).map(r => ({
           score: r.score, comment: r.comment, created_at: r.created_at, from_name: null,
         })),
       });
@@ -280,7 +312,7 @@ const DriverProfile: React.FC<{ driverId: string; onBack: () => void }> = ({ dri
           <div className="metric-card-value amber">★ {profile.rating.toFixed(2)}</div></div>
         <div className="metric-card"><div className="metric-card-label">Ganhos 30d (est.)</div>
           <div className="metric-card-value green">{Math.round(profile.earnings_30d).toLocaleString('pt-AO')} Kz</div></div>
-        <div className="metric-card"><div className="metric-card-label">MotoGo Score</div>
+        <div className="metric-card"><div className="metric-card-label">Zenith Score</div>
           <div className="metric-card-value">{profile.motogo_score ?? '—'}<span style={{ fontSize:'14px', color:'var(--text3)' }}>/1000</span></div></div>
       </div>
 
@@ -344,7 +376,7 @@ const DriverProfile: React.FC<{ driverId: string; onBack: () => void }> = ({ dri
             <Ban size={13} /> Suspender
           </button>
           <button className="btn btn-danger" style={{ marginTop:'18px' }}
-            onClick={async () => { await supabase.from('users').update({ role: 'banned' }).eq('id', driverId); setAction('Conta banida'); }}>
+            onClick={async () => { await supabase.from('users').update({ suspended_until: '2999-12-31T23:59:59.000Z' }).eq('id', driverId); setAction('Conta bloqueada por tempo indeterminado'); }}>
             ⛔ Banir Conta
           </button>
           <button className="btn btn-ghost" style={{ marginTop:'18px' }}
@@ -360,19 +392,36 @@ const DriverProfile: React.FC<{ driverId: string; onBack: () => void }> = ({ dri
 // ── Página Principal ──────────────────────────────────────────────────────────
 const DriversPage: React.FC = () => {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'list' | 'docs'>('list');
+
   return (
     <div className="fade-in">
-      {!selectedId && (
+      <div className="flex gap-12 items-center mb-16 border-b border-[var(--border)] pb-8">
+        <button className={`btn btn-sm ${tab === 'list' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('list')}>
+          <Users size={14} /> Directório Geral
+        </button>
+        <button className={`btn btn-sm ${tab === 'docs' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setTab('docs')}>
+          <ShieldAlert size={14} /> Documentos Pendentes
+        </button>
+      </div>
+
+      {tab === 'docs' ? (
+        <DriversDocs />
+      ) : (
         <>
-          <div className="page-header">
-            <h1 className="page-title">Gestão de Motoristas</h1>
-            <p className="page-sub">Ver, aprovar, suspender e banir motoristas</p>
-          </div>
-          <DriversList onSelect={setSelectedId} />
+          {!selectedId && (
+            <>
+              <div className="page-header">
+                <h1 className="page-title">Gestão de Motoristas</h1>
+                <p className="page-sub">Ver, aprovar, suspender e banir motoristas</p>
+              </div>
+              <DriversList onSelect={setSelectedId} />
+            </>
+          )}
+          {selectedId && (
+            <DriverProfile driverId={selectedId} onBack={() => setSelectedId(null)} />
+          )}
         </>
-      )}
-      {selectedId && (
-        <DriverProfile driverId={selectedId} onBack={() => setSelectedId(null)} />
       )}
     </div>
   );

@@ -4,7 +4,8 @@ import {
   XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
 import { useMetrics } from '../../hooks/useMetrics';
-import { Car, Users, TrendingUp, X, Activity, Zap } from 'lucide-react';
+import { Car, Users, TrendingUp, X, Activity, Zap, Radio } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
 // ── Formatador de moeda angolana ──────────────────────────────────────────────
 const fmtKz = (v: number) =>
@@ -85,6 +86,18 @@ const ZoneHeatMap: React.FC<{ zones: { zone: string; count: number }[] }> = ({ z
 // ── Dashboard Principal ───────────────────────────────────────────────────────
 const Dashboard: React.FC = () => {
   const { metrics, hourly, zones, loading, refresh } = useMetrics();
+  const [broadcastMsg, setBroadcastMsg] = React.useState('');
+
+  const sendBroadcast = async () => {
+    if (!broadcastMsg.trim()) return;
+    await supabase.channel('zenith_global').send({
+      type: 'broadcast',
+      event: 'admin_msg',
+      payload: { message: broadcastMsg.trim(), time: new Date().toISOString() }
+    });
+    alert('Mensagem enviada simultaneamente a todos os utilizadores (Passageiros e Motoristas) online!');
+    setBroadcastMsg('');
+  };
 
   if (loading) {
     return (
@@ -174,6 +187,35 @@ const Dashboard: React.FC = () => {
           badgeType={metrics.ridesActiveNow > 0 ? 'blue' : 'neutral'}
           icon={<Car size={16} />}
         />
+      </div>
+
+      {/* Broadcast System - Transmissão para App Principal */}
+      <div className="card" style={{ background: 'linear-gradient(145deg, var(--bg2), var(--bg3))', border: '1px solid var(--primary)' }}>
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-10 h-10 rounded-xl bg-primary/20 flex flex-col items-center justify-center text-primary">
+            <Radio size={20} />
+          </div>
+          <div>
+            <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '15px', fontWeight: 900 }}>Comunicação Global (Omni-Broadcast)</h3>
+            <p style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '2px' }}>A tua mensagem saltará instantaneamente no ecrã de todos os utilizadores online.</p>
+          </div>
+        </div>
+        <div className="flex gap-4 items-center">
+          <input
+            type="text"
+            value={broadcastMsg}
+            onChange={e => setBroadcastMsg(e.target.value)}
+            placeholder="Ex: Alerta de Trânsito pesado na Marginal..."
+            className="flex-1 bg-[var(--bg1)] border border-[var(--border1)] p-4 rounded-2xl outline-none focus:border-[var(--primary)] text-sm"
+          />
+          <button 
+            onClick={sendBroadcast}
+            disabled={!broadcastMsg.trim()}
+            className="bg-primary text-black py-4 px-8 rounded-2xl font-black text-[10px] uppercase tracking-widest disabled:opacity-50 hover:opacity-90 transition-opacity"
+          >
+            DISPARAR MENSAGEM
+          </button>
+        </div>
       </div>
 
       {/* Gráfico de corridas por hora */}

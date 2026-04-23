@@ -65,9 +65,11 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
     }
   }, [isOpen]);
 
-  // Pensamentos espontâneos — só quando há corrida activa e não está em modo silencioso
+  // Pensamentos espontâneos — SÓ quando corrida activa E painel aberto (economia de bateria/dados)
   useEffect(() => {
+    // FIX: Só faz chamadas API quando há corrida activa E o Kaze está aberto
     if (dataSaver || rideStatus === RideStatus.IDLE) return;
+    if (!isOpen) return; // Não gastar recursos com painel fechado
 
     const generate = async () => {
       try {
@@ -86,9 +88,9 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
     };
 
     const timer    = setTimeout(generate, 5000);
-    const interval = setInterval(generate, 90000);
+    const interval = setInterval(generate, 120000); // 2 min em vez de 90s — menos chamadas
     return () => { clearTimeout(timer); clearInterval(interval); };
-  }, [rideStatus, dataSaver, role, userName]);
+  }, [rideStatus, dataSaver, role, userName, isOpen]);
 
   // ------------------------------------------------------------------
   const handleSendText = async (e: React.FormEvent) => {
@@ -107,8 +109,8 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         // FIX: só marcar online se não há mensagem de erro no texto
         setKazeOnline(!result.text.startsWith('⚠️') && !result.text.startsWith('❌'));
       } else {
-        if (!chatRef.current) chatRef.current = geminiService.createKazeChat();
-        const response = await chatRef.current.sendMessage(userText);
+        if (!chatRef.current) chatRef.current = geminiService.createKazeChat({ rideStatus, role, mode });
+        const response = await chatRef.current.sendMessage(userText, { rideStatus, role, mode, time: new Date().toISOString() });
         // FIX: mostrar a mensagem real (que já inclui diagnóstico do geminiService)
         setMessages(prev => [...prev, { role: 'model', text: response.text }]);
         const isError = response.text.startsWith('⚠️') || response.text.startsWith('❌') || response.text.startsWith('🔒') || response.text.startsWith('⏱️');
@@ -294,15 +296,15 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
       {/* O Avatar / Gatilho integrado no centro do navbar */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-16 h-16 rounded-full overflow-hidden border-4 flex items-center justify-center shadow-[0_10px_40px_rgba(0,0,0,0.5)] transition-all pointer-events-auto active:scale-95 z-[601] ${
-          isOpen ? 'bg-primary border-primary scale-110 shadow-[0_20px_50px_rgba(37,99,235,0.7)]' : 'bg-[#0B0B0B] border-[#0A0A0A] hover:bg-surface-container-low hover:border-primary/50'
+        className={`w-12 h-12 rounded-full overflow-hidden border-2 flex items-center justify-center shadow-[0_10px_20px_rgba(0,0,0,0.5)] transition-all pointer-events-auto active:scale-95 z-[601] ${
+          isOpen ? 'bg-primary border-primary scale-110 shadow-[0_10px_30px_rgba(37,99,235,0.7)]' : 'bg-[#0B0B0B] border-[#0A0A0A] hover:bg-surface-container-low hover:border-primary/50'
         }`}
       >
         <div className="absolute inset-0 bg-gradient-to-t from-blue-900/40 to-transparent" />
         <img
           src={MASCOT_IMG}
           alt="Kaze Mascot"
-          className={`w-10 h-10 object-contain drop-shadow-md transition-all duration-500 relative z-10 ${isOpen || isThinking ? 'scale-110' : ''}`}
+          className={`w-8 h-8 object-contain drop-shadow-md transition-all duration-500 relative z-10 ${isOpen || isThinking ? 'scale-110' : ''}`}
         />
         {/* Glow indicator if alive */}
         {kazeOnline === true && (

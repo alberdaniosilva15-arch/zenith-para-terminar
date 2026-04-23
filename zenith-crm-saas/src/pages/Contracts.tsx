@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
-import { FileText, MapPin, Clock, Search, ExternalLink } from 'lucide-react';
+import { FileText, MapPin, Clock, ExternalLink } from 'lucide-react';
 
 interface ContractRow {
   id: string;
@@ -36,7 +36,10 @@ const ContractsPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    fetchContracts();
+    const timer = window.setTimeout(() => {
+      void fetchContracts();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [fetchContracts]);
 
   const getTypeLabel = (t: string) => {

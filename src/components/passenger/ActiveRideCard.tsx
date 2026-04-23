@@ -1,15 +1,27 @@
+// =============================================================================
+// ZENITH RIDE v3.6 — ActiveRideCard.tsx
+// FIX v3.6:
+//   - BUG 4 RESOLVIDO: Removido estado intermédio "aguardar confirmação"
+//     accept_ride_atomic agora define driver_confirmed=true atomicamente
+//   - ACCEPTED mostra sempre o motorista confirmado + chat + chamada
+//   - Safety Shield mantido em ACCEPTED e IN_PROGRESS
+// =============================================================================
+
 import React, { Suspense } from 'react';
 import { RideState, RideStatus } from '../../types';
 import RideChat from '../RideChat';
 import PanicButton from '../PanicButton';
+import { LiveShareButton } from './LiveShareButton';
 
 const AgoraCall = React.lazy(() => import('../AgoraCall'));
 
 interface ActiveRideCardProps {
-  ride: RideState;
-  userId: string;
-  routeInfo: { distanceKm: number; durationMin: number } | null;
-  onCancelRide: (reason: string) => void;
+  ride:            RideState;
+  userId:          string;
+  routeInfo:       { distanceKm: number; durationMin: number } | null;
+  onCancelRide:    (reason: string) => void;
+  emergencyPhone?: string;
+  driverName?:     string;
 }
 
 const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
@@ -17,18 +29,23 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
   userId,
   routeInfo,
   onCancelRide,
+  emergencyPhone,
 }) => {
   if (
     ride.status !== RideStatus.SEARCHING &&
-    ride.status !== RideStatus.ACCEPTED &&
+    ride.status !== RideStatus.ACCEPTED  &&
     ride.status !== RideStatus.IN_PROGRESS
   ) {
     return null;
   }
 
+  const resolvedDriverName = ride.driverName ?? 'Motorista';
+  const resolvedRideId     = ride.rideId     ?? '';
+
   return (
     <div className="space-y-4">
-      {/* SEARCHING */}
+
+      {/* ── SEARCHING ─────────────────────────────────────────────────────── */}
       {ride.status === RideStatus.SEARCHING && (
         <div className="bg-surface-container-low p-6 rounded-[2.5rem] shadow-2xl border border-outline-variant/20">
           <div className="flex flex-col items-center gap-4">
@@ -38,7 +55,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
             </div>
             <p className="font-black text-on-surface uppercase tracking-widest text-sm">À procura de motorista</p>
             <p className="text-[10px] text-on-surface-variant/70 font-bold text-center">
-              Nenhum motorista aceitou ainda. O pedido está activo e será notificado quando houver disponibilidade.
+              O pedido está activo e será notificado quando houver disponibilidade.
             </p>
             <button
               onClick={() => onCancelRide('Cancelado pelo passageiro')}
@@ -50,66 +67,68 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
         </div>
       )}
 
-      {/* ACCEPTED — aguardar confirmação */}
-      {ride.status === RideStatus.ACCEPTED && !ride.driverConfirmed && (
-        <div className="bg-surface-container-low p-6 rounded-[2.5rem] shadow-2xl border-2 border-primary/30">
-          <div className="flex flex-col items-center gap-3">
-            <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-            <p className="font-black text-on-surface text-sm">
-              A aguardar confirmação de {ride.driverName ?? 'motorista'}...
-            </p>
-            <p className="text-[9px] text-on-surface-variant/60 font-bold text-center">
-              O motorista foi notificado. A aguardar resposta.
-            </p>
-            <button
-              onClick={() => onCancelRide('Cancelado antes de confirmação')}
-              className="text-[10px] font-black text-red-500 uppercase hover:bg-red-500/10 px-6 py-2 rounded-full transition-all"
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ACCEPTED — motorista confirmado, a caminho */}
-      {ride.status === RideStatus.ACCEPTED && ride.driverConfirmed && (
+      {/* ── ACCEPTED — motorista confirmado e a caminho ─────────────────────── */}
+      {ride.status === RideStatus.ACCEPTED && (
         <div className="bg-surface-container-low border border-primary/20 p-6 rounded-[2.5rem] vault-shadow space-y-4">
+          {/* Header — motorista */}
           <div className="flex items-center gap-3 mb-2">
             <div className="w-12 h-12 golden-gradient rounded-2xl flex items-center justify-center text-2xl font-headline font-bold vault-shadow">
-              {(ride.driverName ?? 'M').charAt(0)}
+              {resolvedDriverName.charAt(0)}
             </div>
             <div>
-              <p className="font-black text-on-surface text-sm">{ride.driverName ?? 'Motorista'} a caminho</p>
+              <p className="font-black text-on-surface text-sm">{resolvedDriverName} a caminho</p>
               <p className="text-[10px] font-label text-primary/70 uppercase tracking-widest">Confirmado · Em rota</p>
             </div>
           </div>
+
+          {/* Barra de progresso */}
           <div className="vault-indicator-track">
             <div className="vault-indicator-fill w-1/3" />
           </div>
-          {ride.rideId && (
+
+          {/* 🛡️ SAFETY SHIELD — partilha ao vivo */}
+          {resolvedRideId && (
+            <div className="border-t border-outline-variant/10 pt-4">
+              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50 mb-2">🛡️ Safety Shield</p>
+              <LiveShareButton
+                rideId={resolvedRideId}
+                userId={userId}
+                driverName={resolvedDriverName}
+                emergencyPhone={emergencyPhone}
+                pickup={ride.pickup}
+                destination={ride.destination}
+              />
+            </div>
+          )}
+
+          {/* Chamada Agora */}
+          {resolvedRideId && (
             <Suspense fallback={<div className="text-white/50 text-xs p-2 text-center">A iniciar chamada...</div>}>
               <AgoraCall
-                corridaId={ride.rideId}
+                corridaId={resolvedRideId}
                 userId={userId}
-                peerName={ride.driverName ?? 'Motorista'}
+                peerName={resolvedDriverName}
                 onEndCall={() => {}}
               />
             </Suspense>
           )}
-          {ride.rideId && (
+
+          {/* Chat directo */}
+          {resolvedRideId && (
             <RideChat
-              rideId={ride.rideId}
+              rideId={resolvedRideId}
               myId={userId}
-              peerName={ride.driverName ?? 'Motorista'}
+              peerName={resolvedDriverName}
               phonePrivacyMode={true}
             />
           )}
         </div>
       )}
 
-      {/* IN_PROGRESS */}
+      {/* ── IN_PROGRESS — corrida em curso ────────────────────────────────── */}
       {ride.status === RideStatus.IN_PROGRESS && (
         <div className="bg-surface-container-lowest border border-primary/20 p-5 rounded-[2.5rem] vault-shadow space-y-4">
+          {/* Status */}
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 bg-primary rounded-full animate-pulse-gold" />
             <div>
@@ -122,25 +141,49 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
               )}
             </div>
           </div>
-          {ride.rideId && (
+
+          {/* 🛡️ SAFETY SHIELD — partilha + SOS */}
+          {resolvedRideId && (
+            <div className="border border-outline-variant/10 rounded-2xl p-4 space-y-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50">🛡️ Kaze Safety Shield</p>
+              <LiveShareButton
+                rideId={resolvedRideId}
+                userId={userId}
+                driverName={resolvedDriverName}
+                emergencyPhone={emergencyPhone}
+                pickup={ride.pickup}
+                destination={ride.destination}
+              />
+              <PanicButton
+                userId={userId}
+                rideId={resolvedRideId}
+                driverName={resolvedDriverName}
+                emergencyPhone={emergencyPhone}
+              />
+            </div>
+          )}
+
+          {/* Chamada Agora */}
+          {resolvedRideId && (
             <Suspense fallback={<div className="text-white/50 text-xs p-2 text-center">A iniciar chamada...</div>}>
               <AgoraCall
-                corridaId={ride.rideId}
+                corridaId={resolvedRideId}
                 userId={userId}
-                peerName={ride.driverName ?? 'Motorista'}
+                peerName={resolvedDriverName}
                 onEndCall={() => {}}
               />
             </Suspense>
           )}
-          {ride.rideId && (
+
+          {/* Chat directo */}
+          {resolvedRideId && (
             <RideChat
-              rideId={ride.rideId}
+              rideId={resolvedRideId}
               myId={userId}
-              peerName={ride.driverName ?? 'Motorista'}
+              peerName={resolvedDriverName}
               phonePrivacyMode={true}
             />
           )}
-          <PanicButton userId={userId} rideId={ride.rideId} />
         </div>
       )}
     </div>

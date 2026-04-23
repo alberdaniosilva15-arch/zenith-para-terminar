@@ -197,8 +197,12 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
       likes:     0,
     });
 
-    if (error) console.error('[RideTalk] Erro ao enviar:', error.message);
-    setNewMessage('');
+    if (error) {
+      console.error('[RideTalk] Erro ao enviar:', error.message);
+      alert('❌ Não foi possível enviar a mensagem. Verifica a tua ligação e tenta de novo.');
+    } else {
+      setNewMessage('');
+    }
     setSending(false);
   };
 

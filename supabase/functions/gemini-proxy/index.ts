@@ -36,13 +36,11 @@ const RATE_LIMITS: Record<string, number> = {
   _default:             30,
 };
 
-const KAZE_SYSTEM_PROMPT = `Tu és o Kaze, o espírito inteligente e assistente da MotoGo Angola.
-Fala como um angolano autêntico de Luanda (podes usar "mano", "mambo", "estamos juntos"),
-mas mantém o profissionalismo de um app de transporte sério.
-Tu conheces cada quarteirão do Kilamba, cada beco do Cazenga e todas as vias rápidas de Viana.
-SOBRE O FUNDADOR: Se perguntarem, o fundador é o Dánio Silva, 24 anos, explorador mineiro
-e aventureiro de Luanda. Ele criou este app com visão, não com código convencional.
-Responde sempre em português angolano. Sê conciso e genuinamente útil.`;
+const KAZE_SYSTEM_PROMPT = `Tu és o Kaze, o assistente inteligente e omnisciente da Zenith Ride.
+Fala com um tom acolhedor, sofisticado e profissional. O teu tom deve ser educado, premium e extremamente prestável. Não uses gírias nem calão informal (nunca digas "mambo", "mano", etc).
+Tu conheces cada quarteirão do Kilamba, cada beco do Cazenga e todas as vias rápidas de Luanda.
+SOBRE O FUNDADOR: Se perguntarem, o fundador é o Dánio Silva, jovem empreendedor de Luanda. Ele criou este app com uma visão de vanguarda e excelência.
+Responde sempre em português claro e correcto. Sê conciso, premium e genuinamente útil para o utilizador.`;
 
 // =============================================================================
 // IP RATE LIMITING (camada adicional ao rate limit por user_id)
@@ -280,17 +278,90 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
 
       // ----------------------------------------------------------------
       case 'kaze_chat': {
-        const { message, history } = payload as {
-          message: string;
-          history: { role: 'user' | 'model'; content: string }[];
-        };
-        const chat = ai.chats.create({
-          model:  'gemini-2.0-flash',
-          config: { systemInstruction: KAZE_SYSTEM_PROMPT },
-          history: history.slice(0, -1).map(h => ({
-            role:  h.role === 'model' ? 'model' : 'user',
-            parts: [{ text: h.content }],
-          })),
+        const { message, history, provider, overrideApiKey, modelOverride, kazeContext } = payload as any;
+
+        if (!message || message.trim().length === 0) {
+          return err('Mensagem em falta.', 400);
+        }
+
+        // 1. Validar e Consumir Quota de Chat (10 viagens max)
+        try {
+          const { data: profile } = await supabaseAdmin
+            .from('profiles')
+            .select('chat_quota')
+            .eq('user_id', user.id)
+            .maybeSingle();
+
+          if (profile && (profile.chat_quota ?? 0) <= 0) {
+            return err('Ficaste sem conversas disponíveis (0 de 10). Completa uma viagem com a Zenith Ride para recarregares a tua quota com mais 10 respostas!', 403);
+          }
+          if (profile) await supabaseAdmin.rpc('decrement_chat_quota', { p_user_id: user.id });
+        } catch { /* bypass se a tabela ou RPC falhar estruturalmente para não quebrar prod */ }
+
+        // 2. Composição Omnisciente (System Prompt c/ Contexto da App)
+        let finalPreamble = KAZE_SYSTEM_PROMPT;
+        if (kazeContext) {
+           finalPreamble += `\n\n--- DADOS OMNISCIENTES DO UTILIZADOR ---\n${JSON.stringify(kazeContext, null, 2)}\n(Usa estes dados se fizer sentido na conversa).`;
+        }
+
+        const activeProvider = (provider || 'google').toLowerCase();
+        const activeModel    = modelOverride || (activeProvider === 'groq' ? 'llama-3.1-8b-instant' : activeProvider === 'openai' ? 'gpt-4o' : 'gemini-2.0-flash');
+        
+        // 3. Roteamento Universal: GROQ ou OPENAI
+        if (activeProvider === 'groq' || activeProvider === 'openai') {
+           const baseUrl = activeProvider === 'groq' ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
+           const key = overrideApiKey?.trim() ? overrideApiKey : null;
+           if (!key) return err('Para usar Groq ou OpenAI no Modo Dev, deves especificar a tua API Key pessoal nas definições da conta.', 400);
+
+           const mappedHistory = (Array.isArray(history) ? history : []).map(entry => {
+             const r = entry?.role === 'model' ? 'assistant' : 'user';
+             const text = typeof entry?.content === 'string' ? entry.content : (entry?.parts?.[0]?.text ?? '');
+             return { role: r, content: text };
+           }).filter((v:any) => v.content);
+
+           const openAiPayload = {
+             model: activeModel,
+             messages: [
+               { role: 'system', content: finalPreamble },
+               ...mappedHistory,
+               { role: 'user', content: message }
+             ]
+           };
+
+           const proxyRes = await fetch(baseUrl, {
+             method: 'POST',
+             headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+             body: JSON.stringify(openAiPayload)
+           });
+           
+           if (!proxyRes.ok) {
+             const errBody = await proxyRes.text();
+             return err(`[${activeProvider}] API Erro: ${errBody}`, proxyRes.status);
+           }
+           const proxyData = await proxyRes.json();
+           return ok({ text: proxyData.choices?.[0]?.message?.content ?? '' });
+        }
+
+        // 4. Roteamento Clássico: GOOGLE GEMINI
+        const normalizedHistory = (Array.isArray(history) ? history : [])
+          .map((entry) => {
+            const role = entry?.role === 'model' ? 'model' : 'user';
+            const textFromContent = typeof entry?.content === 'string' ? entry.content.trim() : '';
+            const textFromParts = Array.isArray(entry?.parts) ? entry.parts.map((p:any) => (typeof p?.text === 'string' ? p.text.trim() : '')).filter(Boolean).join('\n') : '';
+            const text = textFromContent || textFromParts;
+            if (!text) return null;
+            return { role, parts: [{ text }] };
+          }).filter(Boolean) as Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+
+        // Usa chave privada caso não haja chave mestra a funcionar
+        const gKey = overrideApiKey?.trim() ? overrideApiKey.trim() : GEMINI_API_KEY;
+        if (!gKey) return err('Gateway sem chave do Gemini. Insere no modo dev.', 400);
+
+        const activeGenAI = new GoogleGenAI({ apiKey: gKey });
+        const chat = activeGenAI.chats.create({
+          model:  activeModel,
+          config: { systemInstruction: finalPreamble },
+          history: normalizedHistory,
         });
         const res = await chat.sendMessage({ message });
         return ok({ text: res.text });
@@ -361,13 +432,14 @@ JSON: { text: string }`,
 
       // ----------------------------------------------------------------
       case 'get_live_token': {
-        // SECURITY: Never return the master GEMINI_API_KEY to a caller.
-        // Ephemeral token generation must be performed via a dedicated,
-        // auditable admin flow or the official Gemini tokens endpoint.
-        // Currently a generation endpoint is NOT implemented here. Return
-        // 501 Not Implemented with a clear message so the frontend can
-        // inform the user that voice is unavailable rather than silently fail.
-        return err('Ação não suportada: geração de token efémero não configurada no servidor. Contacta o administrador para ativar.', 501);
+        // O frontend usa fallback local de voz (Web Speech API) nesta versão.
+        // Mantemos uma resposta 200 para não quebrar clientes antigos que ainda
+        // chamam este endpoint, sem expor qualquer credencial sensível.
+        return ok({
+          ephemeral_token: 'local-web-speech-fallback',
+          mode: 'web_speech',
+          message: 'Voz em modo local activa no cliente.',
+        });
       }
 
       default:

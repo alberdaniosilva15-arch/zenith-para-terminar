@@ -3,6 +3,7 @@ import React from 'react';
 interface RouteInfo {
   distanceKm: number;
   durationMin: number;
+  isReal: boolean;  // true = rota real por estrada (Directions API)
 }
 
 interface RoutePreviewProps {
@@ -11,6 +12,7 @@ interface RoutePreviewProps {
   pickupName: string;
   destName: string;
   routeInfo: RouteInfo | null;
+  routeLoading: boolean;
   zonePrice: number | null;
   zoneNames: { origin: string; dest: string } | null;
   onSelectPickup: () => void;
@@ -23,6 +25,7 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({
   pickupName,
   destName,
   routeInfo,
+  routeLoading,
   zonePrice,
   zoneNames,
   onSelectPickup,
@@ -54,15 +57,28 @@ const RoutePreview: React.FC<RoutePreviewProps> = ({
           </p>
         </div>
 
-        {/* Linha de distância */}
-        {routeInfo && (
-          <div className="flex items-center gap-2 pl-5">
-            <div className="w-px h-4 bg-outline-variant/40" />
-            <span className="text-[9px] font-bold text-primary/70 bg-primary/8 px-3 py-1 rounded-full">
-              📏 {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min de trajecto
+        {/* Linha de distância — com loading e badge real */}
+        <div className="flex items-center gap-2 pl-5">
+          <div className="w-px h-4 bg-outline-variant/40" />
+          {routeLoading ? (
+            <span className="text-[9px] font-bold text-on-surface-variant/50 bg-surface-container-lowest px-3 py-1 rounded-full flex items-center gap-2">
+              <span className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+              A calcular rota real...
             </span>
-          </div>
-        )}
+          ) : routeInfo ? (
+            <span className={`text-[9px] font-bold px-3 py-1 rounded-full ${
+              routeInfo.isReal
+                ? 'text-primary bg-primary/8'
+                : 'text-on-surface-variant/70 bg-surface-container-lowest'
+            }`}>
+              {routeInfo.isReal ? '🛣️' : '📏'} {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
+              {routeInfo.isReal
+                ? <span className="ml-1 text-primary/90 font-black">(rota real)</span>
+                : <span className="ml-1 opacity-50">(estimativa)</span>
+              }
+            </span>
+          ) : null}
+        </div>
 
         {/* Destination */}
         <div

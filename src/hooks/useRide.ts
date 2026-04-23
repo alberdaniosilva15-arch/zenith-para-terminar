@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { rideService } from '../services/rideService';
 import { mapService } from '../services/mapService';
+import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useAppStore, INITIAL_RIDE, INITIAL_AUCTION, INITIAL_POST_RIDE } from '../store/useAppStore';
 import type { RideState, DbRide, AppError, LatLng, AuctionDriver, AuctionState, PostRideState } from '../types';
@@ -23,7 +24,7 @@ interface UseRideReturn {
   startAuction:    (pickupCoords: LatLng) => Promise<void>;
   selectDriver:    (driver: AuctionDriver) => void;
   cancelAuction:   () => void;
-  requestRide:     (pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng) => Promise<void>;
+  requestRide:     (pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng, proposedPrice?: number) => Promise<void>;
   cancelRide:      (reason?: string) => Promise<void>;
   acceptRide:      (rideId: string) => Promise<void>;
   confirmRide:     (rideId: string) => Promise<void>;
@@ -145,7 +146,22 @@ export function useRide(): UseRideReturn {
     driverLocUnsub.current?.();
     driverLocUnsub.current = null;
 
-    unsubRef.current = rideService.subscribeToRide(rideId, (updated) => {
+    unsubRef.current = rideService.subscribeToRide(rideId, async (updated) => {
+      // BUG 2 FIX: quando motorista é atribuído, buscar o nome do perfil imediatamente
+      let resolvedDriverName: string | undefined;
+      if (updated.driver_id && !(updated as any).driver_name) {
+        try {
+          const { data: dp } = await supabase
+            .from('profiles')
+            .select('name')
+            .eq('user_id', updated.driver_id)
+            .single();
+          resolvedDriverName = dp?.name ?? undefined;
+        } catch { /* não crítico */ }
+      } else {
+        resolvedDriverName = (updated as any).driver_name ?? undefined;
+      }
+
       setRide({
         status:          updated.status as RideStatus,
         rideId:          updated.id,
@@ -157,6 +173,7 @@ export function useRide(): UseRideReturn {
         priceKz:         updated.price_kz,
         driverId:        updated.driver_id ?? undefined,
         driverConfirmed: updated.driver_confirmed,
+        ...(resolvedDriverName ? { driverName: resolvedDriverName } : {}),
       });
 
       // Subscrever localização do motorista quando ele for atribuído
@@ -209,7 +226,7 @@ export function useRide(): UseRideReturn {
 
   // ── requestRide ───────────────────────────────────────────────────────────
   const requestRide = useCallback(async (
-    pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng
+    pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng, proposedPrice?: number
   ) => {
     if (!dbUser?.id) { setError({ code: 'not_auth', message: 'Precisas de fazer login.' }); return; }
 
@@ -238,6 +255,7 @@ export function useRide(): UseRideReturn {
         dest_lat:           rDest.lat,
         dest_lng:           rDest.lng,
         selected_driver_id: auction.selectedDriver?.driver_id,
+        proposed_price:     proposedPrice,
       });
 
       if (e || !data) {

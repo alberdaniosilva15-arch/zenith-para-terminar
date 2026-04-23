@@ -67,7 +67,10 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
   // ── Efeito separado para atualizar posição sem recriar ──────
   useEffect(() => {
     if (!center) return;
-    MapSingleton.get()?.flyTo({ center, zoom: zoom ?? 14, pitch: pitch ?? 0, duration: 800 });
+    // Validar coordenadas antes de flyTo — NaN/undefined crasha o Mapbox
+    const [lng, lat] = center;
+    if (!Number.isFinite(lng) || !Number.isFinite(lat)) return;
+    MapSingleton.get()?.flyTo({ center: [lng, lat], zoom: zoom ?? 14, pitch: pitch ?? 0, duration: 800 });
   }, [center, zoom, pitch]);
 
   // ── Resize quando o container muda de tamanho ──────────────

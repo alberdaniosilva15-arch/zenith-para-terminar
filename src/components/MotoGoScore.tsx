@@ -92,7 +92,7 @@ const MotoGoScore: React.FC<MotoGoScoreProps> = ({ driverId }) => {
           🏆
         </div>
         <div>
-          <h3 className="font-black text-on-surface text-xl mb-2">MotoGo Score</h3>
+          <h3 className="font-black text-on-surface text-xl mb-2">Zenith Score</h3>
           <p className="text-outline text-sm leading-relaxed">
             O teu score de crédito baseado nas tuas corridas, avaliação e consistência. Bancos angolanos usam este score para aprovar crédito.
           </p>
@@ -130,7 +130,7 @@ const MotoGoScore: React.FC<MotoGoScoreProps> = ({ driverId }) => {
 
         <div className="flex justify-between items-start mb-6">
           <div>
-            <p className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">MotoGo Score</p>
+            <p className="text-[8px] font-black text-white/30 uppercase tracking-widest mb-1">Zenith Score</p>
             <p className="text-6xl font-black text-white tracking-tighter">{scoreData.score}</p>
             <p className="text-[9px] text-white/50 font-bold mt-1">de 1000 pontos</p>
           </div>
