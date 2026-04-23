@@ -12,6 +12,7 @@ const Map3D = React.lazy(() => import('./Map3D'));
 
 import AvailableRidesList from './AvailableRidesList';
 import DriverActiveCard from './DriverActiveCard';
+import { DriverDocumentsForm } from './DriverDocumentsForm';
 import { geminiService } from '../services/geminiService';
 import { rideService } from '../services/rideService';
 import { mapService } from '../services/mapService';
@@ -19,6 +20,9 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { RideState, DbRide } from '../types';
 import { RideStatus, UserRole } from '../types';
+import { useToastStore } from '../store/useAppStore';
+import { cellToLatLng } from 'h3-js';
+import { MapSingleton } from '../lib/mapInstance';
 
 interface DriverHomeProps {
   ride:            RideState;
@@ -53,6 +57,11 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   // Contagem de notificações pendentes não lidas
   const [pendingNotifCount, setPendingNotifCount] = useState(0);
 
+  const { showToast } = useToastStore();
+
+  // Ganhos acumulados hoje
+  const [todayEarnings, setTodayEarnings] = useState(0);
+
   const gpsRef    = useRef<(() => void) | null>(null);
   const unsubRef1 = useRef<(() => void) | null>(null); // subscribeToAvailableRides
   const unsubRef2 = useRef<(() => void) | null>(null); // subscribeToDriverAssignments
@@ -69,16 +78,123 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       totalRides: profile.total_rides,
       level: profile.level,
     }).then(s => setSimulation(s));
-  }, [profile]);
 
+    // Carregar ganhos de hoje
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    supabase
+      .from('rides')
+      .select('price_kz')
+      .eq('driver_id', driverId)
+      .eq('status', 'completed')
+      .gte('completed_at', today.toISOString())
+      .then(({ data }) => {
+        const total = (data ?? []).reduce((sum, r) => sum + (Number(r.price_kz) || 0), 0);
+        setTodayEarnings(total);
+      });
+  }, [profile, driverId]);
+
+  const [driverDocStatus, setDriverDocStatus] = useState<'approved' | 'pending' | 'rejected' | 'none'>('none');
+  const [showDocsForm, setShowDocsForm] = useState(false);
   const isOnlineRef = useRef(false);
+
+  // ── Heatmap (F5) ────────────────────────────────────────────────────────
+  const heatmapMarkersRef = useRef<any[]>([]);
+
+  const fetchAndDrawHeatmap = useCallback(async () => {
+    if (!isOnline) return;
+    const data = await rideService.getDemandHeatmap();
+    
+    // Limpar markers
+    heatmapMarkersRef.current.forEach(m => m.remove());
+    heatmapMarkersRef.current = [];
+
+    const map = MapSingleton.get();
+    if (!map) return;
+
+    data.forEach(item => {
+      // ratio demanda vs oferta
+      const ratio = item.supply_count === 0 ? item.demand_count : item.demand_count / item.supply_count;
+      if (ratio < 1.5 || item.demand_count === 0) return; // Só mostrar zonas ardentes
+
+      const [lat, lng] = cellToLatLng(item.h3_index);
+      const intensity = ratio > 3 ? 'bg-red-500' : 'bg-orange-500';
+      const mapboxgl = (window as any).mapboxgl;
+      if (!mapboxgl) return;
+
+      const el = document.createElement('div');
+      el.innerHTML = `
+        <div style="
+          width: 40px; height: 40px; border-radius: 50%;
+          background: ${ratio > 3 ? 'rgba(239,68,68,0.3)' : 'rgba(249,115,22,0.3)'};
+          border: 1px solid ${ratio > 3 ? 'rgba(239,68,68,0.8)' : 'rgba(249,115,22,0.8)'};
+          display: flex; align-items: center; justify-content: center;
+          animation: pulse 2s infinite;
+        ">
+          <span style="font-size: 8px; font-weight: bold; color: white;">🔥</span>
+        </div>
+      `;
+
+      const marker = new mapboxgl.Marker({ element: el })
+        .setLngLat([lng, lat])
+        .addTo(map);
+        
+      heatmapMarkersRef.current.push(marker);
+    });
+  }, [isOnline]);
+
+  useEffect(() => {
+    let interval: any;
+    if (isOnline) {
+      fetchAndDrawHeatmap();
+      interval = setInterval(fetchAndDrawHeatmap, 60000);
+    } else {
+      heatmapMarkersRef.current.forEach(m => m.remove());
+      heatmapMarkersRef.current = [];
+    }
+    return () => clearInterval(interval);
+  }, [isOnline, fetchAndDrawHeatmap]);
+
+  // ── Ler estado dos documentos ao iniciar ────────────────────────────────────
+  useEffect(() => {
+    if (!driverId) return;
+    const fetchStatus = async () => {
+      const { data } = await supabase.from('driver_documents').select('status').eq('driver_id', driverId).single();
+      setDriverDocStatus(data ? data.status as any : 'none');
+    };
+    fetchStatus();
+  }, [driverId]);
 
   // ── Ir online ────────────────────────────────────────────────────────────
   const goOnline = useCallback(async () => {
+    if (driverDocStatus !== 'approved') {
+      showToast('Precisas de submeter e aprovar os dados do teu Carro e BI primeiro.', 'error');
+      setShowDocsForm(true);
+      return;
+    }
+
+    // Tentar obter localização imediatamente para não falhar o UPSERT na base de dados
+    let coords: { lat: number; lng: number } | undefined;
+    try {
+      const { getCurrentPosition } = await import('../services/gpsService');
+      const pos = await getCurrentPosition();
+      coords = { lat: pos.lat, lng: pos.lng };
+    } catch {
+      coords = { lat: -8.8390, lng: 13.2343 }; // Fallback Luanda
+    }
+
+    const success = await rideService.setDriverStatus(driverId, 'available', coords);
+    if (!success) {
+      const { showToast } = await import('../store/useAppStore').then(m => m.useAppStore.getState());
+      showToast('Erro interno: O teu estado não pôde ser atualizado. Tenta novamente.', 'error');
+      isOnlineRef.current = false;
+      setIsOnline(false);
+      return;
+    }
+
     isOnlineRef.current = true;
     setIsOnline(true);
-    await rideService.setDriverStatus(driverId, 'available');
-  }, [driverId]);
+  }, [driverId, driverDocStatus]);
 
   const goOffline = useCallback(async () => {
     isOnlineRef.current = false;
@@ -98,42 +214,46 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         .is('read_at', null)
         .eq('type', 'new_ride')
         .order('created_at', { ascending: false })
-        .limit(1); // Mostrar apenas a mais recente
+        .limit(1);
 
       if (!notifs || notifs.length === 0) return;
 
       setPendingNotifCount(notifs.length);
       const latest = notifs[0];
       const payload = latest.payload as NotifPayload;
+      const rideId  = payload.ride_id ?? latest.ride_id;
 
-      // Converter payload em DbRide mínimo para mostrar popup
-      const fakeRide: Partial<DbRide> & { id: string } = {
-        id:             payload.ride_id ?? latest.ride_id,
-        origin_address: payload.origin_address ?? '—',
-        dest_address:   payload.dest_address   ?? '—',
-        price_kz:       payload.price_kz       ?? 0,
-        distance_km:    payload.distance_km    ?? null,
-        status:         RideStatus.SEARCHING,
-        driver_id:      null,
+      // BUG 5 FIX: buscar ride real da BD
+      let realRide: DbRide | null = null;
+      try {
+        const { data } = await supabase.from('rides').select('*').eq('id', rideId).single();
+        if (data) realRide = data as DbRide;
+      } catch { /* usar fallback */ }
+
+      const fallbackRide: DbRide = realRide ?? ({
+        id:               rideId,
+        origin_address:   payload.origin_address ?? '—',
+        dest_address:     payload.dest_address   ?? '—',
+        price_kz:         payload.price_kz       ?? 0,
+        distance_km:      payload.distance_km    ?? null,
+        status:           RideStatus.SEARCHING,
+        driver_id:        null,
         driver_confirmed: false,
-        passenger_id:   '',
+        passenger_id:     '',
         origin_lat: 0, origin_lng: 0,
         dest_lat: 0, dest_lng: 0,
         surge_multiplier: 1,
         created_at: latest.created_at ?? new Date().toISOString(),
         accepted_at: null, pickup_at: null, started_at: null,
         completed_at: null, cancelled_at: null, cancel_reason: null,
-      };
+      } as DbRide);
 
       setIncomingRide(prev => {
-        if (!prev) {
-          setIsAuctionRide(false);
-          return fakeRide as DbRide;
-        }
+        if (!prev) { setIsAuctionRide(false); return fallbackRide; }
         return prev;
       });
 
-      // Marcar como lida após mostrar
+      // Marcar como lida
       await supabase
         .from('driver_notifications')
         .update({ read_at: new Date().toISOString() })
@@ -170,43 +290,51 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         };
 
         if (notif.type !== 'new_ride') return;
-        console.log('[DriverHome] Nova notificação persistente recebida:', notif.ride_id);
 
-        // Criar fake ride para mostrar popup
+        // BUG 5 FIX: buscar o ride real da BD em vez de usar fakeRide com coords 0,0
+        const rideId = notif.payload?.ride_id ?? notif.ride_id;
+        let realRide: DbRide | null = null;
+
+        try {
+          const { data } = await supabase
+            .from('rides')
+            .select('*')
+            .eq('id', rideId)
+            .single();
+          if (data) realRide = data as DbRide;
+        } catch { /* usar fallback */ }
+
+        // Fallback mínimo se a BD não responder
         const np = notif.payload;
-        const fakeRide: Partial<DbRide> & { id: string } = {
-          id:             np.ride_id ?? notif.ride_id,
-          origin_address: np.origin_address ?? '—',
-          dest_address:   np.dest_address   ?? '—',
-          price_kz:       np.price_kz       ?? 0,
-          distance_km:    np.distance_km    ?? null,
-          status:         RideStatus.SEARCHING,
-          driver_id:      null,
+        const fallbackRide: DbRide = realRide ?? ({
+          id:               rideId,
+          origin_address:   np.origin_address ?? '—',
+          dest_address:     np.dest_address   ?? '—',
+          price_kz:         np.price_kz       ?? 0,
+          distance_km:      np.distance_km    ?? null,
+          status:           RideStatus.SEARCHING,
+          driver_id:        null,
           driver_confirmed: false,
-          passenger_id:   '',
+          passenger_id:     '',
           origin_lat: 0, origin_lng: 0,
           dest_lat: 0, dest_lng: 0,
           surge_multiplier: 1,
           created_at: notif.created_at ?? new Date().toISOString(),
           accepted_at: null, pickup_at: null, started_at: null,
           completed_at: null, cancelled_at: null, cancel_reason: null,
-        };
+        } as DbRide);
 
         setIncomingRide(prev => {
-          if (!prev) {
-            setIsAuctionRide(false);
-            return fakeRide as DbRide;
-          }
+          if (!prev) { setIsAuctionRide(false); return fallbackRide; }
           return prev;
         });
 
         setPendingNotifCount(c => c + 1);
 
-        // ✅ BUG #7 CORRIGIDO: setTimeout com cleanup e verificação de montagem
+        // Marcar como lida após 5 segundos
         const timer = setTimeout(async () => {
           timersRef.current.delete(notif.id);
           if (!mountedRef.current) return;
-
           try {
             await supabase
               .from('driver_notifications')
@@ -275,6 +403,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         });
       }
 
+      // 2. Subscreve a novas (SEM FILTRO H3 PARA DESENVOLVIMENTO)
       unsubRef1.current = rideService.subscribeToAvailableRides(
         (r) => {
           setAvailableRides(prev => [r, ...prev]);
@@ -286,7 +415,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         (id) => {
           setAvailableRides(prev => prev.filter(r => r.id !== id));
           setIncomingRide(prev => prev?.id === id ? null : prev);
-        }
+        },
+        [] // <-- Removido driverH3Cells aqui para que o motorista de teste receba TODAS as corridas
       );
 
       // Subscrição 2: passageiro escolheu-me directamente (leilão)
@@ -310,69 +440,102 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const handleConfirmAuction = async () => {
     if (!incomingRide) return;
     setActionLoading(true);
-    await onConfirmRide(incomingRide.id);
-    setIncomingRide(null); setActionLoading(false);
-    setPendingNotifCount(0);
+    try {
+      await onConfirmRide(incomingRide.id);
+    } finally {
+      setIncomingRide(null); setActionLoading(false);
+      setPendingNotifCount(0);
+    }
   };
 
   const handleDeclineAuction = async () => {
     if (!incomingRide) return;
     setActionLoading(true);
-    await onDeclineRide(incomingRide.id);
-    setIncomingRide(null); setActionLoading(false);
+    try {
+      await onDeclineRide(incomingRide.id);
+    } finally {
+      setIncomingRide(null); setActionLoading(false);
+    }
   };
 
   const handleAcceptSearching = async (rideId: string) => {
     setActionLoading(true);
-    await onAcceptRide(rideId);
-    setIncomingRide(null); setActionLoading(false);
-    setPendingNotifCount(0);
+    try {
+      await onAcceptRide(rideId);
+    } finally {
+      setIncomingRide(null); setActionLoading(false);
+      setPendingNotifCount(0);
+    }
   };
 
   return (
     <div className="p-4 space-y-5 bg-[#F8FAFC] min-h-screen pb-32">
 
-      {/* HUD ganhos + toggle online */}
-      <div className="bg-surface-container-low border border-outline-variant/20 p-6 rounded-[2.5rem] shadow-sm flex justify-between items-center">
-        <div>
-          <p className="text-[10px] font-black text-on-surface-variant/70 uppercase tracking-widest flex items-center gap-2">
-            <span className="w-1 h-1 bg-primary rounded-full" /> PREVISÃO DIÁRIA
-          </p>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-3xl font-black text-on-surface italic">
-              {simulation ? simulation.dailyEstimateKz.toLocaleString('pt-AO') : '—'}
-            </span>
-            <span className="text-[10px] font-black text-on-surface-variant/70 uppercase">Kz</span>
-          </div>
-          {simulation?.bestZones?.[0] && (
-            <p className="text-[8px] text-on-surface-variant/70 mt-1 font-bold">
-              Zona: {simulation.bestZones[0]}
+      {/* HUD ganhos + toggle online + rating */}
+      <div className="bg-surface-container-low border border-outline-variant/20 p-6 rounded-[2.5rem] shadow-sm space-y-4">
+        <div className="flex justify-between items-center">
+          <div>
+            <div className="flex items-center gap-3 mb-2">
+              {/* Rating badge */}
+              {profile && (
+                <div className="flex items-center gap-1 bg-yellow-500/10 px-2.5 py-1 rounded-full">
+                  <span className="text-sm">⭐</span>
+                  <span className="text-xs font-black text-yellow-600">{(profile.rating ?? 5.0).toFixed(1)}</span>
+                </div>
+              )}
+              {profile?.total_rides != null && (
+                <span className="text-[8px] font-black text-on-surface-variant/50 uppercase">
+                  {profile.total_rides} corridas
+                </span>
+              )}
+            </div>
+            <p className="text-[10px] font-black text-on-surface-variant/70 uppercase tracking-widest flex items-center gap-2">
+              <span className="w-1 h-1 bg-primary rounded-full" /> PREVISÃO DIÁRIA
             </p>
-          )}
+            <div className="flex items-baseline gap-1 mt-1">
+              <span className="text-3xl font-black text-on-surface italic">
+                {simulation ? simulation.dailyEstimateKz.toLocaleString('pt-AO') : '—'}
+              </span>
+              <span className="text-[10px] font-black text-on-surface-variant/70 uppercase">Kz</span>
+            </div>
+            {simulation?.bestZones?.[0] && (
+              <p className="text-[8px] text-on-surface-variant/70 mt-1 font-bold">
+                Zona: {simulation.bestZones[0]}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col items-end gap-2">
+            {/* Badge de notificações pendentes */}
+            {pendingNotifCount > 0 && !incomingRide && (
+              <span className="text-[8px] font-black bg-red-500 text-white px-2 py-0.5 rounded-full animate-pulse">
+                {pendingNotifCount} corrida{pendingNotifCount > 1 ? 's' : ''} pendente{pendingNotifCount > 1 ? 's' : ''}
+              </span>
+            )}
+            <button
+              onClick={isOnline ? goOffline : goOnline}
+              className={`px-8 py-4 rounded-3xl font-black text-[10px] uppercase flex items-center gap-3 active:scale-95 transition-all ${
+                isOnline
+                  ? 'bg-primary/100 text-white shadow-[0_15px_30px_rgba(34,197,94,0.3)]'
+                  : 'bg-[#0A0A0A] text-white shadow-xl'
+              }`}
+            >
+              <div className="relative">
+                <span className={`w-2.5 h-2.5 rounded-full bg-surface-container-low block ${isOnline ? 'animate-pulse' : ''}`} />
+                {isOnline && <span className="absolute inset-0 bg-surface-container-low rounded-full animate-ping opacity-50" />}
+              </div>
+              {isOnline ? 'ONLINE' : 'FICAR ONLINE'}
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-col items-end gap-2">
-          {/* Badge de notificações pendentes */}
-          {pendingNotifCount > 0 && !incomingRide && (
-            <span className="text-[8px] font-black bg-red-500 text-white px-2 py-0.5 rounded-full animate-pulse">
-              {pendingNotifCount} corrida{pendingNotifCount > 1 ? 's' : ''} pendente{pendingNotifCount > 1 ? 's' : ''}
-            </span>
-          )}
-          <button
-            onClick={isOnline ? goOffline : goOnline}
-            className={`px-8 py-4 rounded-3xl font-black text-[10px] uppercase flex items-center gap-3 active:scale-95 transition-all ${
-              isOnline
-                ? 'bg-primary/100 text-white shadow-[0_15px_30px_rgba(34,197,94,0.3)]'
-                : 'bg-[#0A0A0A] text-white shadow-xl'
-            }`}
-          >
-            <div className="relative">
-              <span className={`w-2.5 h-2.5 rounded-full bg-surface-container-low block ${isOnline ? 'animate-pulse' : ''}`} />
-              {isOnline && <span className="absolute inset-0 bg-surface-container-low rounded-full animate-ping opacity-50" />}
-            </div>
-            {isOnline ? 'ONLINE' : 'FICAR ONLINE'}
-          </button>
-        </div>
+        {/* Ganhos hoje */}
+        {todayEarnings > 0 && (
+          <div className="bg-green-500/8 border border-green-500/20 rounded-xl p-3 flex justify-between items-center">
+            <span className="text-[9px] font-black text-green-600 uppercase tracking-widest">💰 Ganhos Hoje</span>
+            <span className="text-sm font-black text-green-600">{todayEarnings.toLocaleString('pt-AO')} Kz</span>
+          </div>
+        )}
       </div>
 
       {/* Mapa */}
@@ -386,8 +549,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         <div className="absolute top-6 right-6 bg-surface-container-low/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-outline-variant/20 flex items-center gap-3">
           <div className="w-10 h-10 bg-primary/8 rounded-xl flex items-center justify-center text-xl">⛽</div>
           <div>
-            <p className="text-[8px] font-black text-on-surface-variant/70 uppercase">Média Luanda</p>
-            <p className="text-xs font-black text-on-surface">300 Kz/L</p>
+            <p className="text-[8px] font-black text-on-surface-variant/70 uppercase">Gasolina Luanda</p>
+            <p className="text-xs font-black text-on-surface">300-350 Kz/L</p>
           </div>
         </div>
         <div className="absolute bottom-6 left-6 bg-[#0A0A0A]/90 backdrop-blur-xl border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3">
@@ -435,6 +598,17 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       )}
 
       {isOnline && <RideTalk zone="Motoristas" role={UserRole.DRIVER} />}
+
+      {showDocsForm && (
+        <DriverDocumentsForm 
+          driverId={driverId} 
+          onClose={() => setShowDocsForm(false)} 
+          onSuccess={(status) => {
+            setDriverDocStatus(status as any);
+            setShowDocsForm(false);
+          }} 
+        />
+      )}
     </div>
   );
 };

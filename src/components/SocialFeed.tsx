@@ -1,20 +1,29 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — SocialFeed.tsx
-// FIXES:
-//   1. Query posts: SELECT simples sem join FK problemático — batch fetch de perfis
-//   2. increment_post_likes substituído por UPDATE directo (evita 404)
-//   3. Realtime: .on() ANTES de .subscribe()
-//   4. Posts com userRole real a partir do join a users
+// ZENITH RIDE v3.3 — SocialFeed.tsx
+// FEATURES v3.3:
+//   1. Mensagens auto-destrutivas: default 24h, opção 1h/6h/12h/24h
+//   2. Campo expires_at inserido no BD — cron job apaga no servidor
+//   3. Filtro frontend (defesa em profundidade)
+//   4. Tempo restante mostrado em cada post
+//   5. Posts expirados removidos do state a cada 60s
 // =============================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Post } from '../types';
 import { UserRole } from '../types';
-import { MessageSquare, Heart, Share2, Send, MapPin, ShieldCheck } from 'lucide-react';
+import { MessageSquare, Heart, Share2, Send, MapPin, ShieldCheck, Clock, Trash2 } from 'lucide-react';
 
 const ZONES = ['Geral', 'Viana', 'Kilamba', 'Talatona', 'Cazenga', 'Maianga', 'Zango'];
+
+// Opções de temporizador auto-destrutivo
+const TIMER_OPTIONS = [
+  { label: '1h',  value: 1,  ms: 1 * 60 * 60 * 1000 },
+  { label: '6h',  value: 6,  ms: 6 * 60 * 60 * 1000 },
+  { label: '12h', value: 12, ms: 12 * 60 * 60 * 1000 },
+  { label: '24h', value: 24, ms: 24 * 60 * 60 * 1000 },
+];
 
 const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }> = ({
   userId, userName, role,
@@ -27,6 +36,26 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
   const [loading,  setLoading]  = useState(true);
   const [posting,  setPosting]  = useState(false);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
+  const [timerHours, setTimerHours] = useState(24); // default 24h
+  const [showTimerPicker, setShowTimerPicker] = useState(false);
+  const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Filtrar posts expirados no frontend ─────────────────────────────────────
+  const filterExpired = (postList: Post[]): Post[] => {
+    const now = Date.now();
+    return postList.filter(p => {
+      if (!p.expiresAt) return true; // sem expiração = visível
+      return p.expiresAt > now;
+    });
+  };
+
+  // ── Tick automático: remover posts expirados a cada 30s ──────────────────────
+  useEffect(() => {
+    tickRef.current = setInterval(() => {
+      setPosts(prev => filterExpired(prev));
+    }, 30_000);
+    return () => { if (tickRef.current) clearInterval(tickRef.current); };
+  }, []);
 
   // ── Carregar posts ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -35,10 +64,11 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     const load = async () => {
       setLoading(true);
 
-      // FIX: SELECT simples sem FK dinâmica para evitar 400
+      // Carregar posts activos (com expires_at no futuro ou null)
       const { data, error } = await supabase
         .from('posts')
-        .select('id, user_id, content, post_type, location, likes, created_at')
+        .select('id, user_id, content, post_type, location, likes, created_at, expires_at')
+        .or('expires_at.is.null,expires_at.gt.' + new Date().toISOString())
         .order('created_at', { ascending: false })
         .limit(30);
 
@@ -69,7 +99,7 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
 
       if (mounted) {
         setPosts(
-          data.map((p: any) => ({
+          filterExpired(data.map((p: any) => ({
             id:        p.id,
             userId:    p.user_id,
             userName:  profileMap[p.user_id]?.name ?? 'Utilizador',
@@ -80,7 +110,8 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
             likes:     p.likes ?? 0,
             comments:  0,
             timestamp: new Date(p.created_at).getTime(),
-          }))
+            expiresAt: p.expires_at ? new Date(p.expires_at).getTime() : null,
+          })))
         );
         setLoading(false);
       }
@@ -111,6 +142,7 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
           likes:     0,
           comments:  0,
           timestamp: new Date(n.created_at).getTime(),
+          expiresAt: n.expires_at ? new Date(n.expires_at).getTime() : null,
         };
         setPosts(prev => [newPost, ...prev].slice(0, 50));
       })
@@ -118,6 +150,11 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
         if (!mounted) return;
         const u = payload.new as any;
         setPosts(prev => prev.map(p => p.id === u.id ? { ...p, likes: u.likes ?? p.likes } : p));
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'posts' }, (payload) => {
+        if (!mounted) return;
+        const d = payload.old as any;
+        setPosts(prev => prev.filter(p => p.id !== d.id));
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR') {
@@ -136,17 +173,36 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     if (!newPost.trim() || posting) return;
     setPosting(true);
 
+    // Calcular expiração
+    const expiresAt = new Date(Date.now() + timerHours * 60 * 60 * 1000).toISOString();
+
     const { error } = await supabase.from('posts').insert({
-      user_id:   userId,
-      content:   newPost.trim(),
-      post_type: postType,
-      location:  zone !== 'Geral' ? zone : null,
-      likes:     0,
+      user_id:    userId,
+      content:    newPost.trim(),
+      post_type:  postType,
+      location:   zone !== 'Geral' ? zone : null,
+      likes:      0,
+      expires_at: expiresAt,
     });
 
-    if (error) console.error('[SocialFeed] Erro ao publicar:', error.message);
-    setNewPost('');
+    if (error) {
+      console.error('[SocialFeed] Erro ao publicar:', error.message);
+      alert('❌ Não foi possível publicar. Verifica a tua ligação e tenta de novo.');
+    } else {
+      setNewPost('');
+    }
     setPosting(false);
+  };
+
+  // ── Apagar post manualmente ──────────────────────────────────────────────────
+  const handleDelete = async (postId: string, postUserId: string) => {
+    if (postUserId !== userId) return;
+    if (!confirm('Tens a certeza que queres apagar este post?')) return;
+    
+    const { error } = await supabase.from('posts').delete().eq('id', postId);
+    if (!error) {
+      setPosts(prev => prev.filter(p => p.id !== postId));
+    }
   };
 
   // FIX: UPDATE directo em vez de RPC inexistente
@@ -172,6 +228,16 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     return `${Math.floor(diff / 1440)}d atrás`;
   };
 
+  const timeRemaining = (expiresAt: number | null | undefined) => {
+    if (!expiresAt) return null;
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) return 'expirado';
+    const hours = Math.floor(remaining / 3600000);
+    const mins  = Math.floor((remaining % 3600000) / 60000);
+    if (hours > 0) return `${hours}h ${mins}m restantes`;
+    return `${mins}m restantes`;
+  };
+
   return (
     <div className="flex flex-col bg-surface-container-lowest pb-24 min-h-screen">
 
@@ -181,7 +247,7 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
           <ShieldCheck className="w-5 h-5 text-primary" />
           Comunidade Zenith
         </h2>
-        <p className="text-xs text-outline font-bold">Alertas e status em tempo real de Luanda</p>
+        <p className="text-xs text-outline font-bold">Alertas e status em tempo real de Luanda · Mensagens auto-destrutivas</p>
       </div>
 
       {/* Criar post */}
@@ -234,11 +300,43 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
               maxLength={280}
             />
             <div className="flex justify-between items-center mt-2">
-              <div className="flex items-center gap-1 text-xs text-on-surface-variant/70">
-                <MapPin className="w-3 h-3" />
-                <span className="font-bold">{zone}</span>
-                <span className="text-on-surface-variant/40">· {newPost.length}/280</span>
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1 text-xs text-on-surface-variant/70">
+                  <MapPin className="w-3 h-3" />
+                  <span className="font-bold">{zone}</span>
+                  <span className="text-on-surface-variant/40">· {newPost.length}/280</span>
+                </div>
+
+                {/* Temporizador auto-destrutivo */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowTimerPicker(!showTimerPicker)}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-container-lowest border border-outline-variant/20 text-[9px] font-black text-on-surface-variant/70 hover:border-primary/50 transition-all"
+                  >
+                    <Clock className="w-3 h-3" />
+                    <span>⏱️ {timerHours}h</span>
+                  </button>
+                  
+                  {showTimerPicker && (
+                    <div className="absolute bottom-full left-0 mb-2 bg-surface-container-highest border border-outline-variant/30 rounded-xl shadow-2xl p-2 z-20 flex gap-1 animate-in slide-in-from-bottom-5 duration-200">
+                      {TIMER_OPTIONS.map(opt => (
+                        <button
+                          key={opt.value}
+                          onClick={() => { setTimerHours(opt.value); setShowTimerPicker(false); }}
+                          className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${
+                            timerHours === opt.value
+                              ? 'bg-primary text-white'
+                              : 'text-on-surface-variant/70 hover:bg-surface-container-low'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
+
               <button
                 onClick={handlePost}
                 disabled={posting || !newPost.trim()}
@@ -295,7 +393,19 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
                   </div>
                 </div>
 
-                <div className="shrink-0">
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Tempo restante */}
+                  {post.expiresAt && (
+                    <span className={`text-[8px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                      (post.expiresAt - Date.now()) < 3600000
+                        ? 'bg-red-500/15 text-red-400 animate-pulse'
+                        : 'bg-surface-container text-on-surface-variant/50'
+                    }`}>
+                      <Clock className="w-2.5 h-2.5" />
+                      {timeRemaining(post.expiresAt)}
+                    </span>
+                  )}
+
                   {post.type === 'alert' && (
                     <span className="text-[9px] bg-red-100 text-red-600 px-2 py-1 rounded-full font-black uppercase animate-pulse">
                       🚨 Alerta
@@ -330,6 +440,18 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
                   <MessageSquare className="w-4 h-4" />
                   <span className="text-xs font-bold">{post.comments}</span>
                 </button>
+                
+                {/* Botão apagar (só para o autor) */}
+                {post.userId === userId && (
+                  <button 
+                    onClick={() => handleDelete(post.id, post.userId)}
+                    className="flex items-center gap-1.5 text-on-surface-variant/70 hover:text-red-500 transition-colors"
+                    title="Apagar mensagem"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+
                 <button className="flex items-center gap-1.5 text-on-surface-variant/70 hover:text-on-surface-variant transition-colors ml-auto">
                   <Share2 className="w-4 h-4" />
                 </button>

@@ -1,4 +1,5 @@
 import React, { Suspense } from 'react';
+import RideChat from './RideChat';
 
 const AgoraCall = React.lazy(() => import('./AgoraCall'));
 import type { RideState } from '../types';
@@ -14,8 +15,9 @@ const DriverActiveCard: React.FC<DriverActiveCardProps> = ({ ride, driverId, onA
   if (!ride.rideId) return null;
 
   const nextActionMap: Record<string, { label: string; next: RideStatus }> = {
-    [RideStatus.PICKING_UP]:  { label: 'CHEGUEI AO CLIENTE',  next: RideStatus.IN_PROGRESS },
-    [RideStatus.IN_PROGRESS]: { label: 'CONCLUIR CORRIDA',    next: RideStatus.COMPLETED },
+    [RideStatus.ACCEPTED]:    { label: 'INICIAR ROTA / A CAMINHO', next: RideStatus.PICKING_UP },
+    [RideStatus.PICKING_UP]:  { label: 'CHEGUEI AO CLIENTE',       next: RideStatus.IN_PROGRESS },
+    [RideStatus.IN_PROGRESS]: { label: 'CONCLUIR CORRIDA',         next: RideStatus.COMPLETED },
   };
   const currentAction = ride.status ? nextActionMap[ride.status] : null;
 
@@ -43,6 +45,14 @@ const DriverActiveCard: React.FC<DriverActiveCardProps> = ({ ride, driverId, onA
           onEndCall={() => {}}
         />
       </Suspense>
+
+      {/* Chat directo com o passageiro */}
+      <RideChat
+        rideId={ride.rideId}
+        myId={driverId}
+        peerName={ride.passengerName ?? 'Passageiro'}
+        phonePrivacyMode={true}
+      />
 
       <button
         onClick={() => onAdvanceStatus(currentAction.next)}

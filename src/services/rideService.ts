@@ -81,6 +81,7 @@ interface CreateRideInput {
   dest_lat:            number;
   dest_lng:            number;
   selected_driver_id?: string;
+  proposed_price?:     number;
   vehicle_type?:       'standard' | 'moto' | 'comfort' | 'xl';
   traffic_factor?:     number;
 }
@@ -309,7 +310,10 @@ class RideService {
         };
       }).sort((a, b) => a.distance_m - b.distance_m);
 
-    } catch { return []; }
+    } catch (err) {
+      console.warn('[rideService._fallbackFindDrivers] Falha total no fallback:', err);
+      return [];
+    }
   }
 
   // ── createRide ─────────────────────────────────────────────────────────────
@@ -344,7 +348,7 @@ class RideService {
         distance_km:      estimate.distance_km,
         duration_min:     estimate.duration_min,
         surge_multiplier: estimate.surge_multiplier,
-        price_kz:         estimate.price_kz,
+        price_kz:         input.proposed_price ?? estimate.price_kz,
         driver_id:        input.selected_driver_id ?? null,
         status:           isAuction ? RideStatus.ACCEPTED : RideStatus.SEARCHING,
         accepted_at:      isAuction ? new Date().toISOString() : null,
@@ -435,7 +439,10 @@ class RideService {
         p_driver_id: driverId,
       });
 
-      if (error) return { data: null, error: { code: error.code, message: 'Erro ao aceitar corrida.' } };
+      if (error) {
+        console.error(`[SUPER DEBUG SUPABASE] Erro RPC: ${error.message} (Code: ${error.code})`);
+        return { data: null, error: { code: error.code, message: `Erro DB: ${error.message}` } };
+      }
 
       if (!data || !data.success) {
         const reason = data?.reason ?? 'unknown';
@@ -449,10 +456,23 @@ class RideService {
         return { data: null, error: { code: reason, message: messages[reason] ?? 'Não foi possível aceitar a corrida' } };
       }
 
-      const { data: rideData, error: rideError } = await supabase.from('rides')
-        .select('*').eq('id', rideId).eq('status', RideStatus.ACCEPTED).single();
+      // CORRIDA ACEITE ATOMICAMENTE! Agora atualizar no frontend.
+      let rideData: any = null;
+      let rideError: any = null;
+      // Retentar a leitura da corrida até 3 vezes (delay para eventuais réplicas)
+      for (let i = 0; i < 3; i++) {
+        const res = await supabase.from('rides')
+          .select('*').eq('id', rideId).eq('status', RideStatus.ACCEPTED).single();
+        if (!res.error && res.data) {
+          rideData = res.data;
+          rideError = null;
+          break;
+        }
+        rideError = res.error;
+        await new Promise(r => setTimeout(r, 500));
+      }
 
-      if (rideError) return { data: null, error: { code: rideError.code, message: 'Corrida aceite, mas erro ao ler dados.' } };
+      if (rideError || !rideData) return { data: null, error: { code: rideError?.code || 'read_fail', message: 'Corrida aceite, mas erro ao ler dados.' } };
       return { data: rideData as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.acceptRide] Excepção:', err);
@@ -493,6 +513,9 @@ class RideService {
         if (status === RideStatus.COMPLETED && updated?.passenger_id) {
           const distKm = (updated as unknown as { route_distance_km?: number }).route_distance_km ?? updated.distance_km ?? 0;
           if (distKm > 0) this._updateKmPerk(updated.passenger_id, distKm).catch(console.error);
+          
+          // Recarregar os 10 créditos do Kaze
+          try { await supabase.rpc('recharge_chat_quota', { p_user_id: updated.passenger_id, amount: 10 }); } catch (e) { console.error('[recharge_chat_quota]', e); }
         }
       }
 
@@ -537,12 +560,15 @@ class RideService {
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
         return { code: 'invalid_user', message: 'ID malformado' };
       }
-      const { error: updateErr } = await supabase.from('rides')
+      const { data: updateData, error: updateErr } = await supabase.from('rides')
         .update({ status: RideStatus.CANCELLED, cancelled_at: new Date().toISOString(), cancel_reason: reason ?? 'Cancelado' })
         .eq('id', rideId)
         .or(`passenger_id.eq.${userId},driver_id.eq.${userId}`)
-        .not('status', 'in', `(${RideStatus.COMPLETED},${RideStatus.CANCELLED})`);
-      if (updateErr) return { code: updateErr.code, message: 'Não foi possível cancelar a corrida.' };
+        .not('status', 'in', `(${RideStatus.COMPLETED},${RideStatus.CANCELLED})`)
+        .select()
+        .single();
+        
+      if (updateErr || !updateData) return { code: updateErr?.code ?? 'unknown', message: 'A corrida já foi aceite ou cancelada.' };
       return null;
     } catch (err) {
       console.error('[rideService.cancelRide] Excepção:', err);
@@ -595,6 +621,27 @@ class RideService {
       if (error) { console.error('[rideService.getRideHistory]', error); return { rides: [], total: 0 }; }
       return { rides: (data ?? []) as DbRide[], total: count ?? 0 };
     } catch { return { rides: [], total: 0 }; }
+  }
+
+  // ── getDemandHeatmap ───────────────────────────────────────────────────────
+  async getDemandHeatmap(): Promise<{ h3_index: string; demand_count: number; supply_count: number }[]> {
+    try {
+      const windowStart = new Date();
+      windowStart.setMinutes(0, 0, 0); // Truncate to hour
+      const { data, error } = await supabase
+        .from('demand_heatmap')
+        .select('h3_index, demand_count, supply_count')
+        .gte('window_start', windowStart.toISOString());
+      
+      if (error) {
+        console.error('[rideService.getDemandHeatmap]', error);
+        return [];
+      }
+      return data || [];
+    } catch (err) {
+      console.error('[rideService.getDemandHeatmap] Excepção:', err);
+      return [];
+    }
   }
 
   // =========================================================================
@@ -771,7 +818,7 @@ class RideService {
     driverId: string,
     status: 'available' | 'offline' | 'busy' | 'on_trip',
     coords?: { lat: number; lng: number }
-  ): Promise<void> {
+  ): Promise<boolean> {
     const updateData: Record<string, unknown> = {
       driver_id: driverId, status, updated_at: new Date().toISOString(),
     };
@@ -781,7 +828,11 @@ class RideService {
       updateData.h3_index_res7 = latLngToCell(coords.lat, coords.lng, H3_RES_ZONE);
     }
     const { error } = await supabase.from('driver_locations').upsert(updateData, { onConflict: 'driver_id' });
-    if (error) console.error('[rideService.setDriverStatus]', error);
+    if (error) {
+      console.error('[rideService.setDriverStatus]', error);
+      return false;
+    }
+    return true;
   }
 
   // ── findNearbyDrivers (mantida para compatibilidade) ───────────────────────

@@ -1,5 +1,17 @@
 # Zenith Ride — Plano de Correcções Production-Ready
 
+## ✅ CORRIGIDO (20 Abril 2026)
+
+| # | Problema | Ficheiro | Solução |
+|---|---------|---------|---------|
+| 1 | `Profile.tsx` não retornava JSX (TS2322) | `Profile.tsx:24` | Adicionado return com JSX completo |
+| 2 | `Wallet.tsx` usava `profile` não declarado | `Wallet.tsx:27` | Adicionado `profile` do `useAuth()` |
+| 3 | `ContractType` desactualizado vs PDF service | `types.ts:118` | Adicionado `family` e `corporate` |
+
+**Verificação:** `npx tsc --noEmit` compila sem erros ✅
+
+---
+
 ## O que vai ser corrigido
 
 Análise completa do código real revelou **10 problemas** — alguns já existem parcialmente, outros precisam ser criados do zero.

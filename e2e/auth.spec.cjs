@@ -3,36 +3,44 @@ const fs = require('fs');
 
 function randomEmail() {
   const t = Date.now();
-  return `test+${t}@example.com`;
+  return `zenith.e2e+${t}@gmail.com`;
 }
 
-test('signup then signin flow', async ({ page }) => {
+test('auth screens expose passenger, driver and recovery flows', async ({ page }) => {
   const logs = [];
   page.on('console', msg => logs.push(`${msg.type()}: ${msg.text()}`));
   page.on('response', res => logs.push(`RESPONSE ${res.status()} ${res.url()}`));
 
-  await page.goto('http://localhost:5173/');
-  await page.waitForLoadState('networkidle');
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: /Zenith/i })).toBeVisible();
 
-  // Click "Criar conta" toggle
-  await page.click('text=Criar conta');
-  await page.waitForSelector('text=Nome completo');
+  await page.getByRole('button', { name: /Criar conta/i }).click();
+  await expect(page.getByText(/Nome completo/i)).toBeVisible();
+  await expect(page.getByText(/Os passageiros usam link mágico/i)).toBeVisible();
 
   const email = randomEmail();
-  const password = 'Password123!';
   const name = 'E2E Test User';
 
-  // Preencher nome e email
-  await page.fill('input[placeholder="Mário Bento"]', name);
-  await page.fill('input[placeholder="exemplo@gmail.com"]', email);
+  await page.locator('input[type="text"]').first().fill(name);
+  await page.locator('input[type="email"]').first().fill(email);
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
 
-  // Usar fluxo Passageiro (link mágico) para tornar o teste determinístico.
-  await page.click('text=CRIAR CONTA');
-  // Esperar por mensagem de sucesso 'Link mágico' ou similar
-  await page.waitForTimeout(2000);
+  await page.getByRole('button', { name: /Motorista/i }).click();
+  await expect(page.locator('input[type="password"]')).toBeVisible();
+  await expect(page.getByText(/Google como alternativa/i)).toBeVisible();
+
+  await page.getByRole('button', { name: /Entrar/i }).click();
+  await page.getByRole('button', { name: /MOTORISTA/i }).click();
+  await expect(page.locator('input[type="password"]')).toBeVisible();
+  await expect(page.locator('button').filter({ hasText: /^ENTRAR$/ })).toBeVisible();
+
+  await page.getByRole('button', { name: /Esqueci-me da Palavra-Passe/i }).click();
+  await expect(page.getByText(/link seguro para redefinir/i)).toBeVisible();
+  await expect(page.getByRole('button', { name: /ENVIAR RECUPERACAO/i })).toBeVisible();
+
+  await page.locator('input[type="email"]').first().fill(email);
+
   fs.mkdirSync('e2e-screenshots', { recursive: true });
-  await page.screenshot({ path: 'e2e-screenshots/signup-passenger.png', fullPage: true });
-  fs.writeFileSync('e2e-screenshots/signup-passenger-console.log', logs.join('\n'));
-  const magicCount = await page.locator('text=Link mágico').count();
-  expect(magicCount).toBeGreaterThan(0);
+  await page.screenshot({ path: 'e2e-screenshots/auth-flows.png', fullPage: true });
+  fs.writeFileSync('e2e-screenshots/auth-flows-console.log', logs.join('\n'));
 });

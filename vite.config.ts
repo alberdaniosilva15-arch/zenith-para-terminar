@@ -18,7 +18,8 @@ export default defineConfig({
   },
   build: {
     sourcemap: 'hidden', // gera source maps para debugging sem expor código no browser
-    chunkSizeWarningLimit: 600,
+    cssCodeSplit: true,   // CSS dividido por chunk — carrega apenas o CSS necessário
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
       output: {
         manualChunks: {
@@ -28,6 +29,7 @@ export default defineConfig({
           zustand:  ['zustand'],
           h3:       ['h3-js'],
           supabase: ['@supabase/supabase-js'],
+          icons:    ['lucide-react'],
         },
       },
     },

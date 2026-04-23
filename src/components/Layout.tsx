@@ -44,14 +44,13 @@ const Layout: React.FC<LayoutProps> = ({
   userName, userRating,
 }) => {
   const isDriver = role === UserRole.DRIVER;
-  const isAdmin = role === UserRole.ADMIN;
   
   const location = useLocation();
   const navigate = useNavigate();
 
-  const tabs: TabType[] = isAdmin
-    ? ['home', 'social', 'contrato', 'rides', 'wallet', 'profile']
-    : isDriver
+  // v3.2: No app principal, role é sempre PASSENGER ou DRIVER.
+  // Acesso admin é exclusivo do zenith-crm-saas.
+  const tabs: TabType[] = isDriver
     ? ['home', 'social', 'rides', 'wallet', 'profile']
     : ['home', 'social', 'precos', 'contrato', 'rides', 'wallet', 'profile'];
 
@@ -66,11 +65,6 @@ const Layout: React.FC<LayoutProps> = ({
           <div className="px-4 py-1.5 golden-gradient rounded-full font-headline font-bold text-sm shadow-glow gold-box-glow tracking-tighter italic">
             Zenith Ride
           </div>
-          {isAdmin && (
-            <span className="text-[8px] text-primary font-black uppercase tracking-[0.2em] border border-primary/30 px-2 py-0.5 rounded-full">
-              MFUMU CORE
-            </span>
-          )}
         </div>
 
         {/* Right: status + settings */}

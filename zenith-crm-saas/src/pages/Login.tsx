@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAdminAuth } from '../hooks/useAdminAuth';
-import { Mail, KeyRound, ArrowRight, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { Mail, KeyRound, ArrowRight, CheckCircle2 } from 'lucide-react';
 
 const Login: React.FC = () => {
   const { signIn, signInWithGoogle, signInWithMagicLink, error } = useAdminAuth();

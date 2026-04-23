@@ -36,6 +36,7 @@ export const LUANDA_CENTER: LatLng = { lat: -8.8368, lng: 13.2343 };
 
 export interface DbUser {
   id: string; email: string; role: UserRole;
+  suspended_until?: string | null;
   created_at: string; updated_at: string;
 }
 
@@ -113,8 +114,10 @@ export interface DbPost {
   profiles?: Pick<DbProfile, 'name' | 'avatar_url' | 'rating'>;
 }
 
+export type ContractType = 'school' | 'work' | 'family' | 'corporate';
+
 export interface DbContract {
-  id: string; user_id: string; contract_type: 'school' | 'work';
+  id: string; user_id: string; contract_type: ContractType;
   title: string; address: string; dest_lat: number; dest_lng: number;
   time_start: string; time_end: string; parent_monitoring: boolean;
   km_accumulated: number; bonus_kz: number; active: boolean; created_at: string;
@@ -151,14 +154,17 @@ export interface AuctionState {
 // =============================================================================
 
 export interface PostRideState {
-  active:       boolean;
-  rideId:       string | null;
-  driverId:     string | null;
-  driverName:   string | null;
-  driverRating: number | null;
-  priceKz:      number | null;
-  distanceKm?:  number | null;
-  durationMin?: number | null;
+  active:         boolean;
+  rideId:         string | null;
+  driverId:       string | null;
+  driverName:     string | null;
+  driverRating:   number | null;
+  priceKz:        number | null;
+  distanceKm?:    number | null;
+  durationMin?:   number | null;
+  passengerId?:   string | null;
+  originAddress?: string | null;
+  destAddress?:   string | null;
 }
 
 export interface PostRideReviewInput {
@@ -280,6 +286,7 @@ export interface Post {
   likes:     number;
   comments:  number;
   timestamp: number;
+  expiresAt?: number | null; // timestamp de expiração (auto-destrutiva)
 }
 // =============================================================================
 // ZENITH RIDE v3.0 — NOVOS TIPOS

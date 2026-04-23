@@ -8,6 +8,20 @@ interface Passenger {
   user_tier: string; last_ride: string | null;
 }
 
+interface PassengerRideRow {
+  price_kz: number | null;
+  created_at: string;
+  status: string;
+}
+
+interface PassengerProfileRow {
+  user_id: string;
+  name: string;
+  phone: string | null;
+  user_tier: string | null;
+  rides?: PassengerRideRow[] | null;
+}
+
 const TIER_LABELS: Record<string, string> = {
   vip: '⭐ VIP', standard: 'Standard', problematic: '⚠️ Problemático',
 };
@@ -29,14 +43,15 @@ const PassengersPage: React.FC = () => {
       .eq('users.role', 'passenger')
       .order('name');
 
-    const rows: Passenger[] = (data ?? []).map((r: any) => {
-      const completedRides = (r.rides ?? []).filter((rd: any) => rd.status === 'completed');
-      const lastRide = (r.rides ?? []).sort((a: any, b: any) =>
+    const rows: Passenger[] = ((data ?? []) as PassengerProfileRow[]).map(r => {
+      const rides = r.rides ?? [];
+      const completedRides = rides.filter(rd => rd.status === 'completed');
+      const lastRide = rides.sort((a, b) =>
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]?.created_at ?? null;
       return {
         id: r.user_id, name: r.name, phone: r.phone,
         total_rides: completedRides.length,
-        total_spent_kz: completedRides.reduce((s: number, rd: any) => s + (rd.price_kz ?? 0), 0),
+        total_spent_kz: completedRides.reduce((s, rd) => s + (rd.price_kz ?? 0), 0),
         user_tier: r.user_tier ?? 'standard',
         last_ride: lastRide,
       };
@@ -44,7 +59,12 @@ const PassengersPage: React.FC = () => {
     setPassengers(rows); setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const setTier = async (id: string, tier: string) => {
     await supabase.from('profiles').update({ user_tier: tier }).eq('user_id', id);
@@ -52,7 +72,10 @@ const PassengersPage: React.FC = () => {
   };
 
   const ban = async (id: string) => {
-    await supabase.from('users').update({ role: 'banned' }).eq('id', id);
+    await supabase
+      .from('users')
+      .update({ suspended_until: '2999-12-31T23:59:59.000Z' })
+      .eq('id', id);
     load();
   };
 

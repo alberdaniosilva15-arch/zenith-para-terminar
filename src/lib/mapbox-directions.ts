@@ -14,7 +14,20 @@ export async function getRoute(
     `${originLng},${originLat};${destLng},${destLat}` +
     `?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`;
 
-  const res = await fetch(url);
+  // Timeout de 8 segundos para evitar spinners infinitos se a rede do telemóvel falhar
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+  } catch (error) {
+    clearTimeout(timeoutId);
+    console.warn('[Mapbox] Timeout ou erro de rede', error);
+    return null;
+  }
+
   if (!res.ok) return null;
 
   const data = await res.json();

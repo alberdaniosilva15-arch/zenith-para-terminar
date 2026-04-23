@@ -199,7 +199,7 @@ const Contract: React.FC = () => {
       <div className="flex justify-between items-end px-2">
         <div>
           <h2 className="font-headline text-3xl italic font-bold tracking-tighter">
-            Contratos <span className="text-primary">IA</span>
+            Contratos
           </h2>
           <p className="text-[9px] text-on-surface-variant font-label uppercase tracking-[0.3em]">
             MFUMU Edition · Rotas Fixas
@@ -409,7 +409,6 @@ const ContractCard: React.FC<{
         .from('school_tracking_sessions')
         .insert({
           contract_id: c.id,
-          driver_id: null,
           expires_at: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(),
         })
         .select('public_token')

@@ -49,7 +49,7 @@ export function useAdminAuth(): UseAdminAuthReturn {
       const { data, error } = await supabase.rpc("is_admin_secure");
 
       if (error) {
-        console.error("[useAdminAuth] Erro na RPC is_admin_secure:", error.message);
+        console.error("[useAdminAuth] Erro na RPC is_admin:", error.message);
         return false;
       }
 
@@ -77,7 +77,7 @@ export function useAdminAuth(): UseAdminAuthReturn {
   }, [navigate]);
 
   // ── Re-validação periódica ──────────────────────────────────
-  const startPeriodicRevalidation = useCallback((_currentUser: User) => {
+  const startPeriodicRevalidation = useCallback(() => {
     if (revalidateTimerRef.current) {
       clearInterval(revalidateTimerRef.current);
     }
@@ -119,7 +119,7 @@ export function useAdminAuth(): UseAdminAuthReturn {
     }
 
     setState("authenticated");
-    startPeriodicRevalidation(session.user);
+    startPeriodicRevalidation();
   }, [verifyAdminOnServer, forceSignOut, startPeriodicRevalidation]);
 
   // ── Subscrição a mudanças de sessão ────────────────────────

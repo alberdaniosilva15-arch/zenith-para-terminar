@@ -110,6 +110,8 @@ export const useAppStore = create<AppStore>()(
     }),
     {
       name: 'zenith-ride-store-v3',
+      version: 2,
+      migrate: () => ({}),
       // Não persistir ride state — é sempre refrescado de getActiveRide() no arranque
       // (evita estados fantasma de corrida quando a app é fechada durante uma viagem)
       partialize: () => ({}),

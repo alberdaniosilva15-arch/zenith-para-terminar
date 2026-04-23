@@ -27,7 +27,12 @@ const TenantsPage: React.FC = () => {
     setLoading(false);
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void load();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [load]);
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
