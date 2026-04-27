@@ -45,7 +45,7 @@ Para que a inteligência artificial comunique com os utilizadores e responda no 
    *(Vai pedir permissão no browser para acederes à tua conta Supabase)*
 3. Guarda a tua chave secreta de IA da Google nos servidores da cloud:
    ```bash
-   npx supabase secrets set GEMINI_API_KEY="COLA-A-TUA-CHAVE-MAGICA-AQUI"
+   npx supabase secrets set GEMINI_API_KEY="<gemini-secret>"
    ```
 4. Finalmente, envia o robô Kaze que eu criei para as nuvens com o seguinte comando de "Deploy":
    ```bash

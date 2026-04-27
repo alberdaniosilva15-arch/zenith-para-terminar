@@ -1,11 +1,8 @@
-// =============================================================================
-// ZENITH RIDE — Layout.tsx — MFUMU ZENITH EDITION
-// Header + Nav com design "The Digital Gilded Age"
-// =============================================================================
-
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { UserRole, TabType } from '../types';
+import { TabType, UserRole } from '../types';
+import DevQRCode from './DevQRCode';
+import RoleSwitcher from './RoleSwitcher';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -39,102 +36,107 @@ const TAB_ROUTES: Record<TabType, string> = {
 };
 
 const Layout: React.FC<LayoutProps> = ({
-  children, role,
-  dataSaver, onDataSaverToggle, kazeSilent, onKazeSilentToggle,
-  userName, userRating,
+  children,
+  role,
+  dataSaver,
+  onDataSaverToggle,
+  kazeSilent,
+  onKazeSilentToggle,
+  userRating,
 }) => {
-  const isDriver = role === UserRole.DRIVER;
-  
   const location = useLocation();
   const navigate = useNavigate();
 
-  // v3.2: No app principal, role é sempre PASSENGER ou DRIVER.
-  // Acesso admin é exclusivo do zenith-crm-saas.
-  const tabs: TabType[] = isDriver
-    ? ['home', 'social', 'rides', 'wallet', 'profile']
-    : ['home', 'social', 'precos', 'contrato', 'rides', 'wallet', 'profile'];
+  const isDriver = role === UserRole.DRIVER;
+  const isFleetOwner = role === UserRole.FLEET_OWNER;
+
+  const tabs: TabType[] = isFleetOwner
+    ? ['home', 'profile']
+    : isDriver
+      ? ['home', 'social', 'rides', 'wallet', 'profile']
+      : ['home', 'social', 'precos', 'contrato', 'rides', 'wallet', 'profile'];
 
   return (
-    <div className="min-h-screen flex flex-col max-w-md mx-auto relative overflow-hidden bg-[#0B0B0B]">
-
-      {/* ── Header ──────────────────────────────────────────────────── */}
-      <header className="bg-[#0A0A0A] flex justify-between items-center w-full px-5 py-4 fixed top-0 z-50 shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
-
-        {/* Logo */}
+    <div className="relative mx-auto flex min-h-screen max-w-md flex-col overflow-hidden bg-[#0B0B0B]">
+      <header className="fixed top-0 z-50 flex w-full max-w-md items-center justify-between bg-[#0A0A0A] px-5 py-4 shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
         <div className="flex items-center gap-3">
-          <div className="px-4 py-1.5 golden-gradient rounded-full font-headline font-bold text-sm shadow-glow gold-box-glow tracking-tighter italic">
+          <div className="golden-gradient gold-box-glow rounded-full px-4 py-1.5 text-sm font-bold italic tracking-tighter shadow-glow">
             Zenith Ride
           </div>
         </div>
 
-        {/* Right: status + settings */}
         <div className="flex items-center gap-3">
-          {userRating && (
-            <span className="text-[9px] font-black text-primary/70 font-label uppercase tracking-widest">
-              ⭐ {userRating.toFixed(1)}
+          {typeof userRating === 'number' && (
+            <span className="text-[9px] font-black uppercase tracking-widest text-primary/70">
+              * {userRating.toFixed(1)}
             </span>
           )}
 
-          {/* Data saver toggle */}
           <button
             onClick={onDataSaverToggle}
             title={dataSaver ? 'Modo dados activo' : 'Activar modo dados'}
-            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all luxury-transition ${dataSaver ? 'bg-primary/20 text-primary' : 'text-on-surface-variant'
-              }`}
+            className={`flex h-7 w-7 items-center justify-center rounded-full transition-all ${
+              dataSaver ? 'bg-primary/20 text-primary' : 'text-on-surface-variant'
+            }`}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 16, fontVariationSettings: dataSaver ? "'FILL' 1" : "'FILL' 0" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: 16, fontVariationSettings: dataSaver ? "'FILL' 1" : "'FILL' 0" }}
+            >
               signal_cellular_alt
             </span>
           </button>
 
-          {/* Kaze silent toggle */}
           <button
             onClick={onKazeSilentToggle}
             title={kazeSilent ? 'Kaze silenciado' : 'Kaze activo'}
-            className={`w-7 h-7 rounded-full flex items-center justify-center transition-all luxury-transition ${kazeSilent ? 'text-on-surface-variant/40' : 'text-primary'
-              }`}
+            className={`flex h-7 w-7 items-center justify-center rounded-full transition-all ${
+              kazeSilent ? 'text-on-surface-variant/40' : 'text-primary'
+            }`}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 16, fontVariationSettings: kazeSilent ? "'FILL' 0" : "'FILL' 1" }}>
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: 16, fontVariationSettings: kazeSilent ? "'FILL' 0" : "'FILL' 1" }}
+            >
               smart_toy
             </span>
           </button>
+
+          <RoleSwitcher compact />
         </div>
       </header>
 
-      {/* ── Main Content ────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-y-auto no-scrollbar pt-16 pb-24">
+      <main className="no-scrollbar flex-1 overflow-y-auto pb-24 pt-16">
         {children}
       </main>
 
-      {/* ── Bottom Nav ─────────────────────────── */}
-      {(
-        <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md z-50 bg-[#000000] border-t border-primary/30 flex justify-around items-center h-20 px-4">
-          {tabs.map(tab => {
-            const active = location.pathname === TAB_ROUTES[tab];
-            return (
-              <button
-                key={tab}
-                onClick={() => navigate(TAB_ROUTES[tab])}
-                className={`flex flex-col items-center justify-center gap-1 flex-1 py-2 luxury-transition relative ${active ? 'text-primary' : 'text-on-surface-variant/30 hover:text-on-surface-variant/60'
-                  }`}
+      <DevQRCode />
+
+      <nav className="fixed bottom-0 left-1/2 z-50 flex h-20 w-full max-w-md -translate-x-1/2 items-center justify-around border-t border-primary/30 bg-[#000000] px-4">
+        {tabs.map((tab) => {
+          const active = location.pathname === TAB_ROUTES[tab];
+          return (
+            <button
+              key={tab}
+              onClick={() => navigate(TAB_ROUTES[tab])}
+              className={`relative flex flex-1 flex-col items-center justify-center gap-1 py-2 transition-all ${
+                active ? 'text-primary' : 'text-on-surface-variant/30 hover:text-on-surface-variant/60'
+              }`}
+            >
+              <span
+                className="material-symbols-outlined"
+                style={{
+                  fontSize: 24,
+                  fontVariationSettings: active ? "'FILL' 1" : "'FILL' 0",
+                }}
               >
-                <span
-                  className="material-symbols-outlined"
-                  style={{
-                    fontSize: 24,
-                    fontVariationSettings: active ? "'FILL' 1" : "'FILL' 0",
-                  }}
-                >
-                  {TAB_ICONS[tab]}
-                </span>
-                {active && (
-                  <span className="w-1 h-1 rounded-full bg-primary absolute bottom-1 animate-pulse" />
-                )}
-              </button>
-            );
-          })}
-        </nav>
-      )}
+                {TAB_ICONS[tab]}
+              </span>
+              {active && <span className="absolute bottom-1 h-1 w-1 rounded-full bg-primary animate-pulse" />}
+            </button>
+          );
+        })}
+      </nav>
     </div>
   );
 };

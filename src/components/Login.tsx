@@ -11,6 +11,8 @@ import { UserRole } from '../types';
 type Screen = 'signin' | 'signup' | 'forgot' | 'reset';
 
 const RECOVERY_PATH = '/login?type=recovery';
+const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
+const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
 
 const Login: React.FC = () => {
   const { signIn, signUp, signInWithGoogle } = useAuth();
@@ -27,6 +29,8 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const isPasswordRole = role === UserRole.DRIVER || role === UserRole.FLEET_OWNER;
+  const isPasswordAuthRole = authRole === UserRole.DRIVER || authRole === UserRole.FLEET_OWNER;
 
   const clearFeedback = () => {
     setError(null);
@@ -52,27 +56,30 @@ const Login: React.FC = () => {
   };
 
   useEffect(() => {
-    const searchParams = new URLSearchParams(window.location.search);
-    if (searchParams.get('cleared') === '1') {
-      setError(null);
-      setSuccess('Sessao anterior terminada neste dispositivo. Ja podes entrar noutra conta.');
-    }
-
-    if (hasRecoveryType(window.location.search, window.location.hash)) {
-      setScreen('reset');
-    }
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') {
+    const syncRecoveryState = () => {
+      if (hasRecoveryType(window.location.search, window.location.hash)) {
         setError(null);
         setSuccess(null);
         setPassword('');
         setConfirmPassword('');
         setScreen('reset');
       }
-    });
+    };
 
-    return () => subscription.unsubscribe();
+    const searchParams = new URLSearchParams(window.location.search);
+    if (searchParams.get('cleared') === '1') {
+      setError(null);
+      setSuccess('Sessao anterior terminada neste dispositivo. Ja podes entrar noutra conta.');
+    }
+
+    syncRecoveryState();
+    window.addEventListener('hashchange', syncRecoveryState);
+    window.addEventListener('popstate', syncRecoveryState);
+
+    return () => {
+      window.removeEventListener('hashchange', syncRecoveryState);
+      window.removeEventListener('popstate', syncRecoveryState);
+    };
   }, []);
 
   const handleSignIn = async () => {
@@ -81,6 +88,7 @@ const Login: React.FC = () => {
       return;
     }
 
+    persistRoleIntent(authRole);
     setLoading(true);
     clearFeedback();
     const err = await signIn(email, password);
@@ -97,6 +105,7 @@ const Login: React.FC = () => {
       return;
     }
 
+    persistRoleIntent(null);
     setLoading(true);
     clearFeedback();
 
@@ -195,12 +204,13 @@ const Login: React.FC = () => {
       return;
     }
 
-    if (role === UserRole.DRIVER) {
+    if (isPasswordRole) {
       if (!password || password.length < 6) {
         setError('Define uma palavra-passe com pelo menos 6 caracteres.');
         return;
       }
 
+      persistRoleIntent(role);
       setLoading(true);
       clearFeedback();
       const err = await signUp(email, password, name, role);
@@ -209,10 +219,14 @@ const Login: React.FC = () => {
       if (err) {
         setError(err.message);
       } else {
-        setSuccess('Conta criada! Confirma o teu email para entrares como motorista.');
+        setSuccess(
+          role === UserRole.FLEET_OWNER
+            ? 'Conta criada! Confirma o teu email para entrares como dono de frota.'
+            : 'Conta criada! Confirma o teu email para entrares como motorista.',
+        );
         clearPasswordFields();
         setScreen('signin');
-        setAuthRole(UserRole.DRIVER);
+        setAuthRole(role);
       }
 
       return;
@@ -220,6 +234,7 @@ const Login: React.FC = () => {
 
     setLoading(true);
     clearFeedback();
+    persistRoleIntent(null);
 
     try {
       const { error } = await supabase.auth.signInWithOtp({
@@ -253,7 +268,7 @@ const Login: React.FC = () => {
     }
 
     if (screen === 'signin') {
-      if (authRole === UserRole.DRIVER) {
+      if (isPasswordAuthRole) {
         return handleSignIn();
       }
 
@@ -264,8 +279,8 @@ const Login: React.FC = () => {
   };
 
   const showDriverGoogleAction =
-    (screen === 'signin' && authRole === UserRole.DRIVER) ||
-    (screen === 'signup' && role === UserRole.DRIVER);
+    (screen === 'signin' && isPasswordAuthRole) ||
+    (screen === 'signup' && isPasswordRole);
 
   return (
     <div
@@ -398,7 +413,7 @@ const Login: React.FC = () => {
                 icon="mail"
               />
 
-              {authRole === UserRole.DRIVER ? (
+              {isPasswordAuthRole ? (
                 <>
                   <ZenithField
                     label="Palavra-passe"
@@ -410,7 +425,9 @@ const Login: React.FC = () => {
                     autoComplete="current-password"
                   />
                   <p className="text-[10px] text-on-surface-variant/70 mt-1 font-bold text-center">
-                    Motoristas podem entrar com email e palavra-passe ou continuar com Google.
+                    {authRole === UserRole.FLEET_OWNER
+                      ? 'Donos de frota entram com email e palavra-passe, com Google como alternativa.'
+                      : 'Motoristas podem entrar com email e palavra-passe ou continuar com Google.'}
                   </p>
                 </>
               ) : (
@@ -427,7 +444,7 @@ const Login: React.FC = () => {
                 <label className="font-label text-[10px] uppercase tracking-widest px-1" style={{ color: 'rgba(230,195,100,0.5)' }}>
                   Criar conta como
                 </label>
-                <div className="grid grid-cols-2 gap-3">
+                <div className="grid grid-cols-3 gap-3">
                   <RoleBtn
                     label="Passageiro"
                     icon="person"
@@ -444,6 +461,16 @@ const Login: React.FC = () => {
                     active={role === UserRole.DRIVER}
                     onClick={() => {
                       setRole(UserRole.DRIVER);
+                      clearFeedback();
+                      clearPasswordFields();
+                    }}
+                  />
+                  <RoleBtn
+                    label="Frota"
+                    icon="apartment"
+                    active={role === UserRole.FLEET_OWNER}
+                    onClick={() => {
+                      setRole(UserRole.FLEET_OWNER);
                       clearFeedback();
                       clearPasswordFields();
                     }}
@@ -468,7 +495,7 @@ const Login: React.FC = () => {
                 icon="mail"
               />
 
-              {role === UserRole.DRIVER ? (
+              {isPasswordRole ? (
                 <>
                   <ZenithField
                     label="Palavra-passe"
@@ -480,7 +507,9 @@ const Login: React.FC = () => {
                     autoComplete="new-password"
                   />
                   <p className="text-[10px] text-on-surface-variant/70 mt-1 font-bold text-center">
-                    A conta de motorista usa email e palavra-passe, com Google como alternativa.
+                    {role === UserRole.FLEET_OWNER
+                      ? 'A conta do dono de frota usa email e palavra-passe, com Google como alternativa.'
+                      : 'A conta de motorista usa email e palavra-passe, com Google como alternativa.'}
                   </p>
                 </>
               ) : (
@@ -510,7 +539,7 @@ const Login: React.FC = () => {
 
         {showDriverGoogleAction && (
           <button
-            onClick={() => handleGoogleAuth(UserRole.DRIVER)}
+            onClick={() => handleGoogleAuth(authRole ?? role)}
             disabled={loading}
             className="w-full h-14 rounded-full flex items-center justify-center gap-3 font-label font-extrabold text-sm uppercase tracking-[0.16em] active:scale-95 transition-all duration-300 disabled:opacity-50"
             style={{ background: '#FFFFFF', color: '#0B0B0B', boxShadow: '0 0 20px rgba(255,255,255,0.1)' }}
@@ -532,7 +561,7 @@ const Login: React.FC = () => {
         )}
 
         {screen === 'signin' && (
-          <div className="w-full grid grid-cols-2 gap-4">
+          <div className="w-full grid grid-cols-3 gap-4">
             <QuickBtn
               icon="person"
               label="PASSAGEIRO"
@@ -553,10 +582,20 @@ const Login: React.FC = () => {
               }}
               active={authRole === UserRole.DRIVER}
             />
+            <QuickBtn
+              icon="apartment"
+              label="FROTA"
+              onClick={() => {
+                setAuthRole(UserRole.FLEET_OWNER);
+                clearFeedback();
+                clearPasswordFields();
+              }}
+              active={authRole === UserRole.FLEET_OWNER}
+            />
           </div>
         )}
 
-        {screen === 'signin' && authRole !== UserRole.DRIVER && (
+        {screen === 'signin' && !isPasswordAuthRole && (
           <div className="w-full mt-3 flex gap-3">
             <button
               onClick={handleSendMagicLink}
@@ -679,10 +718,25 @@ function getPrimaryLabel(screen: Screen, authRole: UserRole | null): string {
   }
 
   if (screen === 'signin') {
-    return authRole === UserRole.DRIVER ? 'ENTRAR' : 'ENVIAR LINK MAGICO';
+    return authRole === UserRole.DRIVER || authRole === UserRole.FLEET_OWNER ? 'ENTRAR' : 'ENVIAR LINK MAGICO';
   }
 
   return 'CRIAR CONTA';
+}
+
+function persistRoleIntent(role: UserRole | null): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (role === UserRole.DRIVER || role === UserRole.FLEET_OWNER) {
+    window.localStorage.setItem(ROLE_INTENT_STORAGE_KEY, role);
+    window.localStorage.setItem(LEGACY_ROLE_INTENT_STORAGE_KEY, role);
+    return;
+  }
+
+  window.localStorage.removeItem(ROLE_INTENT_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_ROLE_INTENT_STORAGE_KEY);
 }
 
 export default Login;

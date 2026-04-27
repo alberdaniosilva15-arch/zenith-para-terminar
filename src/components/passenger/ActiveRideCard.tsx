@@ -22,6 +22,7 @@ interface ActiveRideCardProps {
   onCancelRide:    (reason: string) => void;
   emergencyPhone?: string;
   driverName?:     string;
+  silentPanicSignal?: number;
 }
 
 const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
@@ -30,6 +31,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
   routeInfo,
   onCancelRide,
   emergencyPhone,
+  silentPanicSignal,
 }) => {
   if (
     ride.status !== RideStatus.SEARCHING &&
@@ -159,6 +161,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
                 rideId={resolvedRideId}
                 driverName={resolvedDriverName}
                 emergencyPhone={emergencyPhone}
+                silentSignal={silentPanicSignal}
               />
             </div>
           )}

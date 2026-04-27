@@ -25,7 +25,9 @@ import { supabase } from '../lib/supabase';
 import { zonePriceService } from '../services/zonePrice';
 import type { RidePrediction, ZonePrice } from '../types';
 
-const getLuandaHour = () => (new Date().getUTCHours() + 1) % 24;
+const getLuandaNow = () => new Date(
+  new Date().toLocaleString('en-US', { timeZone: 'Africa/Luanda' }),
+);
 
 interface KazePreditivoProps {
   userId:   string;
@@ -45,8 +47,9 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept }) => {
   const loadPrediction = async () => {
     setLoading(true);
     try {
-      // Hora actual (Angola = UTC+1)
-      const currentHour = getLuandaHour();
+      const luandaNow = getLuandaNow();
+      const currentHour = luandaNow.getHours();
+      const currentDay = luandaNow.getDay();
 
       // Busca as corridas mais frequentes, com preferência pela hora actual
       const { data, error } = await supabase
@@ -62,10 +65,13 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept }) => {
         return;
       }
 
-      // Score: frequência × coincidência de hora
+      // Score: frequencia x coincidencia de hora x coincidencia do dia
       const scored = (data as RidePrediction[]).map(p => ({
         ...p,
-        score: p.frequency * (p.best_hour !== null && Math.abs(p.best_hour - currentHour) <= 1 ? 2 : 1),
+        score:
+          p.frequency *
+          (p.best_hour !== null && Math.abs(p.best_hour - currentHour) <= 1 ? 2 : 1) *
+          (p.day_of_week == null || p.day_of_week === currentDay ? 1.6 : 1),
       }));
 
       scored.sort((a, b) => b.score - a.score);
@@ -85,16 +91,20 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept }) => {
   if (loading || !prediction || dismissed) return null;
 
   // Mensagem personalizada do Kaze
-  const currentHour = getLuandaHour();
+  const luandaNow = getLuandaNow();
+  const currentHour = luandaNow.getHours();
   const greeting =
     currentHour < 12 ? 'Bom dia' :
     currentHour < 19 ? 'Boa tarde' : 'Boa noite';
 
   const isUsualTime = prediction.best_hour !== null &&
     Math.abs(prediction.best_hour - currentHour) <= 1;
+  const isUsualDay = prediction.day_of_week == null || prediction.day_of_week === luandaNow.getDay();
 
   const kazeMsg = isUsualTime
     ? `${greeting}, mano! Já é a tua hora habitual para ${prediction.dest_address.split(',')[0]}.`
+    : isUsualDay
+      ? `${greeting}! Hoje combina com a tua rota habitual para ${prediction.dest_address.split(',')[0]}.`
     : `${greeting}! Já foi ${prediction.frequency}x a ${prediction.dest_address.split(',')[0]}. Vamos de novo?`;
 
   const displayPrice = zonePrice?.price_kz ?? prediction.avg_price_kz;

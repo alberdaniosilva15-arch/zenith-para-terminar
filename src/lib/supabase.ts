@@ -10,7 +10,7 @@ const supabaseAnon = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseAnon) {
   throw new Error(
-    '[MotoGo] Variáveis de ambiente em falta.\n' +
+    '[Zenith Ride] Variáveis de ambiente em falta.\n' +
     'Cria um ficheiro .env com:\n' +
     '  VITE_SUPABASE_URL=https://<projeto>.supabase.co\n' +
     '  VITE_SUPABASE_ANON_KEY=<chave-anon-pública>'

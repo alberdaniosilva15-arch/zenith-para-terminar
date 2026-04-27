@@ -11,8 +11,9 @@ import React, { useState, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import type { DbUser, DbProfile } from '../types';
-import MotoGoScore from './MotoGoScore';
+import ZenithScore from './ZenithScore';
 import { ReferralModal } from './ReferralModal';
+import RoleSwitcher from './RoleSwitcher';
 
 interface ProfileProps {
   dbUser:    DbUser;
@@ -20,7 +21,7 @@ interface ProfileProps {
   onSignOut: () => Promise<void>;
 }
 
-type ProfileSection = 'main' | 'personal' | 'ia-settings' | 'security' | 'motogoscore';
+type ProfileSection = 'main' | 'personal' | 'ia-settings' | 'security' | 'zenithscore';
 
 const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
   const { updateProfile } = useAuth();
@@ -100,7 +101,7 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
         console.error('[Profile] Upload error:', uploadError);
         // Tentar criar bucket se não existir (fallback)
         if (uploadError.message?.includes('not found') || uploadError.message?.includes('Bucket')) {
-          alert('Bucket "avatars" não encontrado no Supabase Storage. Cria-o no painel Supabase → Storage → New Bucket → "avatars" (público).');
+          alert('Bucket "avatars" não encontrado no Supabase Storage. Aplica a migration 20260426_add_public_avatars_bucket.sql ou cria o bucket "avatars" como público.');
         } else {
           alert(`Erro no upload: ${uploadError.message}`);
         }
@@ -198,9 +199,11 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
                 <ProfileMenuItem icon="👤" label="Dados Pessoais"        onClick={() => setActiveSection('personal')} />
                 <ProfileMenuItem icon="🤖" label="Configurações IA"      onClick={() => setActiveSection('ia-settings')} />
                 <ProfileMenuItem icon="🔒" label="Segurança"             onClick={() => setActiveSection('security')} />
-                <ProfileMenuItem icon="🏆" label="MotoGo Score"          onClick={() => setActiveSection('motogoscore')} />
+                <ProfileMenuItem icon="🏆" label="Zenith Score"          onClick={() => setActiveSection('zenithscore')} />
                 <ProfileMenuItem icon="🤝" label="Traz o Mano! (+500 Kz)" onClick={() => setShowReferral(true)} />
               </div>
+
+              <RoleSwitcher />
             </>
           ) : activeSection === 'personal' ? (
             <div className="flex flex-col bg-surface-container rounded-2xl p-5 gap-4 animate-in slide-in-from-right duration-200">
@@ -298,10 +301,10 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
                 </button>
               </div>
             </div>
-          ) : activeSection === 'motogoscore' ? (
+          ) : activeSection === 'zenithscore' ? (
             <div className="flex flex-col bg-surface-container rounded-2xl p-5 gap-4 animate-in slide-in-from-right duration-200">
-              <SectionHeader onBack={() => setActiveSection('main')} title="MotoGo Score" />
-              {dbUser ? <MotoGoScore driverId={dbUser.id} /> : null}
+              <SectionHeader onBack={() => setActiveSection('main')} title="Zenith Score" />
+              {dbUser ? <ZenithScore driverId={dbUser.id} /> : null}
             </div>
           ) : null}
 

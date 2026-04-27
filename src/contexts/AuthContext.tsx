@@ -23,10 +23,14 @@ import { useAppStore } from '../store/useAppStore';
 
 const CLIENT_ONLY_STORAGE_KEYS = [
   'zenith-ride-store-v3',
+  'auth_role_intent',
   'oauth_role_intent',
   'zenith_ia_provider',
   'zenith_ia_model',
 ];
+
+const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
+const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
 
 function clearBrowserAuthStorage(): void {
   if (typeof window === 'undefined') {
@@ -67,6 +71,76 @@ function isSupabaseAuthStorageKey(key: string): boolean {
   );
 }
 
+function clearStoredRoleIntent(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.removeItem(ROLE_INTENT_STORAGE_KEY);
+  window.localStorage.removeItem(LEGACY_ROLE_INTENT_STORAGE_KEY);
+}
+
+function readStoredRoleIntent(): UserRole | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  const storedRole =
+    window.localStorage.getItem(ROLE_INTENT_STORAGE_KEY) ??
+    window.localStorage.getItem(LEGACY_ROLE_INTENT_STORAGE_KEY);
+
+  if (
+    storedRole === UserRole.PASSENGER ||
+    storedRole === UserRole.DRIVER ||
+    storedRole === UserRole.FLEET_OWNER
+  ) {
+    return storedRole;
+  }
+
+  if (storedRole) {
+    clearStoredRoleIntent();
+  }
+
+  return null;
+}
+
+function persistStoredRoleIntent(role: UserRole): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (
+    role !== UserRole.PASSENGER &&
+    role !== UserRole.DRIVER &&
+    role !== UserRole.FLEET_OWNER
+  ) {
+    clearStoredRoleIntent();
+    return;
+  }
+
+  window.localStorage.setItem(ROLE_INTENT_STORAGE_KEY, role);
+  window.localStorage.setItem(LEGACY_ROLE_INTENT_STORAGE_KEY, role);
+}
+
+function resolveSessionRole(role: unknown): UserRole {
+  if (role === UserRole.FLEET_OWNER) {
+    return UserRole.FLEET_OWNER;
+  }
+
+  // "Frota" funciona como uma entrada própria do app.
+  // Mesmo quando a conta também é passageiro, se o utilizador escolheu
+  // abrir a frota no login, mantemos esse modo activo nesta sessão.
+  if (readStoredRoleIntent() === UserRole.FLEET_OWNER) {
+    return UserRole.FLEET_OWNER;
+  }
+
+  if (role === UserRole.DRIVER || role === UserRole.ADMIN || role === UserRole.PASSENGER) {
+    return role;
+  }
+
+  return UserRole.PASSENGER;
+}
+
 // =============================================================================
 // TIPOS DO CONTEXTO
 // =============================================================================
@@ -81,7 +155,7 @@ interface AuthContextValue {
   authError: AppError | null;
   clearAuthError: () => void;
 
-  // AcÃ§Ãµes
+  // Acções
   signIn:      (email: string, password: string) => Promise<AppError | null>;
   signInWithGoogle: (role: UserRole) => Promise<AppError | null>;
   signUp:      (email: string, password: string, name: string, role: UserRole) => Promise<AppError | null>;
@@ -165,26 +239,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         if (userErr) {
           if (isPermissionError(userErr)) {
-            throw new Error('Sem permissÃ£o para carregar dados do utilizador. Contacte o suporte.');
+            throw new Error('Sem permissão para carregar dados do utilizador. Contacte o suporte.');
           }
           throw userErr;
         }
         if (profErr) {
           if (isPermissionError(profErr)) {
-            throw new Error('Sem permissÃ£o para carregar perfil. Contacte o suporte.');
+            throw new Error('Sem permissão para carregar perfil. Contacte o suporte.');
           }
           throw profErr;
         }
 
-        // Google OAuth Role Intent Resolution
-        const intent = localStorage.getItem('oauth_role_intent');
+        // Resolver a intenção de papel escolhida no login/signup.
+        const intent = readStoredRoleIntent();
         let finalUserRow = userRow;
-        if (intent === 'driver' && finalUserRow && (finalUserRow as DbUser).role === 'passenger') {
-          console.log('[AuthContext] Promovendo passenger a driver via OAuth intent');
-          await supabase.rpc('set_my_role_driver');
-          localStorage.removeItem('oauth_role_intent');
+        if (
+          intent &&
+          finalUserRow &&
+          (finalUserRow as DbUser).role !== UserRole.ADMIN &&
+          (finalUserRow as DbUser).role !== intent
+        ) {
+          console.log('[AuthContext] Aplicando role intent:', intent);
+          const roleRpcName = intent === UserRole.FLEET_OWNER
+            ? 'set_my_role_fleet_owner'
+            : intent === UserRole.DRIVER
+              ? 'set_my_role_driver'
+              : 'set_my_role_passenger';
+          await supabase.rpc(roleRpcName);
           const { data: updatedUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
           if (updatedUser) finalUserRow = updatedUser;
+        }
+
+        if (finalUserRow && intent && (finalUserRow as DbUser).role === intent) {
+          clearStoredRoleIntent();
         }
 
         if (!finalUserRow) {
@@ -210,7 +297,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         const rawRole = (finalUserRow as { role?: unknown }).role;
         if (!isValidUserRole(rawRole)) {
-          throw new Error(`Role invÃ¡lido recebido da BD: ${String(rawRole ?? 'null')}`);
+          throw new Error(`Role inválido recebido da BD: ${String(rawRole ?? 'null')}`);
         }
 
         const suspendedUntil = (finalUserRow as { suspended_until?: string | null }).suspended_until ?? null;
@@ -258,7 +345,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(effectiveUser, effectiveProfile);
         setAuthError(null);
         setLoading(false);
-        return; // Sucesso - sai da funÃ§Ã£o
+        return; // Sucesso - sai da função
       } catch (err: any) {
         console.warn(`[AuthContext] loadUserData attempt ${attempt + 1} falhou:`, err.message);
         if (attempt < MAX_ATTEMPTS - 1) {
@@ -283,14 +370,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [setUser, clearSyncedUserState]);
 
   // ------------------------------------------------------------------
-  // Inicializar: recuperar sessÃ£o existente + subscrever a mudanÃ§as
+  // Inicializar: recuperar sessão existente + subscrever a mudanças
   // ------------------------------------------------------------------
   useEffect(() => {
     let mounted = true;
 
     const init = async () => {
       console.log('[AuthContext] init');
-      // 1) Tentar detectar sessÃ£o diretamente a partir da URL (link mÃ¡gico)
+      // 1) Tentar detectar sessão diretamente a partir da URL (link mágico)
       try {
         console.log('[AuthContext] checking getSessionFromUrl');
         if (typeof (supabase.auth as any).getSessionFromUrl === 'function') {
@@ -308,7 +395,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const pending = pendingAuthEventRef.current;
             pendingAuthEventRef.current = null;
             if (pending && mounted) {
-              // Ignorar se Ã© o mesmo utilizador jÃ¡ carregado (evita double-load)
+              // Ignorar se é o mesmo utilizador já carregado (evita double-load)
               const sameUserId = pending.newSession?.user?.id === urlSession?.user?.id;
               if (!sameUserId) {
                 syncSessionBoundary(pending.newSession);
@@ -325,11 +412,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
       } catch (e) {
-        // NÃ£o bloquear; prosseguir para getSession normal
+        // Não bloquear; prosseguir para getSession normal
         console.warn('[AuthContext] getSessionFromUrl falhou:', e);
       }
 
-      // 2) Fallback: recuperar sessÃ£o existente (localStorage)
+      // 2) Fallback: recuperar sessão existente (localStorage)
       const { data: { session: initialSession } } = await supabase.auth.getSession();
       console.log('[AuthContext] initialSession:', initialSession);
 
@@ -346,7 +433,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const pending = pendingAuthEventRef.current;
       pendingAuthEventRef.current = null;
       if (pending && mounted) {
-        // Ignorar se Ã© o mesmo utilizador jÃ¡ carregado (evita double-load)
+        // Ignorar se é o mesmo utilizador já carregado (evita double-load)
         const sameUserId = pending.newSession?.user?.id === initialSession?.user?.id;
         if (!sameUserId) {
           syncSessionBoundary(pending.newSession);
@@ -418,7 +505,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ------------------------------------------------------------------
   const signInWithGoogle = useCallback(async (role: UserRole): Promise<AppError | null> => {
     try {
-      localStorage.setItem('oauth_role_intent', role);
+      persistStoredRoleIntent(role);
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -443,7 +530,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     role: UserRole
   ): Promise<AppError | null> => {
     // 1. Criar conta no Supabase Auth
-    const { data, error: signUpError } = await supabase.auth.signUp({
+    const { error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -465,17 +552,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ------------------------------------------------------------------
   const signOut = useCallback(async () => {
     try {
-      // 1. Marcar que estamos a fazer signOut (previne re-autenticaÃ§Ã£o pelo listener)
+      // 1. Marcar que estamos a fazer signOut (previne re-autenticação pelo listener)
       pendingAuthEventRef.current = null;
       isInitRef.current = false; // Bloqueia o listener de re-autenticar
 
-      // 2. Limpar a sessÃ£o local imediatamente para a UI largar a conta antiga.
+      // 2. Limpar a sessão local imediatamente para a UI largar a conta antiga.
       purgeClientSession();
 
-      // 3. Pedir ao Supabase para esquecer a sessÃ£o apenas neste dispositivo.
+      // 3. Pedir ao Supabase para esquecer a sessão apenas neste dispositivo.
       await supabase.auth.signOut({ scope: 'local' });
 
-      // 4. ReforÃ§ar a limpeza no browser e abrir o login num estado fresco.
+      // 4. Reforçar a limpeza no browser e abrir o login num estado fresco.
       clearBrowserAuthStorage();
       window.location.replace('/login?cleared=1');
     } catch (err) {
@@ -491,7 +578,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateProfile = useCallback(async (
     data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone'>>
   ): Promise<AppError | null> => {
-    if (!dbUser) return { code: 'not_authenticated', message: 'Utilizador nÃ£o autenticado.' };
+    if (!dbUser) return { code: 'not_authenticated', message: 'Utilizador não autenticado.' };
 
     const { error } = await supabase
       .from('profiles')
@@ -517,9 +604,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     authUser,
     dbUser: safeDbUser,
     profile: safeProfile,
-    role: safeDbUser && isValidUserRole((safeDbUser as { role?: unknown }).role)
-      ? safeDbUser.role
-      : UserRole.PASSENGER,
+    role: resolveSessionRole((safeDbUser as { role?: unknown } | null)?.role),
     loading: loading || hasStaleUserData,
     authError,
     clearAuthError,
@@ -546,17 +631,17 @@ export const useAuth = (): AuthContextValue => {
 };
 
 // =============================================================================
-// HELPER: traduzir erros de auth para portuguÃªs
+// HELPER: traduzir erros de auth para português
 // =============================================================================
 function translateAuthError(msg: string): string {
   const map: Record<string, string> = {
     'Invalid login credentials':           'Email ou password incorrectos.',
     'Email not confirmed':                 'Confirma o teu email antes de entrar.',
-    'User already registered':             'Este email jÃ¡ tem uma conta.',
+    'User already registered':             'Este email já tem uma conta.',
     'Password should be at least 6 characters': 'A password deve ter pelo menos 6 caracteres.',
     'signup_disabled':                     'Registo temporariamente desactivado.',
   };
-  return map[msg] ?? `Erro de autenticaÃ§Ã£o: ${msg}`;
+  return map[msg] ?? `Erro de autenticação: ${msg}`;
 }
 
 // ------------------------------------------------------------------
@@ -578,6 +663,7 @@ function isValidUserRole(role: unknown): role is UserRole {
   return (
     role === UserRole.PASSENGER ||
     role === UserRole.DRIVER ||
+    role === UserRole.FLEET_OWNER ||
     role === UserRole.ADMIN
   );
 }
@@ -591,11 +677,11 @@ function isSuspended(suspendedUntil: string | null | undefined): boolean {
 
 function formatSuspendedMessage(suspendedUntil: string | null | undefined): string {
   if (!suspendedUntil) {
-    return 'A tua conta estÃ¡ suspensa.';
+    return 'A tua conta está suspensa.';
   }
   const date = new Date(suspendedUntil);
   if (Number.isNaN(date.getTime())) {
-    return 'A tua conta estÃ¡ suspensa.';
+    return 'A tua conta está suspensa.';
   }
-  return `A tua conta estÃ¡ suspensa atÃ© ${date.toLocaleString('pt-AO')}.`;
+  return `A tua conta está suspensa até ${date.toLocaleString('pt-AO')}.`;
 }

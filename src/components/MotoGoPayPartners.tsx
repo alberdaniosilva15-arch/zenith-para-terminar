@@ -1,22 +1,22 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — src/components/MotoGoPayPartners.tsx
+// ZENITH RIDE v3.0 — src/components/MotoGoPayPartners.tsx (ZenithPayPartners)
 //
-// Aba de parceiros da carteira MotoGo Pay.
+// Aba de parceiros da carteira Zenith Pay.
 // Motoristas podem gastar o saldo em combustível, comida, seguros.
 // A empresa recebe comissão de 5% por cada transacção com parceiro.
 //
 // Integração em Wallet.tsx:
 //   1. Adiciona um tab "Parceiros" ao lado de "Transacções"
-//   2. Quando tab activo, renderiza <MotoGoPayPartners userId={userId} walletBalance={wallet?.balance ?? 0} />
+//   2. Quando tab activo, renderiza <ZenithPayPartners userId={userId} walletBalance={wallet?.balance ?? 0} />
 //
-//   import MotoGoPayPartners from './MotoGoPayPartners';
+//   import ZenithPayPartners from './MotoGoPayPartners';
 // =============================================================================
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
-import type { MotoGoPayPartner, PartnerCategory } from '../types';
+import type { ZenithPayPartner, PartnerCategory } from '../types';
 
-interface MotoGoPayPartnersProps {
+interface ZenithPayPartnersProps {
   userId:        string;
   walletBalance: number;
 }
@@ -37,14 +37,14 @@ const CATEGORY_LABELS: Record<PartnerCategory, string> = {
   supermarket: 'Supermercado',
 };
 
-const MotoGoPayPartners: React.FC<MotoGoPayPartnersProps> = ({ userId, walletBalance }) => {
-  const [partners,  setPartners]  = useState<MotoGoPayPartner[]>([]);
+const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBalance }) => {
+  const [partners,  setPartners]  = useState<ZenithPayPartner[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [activeCategory, setActiveCategory] = useState<PartnerCategory | 'all'>('all');
   const [payingId,  setPayingId]  = useState<string | null>(null);
   const [payMsg,    setPayMsg]    = useState<{ text: string; ok: boolean } | null>(null);
   const [payAmount, setPayAmount] = useState('');
-  const [selectedPartner, setSelectedPartner] = useState<MotoGoPayPartner | null>(null);
+  const [selectedPartner, setSelectedPartner] = useState<ZenithPayPartner | null>(null);
 
   useEffect(() => {
     loadPartners();
@@ -56,17 +56,17 @@ const MotoGoPayPartners: React.FC<MotoGoPayPartnersProps> = ({ userId, walletBal
       .select('*')
       .eq('active', true)
       .order('category');
-    setPartners((data ?? []) as MotoGoPayPartner[]);
+    setPartners((data ?? []) as ZenithPayPartner[]);
     setLoading(false);
   };
 
-  const handlePay = async (partner: MotoGoPayPartner, amount: number) => {
+  const handlePay = async (partner: ZenithPayPartner, amount: number) => {
     setPayingId(partner.id);
     setPayMsg(null);
 
     // Verifica saldo
     if (amount > walletBalance) {
-      setPayMsg({ text: 'Saldo insuficiente na carteira MotoGo.', ok: false });
+      setPayMsg({ text: 'Saldo insuficiente na carteira Zenith.', ok: false });
       setPayingId(null);
       return;
     }
@@ -134,7 +134,7 @@ const MotoGoPayPartners: React.FC<MotoGoPayPartnersProps> = ({ userId, walletBal
       <div className="bg-primary rounded-[2rem] p-5 flex items-center gap-4">
         <div className="text-3xl">💳</div>
         <div>
-          <p className="text-[8px] font-black text-primary/70 uppercase tracking-widest">Saldo MotoGo Pay</p>
+          <p className="text-[8px] font-black text-primary/70 uppercase tracking-widest">Saldo Zenith Pay</p>
           <p className="text-2xl font-black text-white tracking-tighter">
             {walletBalance.toLocaleString('pt-AO')} Kz
           </p>
@@ -241,7 +241,7 @@ const MotoGoPayPartners: React.FC<MotoGoPayPartnersProps> = ({ userId, walletBal
       {/* ── Info comissão (para pitch a investidores / banco) ──────────────── */}
       <div className="bg-surface-container-lowest border border-outline-variant/20 rounded-[2rem] p-4 text-center">
         <p className="text-[8px] font-black text-on-surface-variant/70 uppercase tracking-widest">
-          MotoGo recebe 5% de comissão em cada pagamento a parceiros
+          Zenith recebe 5% de comissão em cada pagamento a parceiros
         </p>
       </div>
 
@@ -249,4 +249,4 @@ const MotoGoPayPartners: React.FC<MotoGoPayPartnersProps> = ({ userId, walletBal
   );
 };
 
-export default MotoGoPayPartners;
+export default ZenithPayPartners;

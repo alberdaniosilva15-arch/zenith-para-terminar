@@ -24,7 +24,16 @@ interface UseRideReturn {
   startAuction:    (pickupCoords: LatLng) => Promise<void>;
   selectDriver:    (driver: AuctionDriver) => void;
   cancelAuction:   () => void;
-  requestRide:     (pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng, proposedPrice?: number) => Promise<void>;
+  requestRide:     (
+    pickup: string,
+    pickupCoords: LatLng,
+    dest: string,
+    destCoords: LatLng,
+    proposedPrice?: number,
+    distanceKm?: number,
+    durationMin?: number,
+    vehicleType?: 'standard' | 'moto' | 'comfort' | 'xl'
+  ) => Promise<void>;
   cancelRide:      (reason?: string) => Promise<void>;
   acceptRide:      (rideId: string) => Promise<void>;
   confirmRide:     (rideId: string) => Promise<void>;
@@ -36,7 +45,7 @@ interface UseRideReturn {
 }
 
 export function useRide(): UseRideReturn {
-  const { dbUser, role } = useAuth();
+  const { dbUser, role, profile } = useAuth();
 
   // Zustand store
   const { setRide, resetRide, setAuction, resetAuction, setPostRide, resetPostRide, showToast } = useAppStore();
@@ -50,11 +59,17 @@ export function useRide(): UseRideReturn {
   const unsubRef       = useRef<(() => void) | null>(null);
   const driverLocUnsub = useRef<(() => void) | null>(null);
   const prevStatusRef  = useRef<RideStatus>(RideStatus.IDLE);
+  const autoSharedRideRef = useRef<string | null>(null);
   // Ref para guardar distância e duração da corrida activa (para PostRideReview)
   const rideDetailsRef = useRef<{ distanceKm: number | null; durationMin: number | null }>({
     distanceKm:  null,
     durationMin: null,
   });
+  let applyDbRide: (ride: DbRide & { driver_name?: string; passenger_name?: string }) => void = () => {};
+  let subscribeToRide: (rideId: string, driverId?: string) => void = () => {};
+  const clearRideDetails = useCallback(() => {
+    rideDetailsRef.current = { distanceKm: null, durationMin: null };
+  }, []);
 
   // ── Carregar corrida activa ao iniciar sessão ────────────────────────────
   useEffect(() => {
@@ -65,6 +80,7 @@ export function useRide(): UseRideReturn {
         applyDbRide(active);
         subscribeToRide(active.id, active.driver_id ?? undefined);
       } else {
+        clearRideDetails();
         resetRide();
       }
     })();
@@ -72,8 +88,9 @@ export function useRide(): UseRideReturn {
     return () => {
       unsubRef.current?.();
       driverLocUnsub.current?.();
+      clearRideDetails();
     };
-  }, [dbUser?.id]);
+  }, [dbUser?.id, clearRideDetails, resetRide]);
 
   // ── Detectar transição para COMPLETED → activar review ──────────────────
   // ✅ BUG #5 CORRIGIDO: setTimeout com cleanup e guarda de montagem
@@ -118,8 +135,52 @@ export function useRide(): UseRideReturn {
     }
   }, [ride.status, setPostRide, ride.rideId, ride.driverId, ride.driverName, ride.driverRating, ride.priceKz]);
 
+  useEffect(() => {
+    const justStarted =
+      prevStatusRef.current === RideStatus.IN_PROGRESS &&
+      ride.status === RideStatus.IN_PROGRESS;
+
+    if (!ride.rideId || ride.status !== RideStatus.IN_PROGRESS || !dbUser?.id) {
+      return;
+    }
+
+    if (ride.passengerId !== dbUser.id) {
+      return;
+    }
+
+    if (!profile?.emergency_contact_phone) {
+      return;
+    }
+
+    if (autoSharedRideRef.current === ride.rideId && justStarted) {
+      return;
+    }
+
+    autoSharedRideRef.current = ride.rideId;
+
+    rideService.autoShareLiveTrackingOnRideStart({
+      rideId: ride.rideId,
+      ownerUserId: dbUser.id,
+      emergencyPhone: profile.emergency_contact_phone,
+      driverName: ride.driverName,
+      pickup: ride.pickup,
+      destination: ride.destination,
+    }).catch((shareError) => {
+      console.warn('[useRide] Falha na partilha live automatica:', shareError);
+    });
+  }, [
+    dbUser?.id,
+    profile?.emergency_contact_phone,
+    ride.destination,
+    ride.driverName,
+    ride.passengerId,
+    ride.pickup,
+    ride.rideId,
+    ride.status,
+  ]);
+
   // ── applyDbRide ──────────────────────────────────────────────────────────
-  const applyDbRide = useCallback((r: DbRide & { driver_name?: string; passenger_name?: string }) => {
+  applyDbRide = useCallback((r: DbRide & { driver_name?: string; passenger_name?: string }) => {
     rideDetailsRef.current = {
       distanceKm:  r.distance_km  ?? null,
       durationMin: r.duration_min ?? null,
@@ -127,6 +188,7 @@ export function useRide(): UseRideReturn {
     setRide({
       status:          r.status as RideStatus,
       rideId:          r.id,
+      passengerId:     r.passenger_id,
       pickup:          r.origin_address,
       destination:     r.dest_address,
       pickupCoords:    { lat: r.origin_lat, lng: r.origin_lng },
@@ -141,7 +203,7 @@ export function useRide(): UseRideReturn {
   }, [setRide]);
 
   // ── subscribeToRide ──────────────────────────────────────────────────────
-  const subscribeToRide = useCallback((rideId: string, driverId?: string) => {
+  subscribeToRide = useCallback((rideId: string, driverId?: string) => {
     unsubRef.current?.();
     driverLocUnsub.current?.();
     driverLocUnsub.current = null;
@@ -165,6 +227,7 @@ export function useRide(): UseRideReturn {
       setRide({
         status:          updated.status as RideStatus,
         rideId:          updated.id,
+        passengerId:     updated.passenger_id,
         pickup:          updated.origin_address,
         destination:     updated.dest_address,
         pickupCoords:    { lat: updated.origin_lat, lng: updated.origin_lng },
@@ -188,10 +251,23 @@ export function useRide(): UseRideReturn {
       if (updated.status === RideStatus.COMPLETED || updated.status === RideStatus.CANCELLED) {
         driverLocUnsub.current?.();
         driverLocUnsub.current = null;
-        setTimeout(() => {
-          if (updated.status !== RideStatus.COMPLETED) resetRide();
+
+        if (updated.status === RideStatus.COMPLETED) {
+          // Capturar a referência ANTES do timeout para evitar cancelar subscriptions futuras.
+          // Se uma nova corrida começar nos próximos 5s, unsubRef.current já foi anulado
+          // e o timeout apenas chama a limpeza da corrida terminada.
+          const completedUnsub = unsubRef.current;
+          unsubRef.current = null;
+          setTimeout(() => {
+            completedUnsub?.();
+          }, 5000);
+        } else {
+          // Se for cancelado, limpa IMEDIATAMENTE (sem delay/refresh)
+          clearRideDetails();
+          resetRide();
           unsubRef.current?.();
-        }, updated.status === RideStatus.COMPLETED ? 5000 : 2000);
+          unsubRef.current = null;
+        }
       }
     });
 
@@ -202,7 +278,7 @@ export function useRide(): UseRideReturn {
         (coords) => setRide({ carLocation: coords })
       );
     }
-  }, [setRide, resetRide]);
+  }, [clearRideDetails, setRide, resetRide]);
 
   // ── startAuction ─────────────────────────────────────────────────────────
   const startAuction = useCallback(async (pickupCoords: LatLng) => {
@@ -226,10 +302,13 @@ export function useRide(): UseRideReturn {
 
   // ── requestRide ───────────────────────────────────────────────────────────
   const requestRide = useCallback(async (
-    pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng, proposedPrice?: number
+    pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng,
+    proposedPrice?: number, distanceKm?: number, durationMin?: number,
+    vehicleType?: 'standard' | 'moto' | 'comfort' | 'xl'
   ) => {
     if (!dbUser?.id) { setError({ code: 'not_auth', message: 'Precisas de fazer login.' }); return; }
 
+    clearRideDetails();
     setLoading(true); setError(null);
 
     try {
@@ -256,6 +335,9 @@ export function useRide(): UseRideReturn {
         dest_lng:           rDest.lng,
         selected_driver_id: auction.selectedDriver?.driver_id,
         proposed_price:     proposedPrice,
+        distance_km:        distanceKm,
+        duration_min:       durationMin,
+        vehicle_type:       vehicleType ?? 'standard',
       });
 
       if (e || !data) {
@@ -272,7 +354,7 @@ export function useRide(): UseRideReturn {
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, auction.selectedDriver, subscribeToRide, applyDbRide, resetAuction, showToast]);
+  }, [dbUser?.id, auction.selectedDriver, subscribeToRide, applyDbRide, resetAuction, showToast, clearRideDetails]);
 
   // ── cancelRide ────────────────────────────────────────────────────────────
   const cancelRide = useCallback(async (reason?: string) => {
@@ -282,14 +364,15 @@ export function useRide(): UseRideReturn {
       const err = await rideService.cancelRide(ride.rideId, dbUser.id, reason);
       if (err) { showToast(err.message, 'error'); return; }
       driverLocUnsub.current?.(); driverLocUnsub.current = null;
+      unsubRef.current?.(); unsubRef.current = null;
+      clearRideDetails();
       resetRide();
       resetAuction();
-      unsubRef.current?.();
       showToast('Corrida cancelada.', 'info');
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, ride.rideId, resetRide, resetAuction, showToast]);
+  }, [dbUser?.id, ride.rideId, resetRide, resetAuction, showToast, clearRideDetails]);
 
   // ── acceptRide ────────────────────────────────────────────────────────────
   const acceptRide = useCallback(async (rideId: string) => {
@@ -334,12 +417,13 @@ export function useRide(): UseRideReturn {
       const err = await rideService.driverDeclineRide(rideId, dbUser.id);
       if (err) { showToast(err.message, 'error'); return; }
       driverLocUnsub.current?.(); driverLocUnsub.current = null;
+      unsubRef.current?.(); unsubRef.current = null;
+      clearRideDetails();
       resetRide();
-      unsubRef.current?.();
     } catch {
       showToast('Erro ao recusar corrida.', 'error');
     }
-  }, [dbUser?.id, resetRide, showToast]);
+  }, [dbUser?.id, resetRide, showToast, clearRideDetails]);
 
   // ── advanceStatus ─────────────────────────────────────────────────────────
   const advanceStatus = useCallback(async (status: RideStatus) => {
@@ -366,17 +450,19 @@ export function useRide(): UseRideReturn {
       });
       if (err) { showToast(err.message, 'error'); return; }
       resetPostRide();
+      clearRideDetails();
       resetRide();
       showToast('Avaliação enviada. Obrigado!', 'success');
     } catch {
       showToast('Erro ao enviar avaliação.', 'error');
     }
-  }, [dbUser?.id, postRide, resetPostRide, resetRide, showToast]);
+  }, [dbUser?.id, postRide, resetPostRide, resetRide, showToast, clearRideDetails]);
 
   const dismissPostRide = useCallback(() => {
     resetPostRide();
+    clearRideDetails();
     resetRide();
-  }, [resetPostRide, resetRide]);
+  }, [resetPostRide, resetRide, clearRideDetails]);
 
   return {
     ride, auction, postRide, loading, error,

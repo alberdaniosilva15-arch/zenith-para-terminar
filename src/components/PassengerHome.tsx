@@ -16,22 +16,28 @@ import RoutePreview from './passenger/RoutePreview';
 import AuctionList from './passenger/AuctionList';
 import RideRequestForm from './passenger/RideRequestForm';
 import ActiveRideCard from './passenger/ActiveRideCard';
-const ScheduleRide = React.lazy(() => import('./passenger/ScheduleRide'));
-const Map3D = React.lazy(() => import('./Map3D'));
-const AgoraCall = React.lazy(() => import('./AgoraCall'));
 import KazePreditivo  from './KazePreditivo';
 import FreePerkBanner from './FreePerkBanner';
+import PrivateDriverModal from './passenger/PrivateDriverModal';
+import CharterModal from './passenger/CharterModal';
+import CargoModal from './passenger/CargoModal';
 import { ReferralModal } from './ReferralModal';
-import ZonePriceMap   from './ZonePriceMap';
+const ZonePriceMap = React.lazy(() => import('./ZonePriceMap'));
 import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
 import { zonePriceService } from '../services/zonePrice';
 import { rideService } from '../services/rideService';
 import { routeService, RouteResult } from '../services/routeService';
 import { supabase } from '../lib/supabase';
+import { useIdleMount } from '../hooks/useIdleMount';
+import { useSilentTripleTap } from '../hooks/useSilentTripleTap';
 import { MapSingleton } from '../lib/mapInstance';
 import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
-import type { RideState, AuctionState, AuctionDriver, LocationResult, LatLng } from '../types';
+import type { RideState, AuctionState, AuctionDriver, LocationResult, LatLng, ServiceType } from '../types';
 import { RideStatus, UserRole } from '../types';
+
+const ScheduleRide = React.lazy(() => import('./passenger/ScheduleRide'));
+const Map3D = React.lazy(() => import('./Map3D'));
+const AgoraCall = React.lazy(() => import('./AgoraCall'));
 
 interface PassengerHomeProps {
   ride:            RideState;
@@ -40,10 +46,20 @@ interface PassengerHomeProps {
   onStartAuction:  (pickupCoords: LatLng) => Promise<void>;
   onSelectDriver:  (driver: AuctionDriver) => void;
   onCancelAuction: () => void;
-  onRequestRide:   (pickup: string, pickupCoords: LatLng, dest: string, destCoords: LatLng, proposedPrice?: number) => Promise<void>;
+  onRequestRide:   (
+    pickup: string,
+    pickupCoords: LatLng,
+    dest: string,
+    destCoords: LatLng,
+    proposedPrice?: number,
+    distanceKm?: number,
+    durationMin?: number,
+    vehicleType?: Extract<ServiceType, 'standard' | 'moto' | 'comfort' | 'xl'>
+  ) => Promise<void>;
   onCancelRide:    (reason?: string) => Promise<void>;
   dataSaver:       boolean;
   emergencyPhone?: string;
+  isVisible?:      boolean;
 }
 
 interface RouteInfo {
@@ -52,10 +68,14 @@ interface RouteInfo {
   isReal:      boolean;   // true = vem da Directions API (estrada), false = Haversine
 }
 
+type StandardVehicleType = Extract<ServiceType, 'standard' | 'moto' | 'comfort' | 'xl'>;
+type PremiumServiceType = Extract<ServiceType, 'private_driver' | 'charter' | 'cargo'>;
+
 const PassengerHome: React.FC<PassengerHomeProps> = ({
   ride, auction, userId,
   onStartAuction, onSelectDriver, onCancelAuction,
-  onRequestRide, onCancelRide, dataSaver, emergencyPhone
+  onRequestRide, onCancelRide, dataSaver, emergencyPhone,
+  isVisible = true,
 }) => {
   const navigate = useNavigate();
   const [selecting,    setSelecting]    = useState<'pickup' | 'dest' | null>(null);
@@ -84,15 +104,20 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     traffic_multiplier: number;
   } | null>(null);
   const [calculating,  setCalculating]  = useState(false);
-  const [priceTimer,   setPriceTimer]   = useState<number>(0);
+  const [fareExpiresAt, setFareExpiresAt] = useState<number | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
   const [showReferral, setShowReferral] = useState(false);
+  const [selectedVehicle, setSelectedVehicle] = useState<StandardVehicleType>('standard');
+  const [openPremiumService, setOpenPremiumService] = useState<PremiumServiceType | null>(null);
+  const [silentPanicSignal, setSilentPanicSignal] = useState(0);
+  const shouldMountMap = useIdleMount(isVisible);
 
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeDrawnRef     = useRef(false); // evita redesenhar a mesma rota
 
   // ── GPS AUTOMÁTICO ao montar — o mapa centra no utilizador sem clicar nada ──
   useEffect(() => {
+    if (!isVisible) return; // Suspender GPS quando em background
     let cancelled = false;
     mapService.getCurrentPosition()
       .then(async (coords) => {
@@ -114,11 +139,11 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
         }
       });
     return () => { cancelled = true; };
-  }, []); // executa UMA vez ao montar
+  }, [isVisible]); // executa quando visível pela primeira vez
 
   // ── Quando destino muda: calcular ROTA REAL via Mapbox Directions ──────────
   useEffect(() => {
-    if (!pickupCoords || !destCoords) {
+    if (!isVisible || !pickupCoords || !destCoords) {
       setRouteInfo(null);
       routeDrawnRef.current = false;
       // Limpar rota do mapa se destino foi removido
@@ -133,47 +158,54 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     const quickEstimate = mapService.calculateRouteInfo(pickupCoords, destCoords);
     setRouteInfo({ ...quickEstimate, isReal: false });
 
-    // Buscar rota REAL via Mapbox Directions API
-    mapService.getRouteDistance(pickupCoords, destCoords)
-      .then((real) => {
-        if (cancelled) return;
-        setRouteInfo({
-          distanceKm:  real.distanceKm,
-          durationMin: real.durationMin,
-          isReal:      real.geometry !== null,
-        });
-
-        // Desenhar rota no mapa (esperar que esteja pronto)
-        const validGeo = real.geometry;
-        if (validGeo && !routeDrawnRef.current) {
-          MapSingleton.onReady((map) => {
-            if (routeDrawnRef.current) return;
-            clearRoute(map);
-          drawRoute(map, {
-            distanceKm:      real.distanceKm,
-            durationMinutes: real.durationMin,
-            durationText:    real.durationMin < 60
-              ? `${real.durationMin} min`
-              : `${Math.floor(real.durationMin / 60)}h ${real.durationMin % 60}min`,
-            geojson: {
-              type: 'Feature',
-              geometry: validGeo,
-              properties: {},
-            },
-            bbox: calculateBBox(validGeo.coordinates as [number, number][]),
-            });
-            routeDrawnRef.current = true;
+    // DEBOUNCE: Aguardar 800ms antes de chamar a API real do Mapbox
+    // Evita congelamentos quando o GPS varia muito ou enquanto se pesquisa
+    const timerId = setTimeout(() => {
+      // Buscar rota REAL via Mapbox Directions API
+      mapService.getRouteDistance(pickupCoords, destCoords)
+        .then((real) => {
+          if (cancelled) return;
+          setRouteInfo({
+            distanceKm:  real.distanceKm,
+            durationMin: real.durationMin,
+            isReal:      real.geometry !== null,
           });
-        }
 
-        setRouteLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) setRouteLoading(false);
-      });
+          // Desenhar rota no mapa (esperar que esteja pronto)
+          const validGeo = real.geometry;
+          if (validGeo && !routeDrawnRef.current) {
+            MapSingleton.onReady((map) => {
+              if (routeDrawnRef.current) return;
+              clearRoute(map);
+              drawRoute(map, {
+                distanceKm:      real.distanceKm,
+                durationMinutes: real.durationMin,
+                durationText:    real.durationMin < 60
+                  ? `${real.durationMin} min`
+                  : `${Math.floor(real.durationMin / 60)}h ${real.durationMin % 60}min`,
+                geojson: {
+                  type: 'Feature',
+                  geometry: validGeo,
+                  properties: {},
+                },
+                bbox: calculateBBox(validGeo.coordinates as [number, number][]),
+              });
+              routeDrawnRef.current = true;
+            });
+          }
 
-    return () => { cancelled = true; };
-  }, [pickupCoords, destCoords]);
+          setRouteLoading(false);
+        })
+        .catch(() => {
+          if (!cancelled) setRouteLoading(false);
+        });
+    }, 800);
+
+    return () => { 
+      cancelled = true; 
+      clearTimeout(timerId);
+    };
+  }, [pickupCoords, destCoords, isVisible]);
 
   // Reset do flag de rota desenhada quando coords mudam
   useEffect(() => {
@@ -182,7 +214,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   // ── Buscar motoristas próximos para mostrar contador ─────────────────────────
   useEffect(() => {
-    if (!pickupCoords) { setNearbyCount(null); return; }
+    if (!isVisible || !pickupCoords) { setNearbyCount(null); return; }
     let cancelled = false;
     rideService.findNearbyDrivers(pickupCoords, 8).then(drivers => {
       if (!cancelled) setNearbyCount(drivers.length);
@@ -216,6 +248,13 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   useEffect(() => {
     return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
   }, []);
+
+  useSilentTripleTap({
+    enabled: isVisible && !!ride.rideId && (
+      ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.IN_PROGRESS
+    ),
+    onTrigger: () => setSilentPanicSignal((value) => value + 1),
+  });
 
   const selectLocation = async (loc: LocationResult) => {
     if (selecting === 'pickup') {
@@ -289,7 +328,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           p_origin_lng:     pickupCoords.lng,
           p_dest_lat:       destCoords.lat,
           p_dest_lng:       destCoords.lng,
-          p_service_tier:   'standard',
+          p_service_tier:   selectedVehicle,
           p_supply_count:   nearbyCount ?? 5,
           p_demand_count:   5,
           p_is_night:       isNight,
@@ -301,7 +340,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       if (fareError) throw new Error('Erro ao calcular preço. O servidor não respondeu.');
       if (fare && fare.error) throw new Error(fare.error);
       setFareData(fare);
-      setPriceTimer(120); // 2 minutos de lock
+      setFareExpiresAt(Date.now() + 120 * 1000); // 2 minutos de lock
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao calcular rota. Verifica a tua ligação.';
       alert(`❌ ${msg}`);
@@ -343,27 +382,22 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     await handleShowDrivers();
   };
 
-  // ── Countdown do lock de preço (2 minutos) ────────────────────────────────
-  useEffect(() => {
-    if (priceTimer <= 0) return;
-    const interval = setInterval(() => {
-      setPriceTimer(prev => {
-        if (prev <= 1) {
-          setFareData(null);
-          setRouteData(null);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [priceTimer]);
+  // O Countdown foi movido para dentro do RideRequestForm para evitar re-renders do ecrã todo
 
   // ── Confirmar motorista escolhido ───────────────────────────────────────────
   const handleConfirmDriver = async () => {
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
-    await onRequestRide(pickupName, pickupCoords, destName, destCoords);
+    await onRequestRide(
+      pickupName,
+      pickupCoords,
+      destName,
+      destCoords,
+      undefined,
+      routeData?.distanceKm,
+      routeData?.durationMin,
+      selectedVehicle,
+    );
     setLoadingRide(false);
   };
 
@@ -371,7 +405,16 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const handleRequestNormalRide = async (finalPriceKz: number) => {
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
-    await onRequestRide(pickupName, pickupCoords, destName, destCoords, finalPriceKz);
+    await onRequestRide(
+      pickupName,
+      pickupCoords,
+      destName,
+      destCoords,
+      finalPriceKz,
+      routeData?.distanceKm,
+      routeData?.durationMin,
+      selectedVehicle,
+    );
     setLoadingRide(false);
   };
 
@@ -380,13 +423,26 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     if (!pickupCoords || !destName || !destCoords || !pickupName) return;
     setLoadingRide(true);
     try {
-      await onRequestRide(pickupName, pickupCoords, destName, destCoords, proposedPrice);
+      await onRequestRide(
+        pickupName,
+        pickupCoords,
+        destName,
+        destCoords,
+        proposedPrice,
+        routeData?.distanceKm,
+        routeData?.durationMin,
+        selectedVehicle,
+      );
     } catch (e) {
       console.error('[PassengerHome] Negociação falhou:', e);
     } finally {
       setLoadingRide(false);
     }
   };
+
+  const handleOpenService = useCallback((service: PremiumServiceType) => {
+    setOpenPremiumService(service);
+  }, []);
 
   const isReady     = !!pickupName && !!destName;
   const showAuction = ride.status === RideStatus.BROWSING;
@@ -475,12 +531,18 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   return (
     <div className="relative min-h-full flex flex-col bg-[#050912]">
       <div className="absolute inset-0 z-0">
-        <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-[#050912] text-white/50 text-xs">A carregar mapa...</div>}>
-          <Map3D
-            mode="passenger"
-            center={userLocation ? [userLocation.lng, userLocation.lat] : undefined}
-          />
-        </Suspense>
+        {shouldMountMap ? (
+          <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-[#050912] text-white/50 text-xs">A carregar mapa...</div>}>
+            <Map3D
+              mode="passenger"
+              center={userLocation ? [userLocation.lng, userLocation.lat] : undefined}
+            />
+          </Suspense>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-[#050912] text-white/50 text-xs">
+            A preparar mapa...
+          </div>
+        )}
       </div>
 
       <div className="relative z-10 p-4 space-y-4 flex-1 flex flex-col">
@@ -577,7 +639,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               rideStatus={ride.status}
               fareData={fareData}
               routeData={routeData}
-              priceTimer={priceTimer}
+              fareExpiresAt={fareExpiresAt}
+              onFareExpire={() => { setFareData(null); setRouteData(null); }}
               isReady={isReady}
               searching={searching}
               calculating={calculating}
@@ -585,6 +648,9 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               onCallTaxi={handleCallTaxi}
               onConfirmRideRequest={handleRequestNormalRide}
               onNegotiate={handleNegotiate}
+              selectedVehicle={selectedVehicle}
+              onVehicleChange={setSelectedVehicle}
+              onOpenService={handleOpenService}
             />
 
             <ActiveRideCard
@@ -592,6 +658,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               userId={userId}
               routeInfo={routeInfo}
               onCancelRide={onCancelRide}
+              emergencyPhone={emergencyPhone}
+              silentPanicSignal={silentPanicSignal}
             />
 
             {/* Adicionado espaço livre para quando a doca inferior com o Kaze está presente */}
@@ -619,6 +687,39 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           <ReferralModal 
             userId={userId} 
             onClose={() => setShowReferral(false)} 
+          />
+        )}
+
+        {openPremiumService === 'private_driver' && (
+          <PrivateDriverModal
+            userId={userId}
+            pickupName={pickupName}
+            destName={destName}
+            pickupCoords={pickupCoords}
+            destCoords={destCoords}
+            onClose={() => setOpenPremiumService(null)}
+          />
+        )}
+
+        {openPremiumService === 'charter' && (
+          <CharterModal
+            userId={userId}
+            pickupName={pickupName}
+            destName={destName}
+            pickupCoords={pickupCoords}
+            destCoords={destCoords}
+            onClose={() => setOpenPremiumService(null)}
+          />
+        )}
+
+        {openPremiumService === 'cargo' && (
+          <CargoModal
+            userId={userId}
+            pickupName={pickupName}
+            destName={destName}
+            pickupCoords={pickupCoords}
+            destCoords={destCoords}
+            onClose={() => setOpenPremiumService(null)}
           />
         )}
 

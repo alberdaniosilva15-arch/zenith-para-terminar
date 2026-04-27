@@ -82,6 +82,8 @@ interface CreateRideInput {
   dest_lng:            number;
   selected_driver_id?: string;
   proposed_price?:     number;
+  distance_km?:        number;
+  duration_min?:       number;
   vehicle_type?:       'standard' | 'moto' | 'comfort' | 'xl';
   traffic_factor?:     number;
 }
@@ -90,12 +92,22 @@ interface RideUpdateResult { data: DbRide | null; error: AppError | null; }
 
 // ─── Rate limiter (por userId, 5 req / 60s) ──────────────────────────────────
 const rideRateTracker = new Map<string, number[]>();
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function checkRideRateLimit(userId: string): boolean {
   const now        = Date.now();
   const timestamps = (rideRateTracker.get(userId) ?? []).filter(ts => now - ts < 60_000);
   if (timestamps.length >= 5) return false;
   rideRateTracker.set(userId, [...timestamps, now]);
   return true;
+}
+
+function isUuid(value: string): boolean {
+  return UUID_REGEX.test(value);
+}
+
+function isEliteDriver(level: string | undefined, zenithScore: number): boolean {
+  return level === 'Diamante' && zenithScore >= 800;
 }
 
 // ─── Classe Principal ────────────────────────────────────────────────────────
@@ -150,15 +162,17 @@ class RideService {
           driver_id: string; driver_name: string; rating: number;
           distance_m: number; avatar_url?: string | null;
           total_rides?: number; level?: string; heading?: number | null;
+          zenith_score?: number;
           motogo_score?: number;
         }>;
 
         const scored = rows.map(row => {
           const rating      = typeof row.rating === 'number' ? row.rating : 5.0;
-          const distScore   = row.distance_m * 0.5;
-          const ratingScore = (5 - rating) * 500 * 0.3;
-          const motogoScore = row.motogo_score ?? 500;
-          const consist     = (1 - motogoScore / 1000) * 200 * 0.2;
+          const distScore   = row.distance_m * 0.48;
+          const ratingScore = (5 - rating) * 500 * 0.24;
+          const zenithScore = row.zenith_score ?? row.motogo_score ?? 500;
+          const zenithPenalty = (1000 - zenithScore) * 0.08;
+          const elite = isEliteDriver(row.level, zenithScore);
           return {
             driver_id:    row.driver_id,
             driver_name:  row.driver_name,
@@ -169,8 +183,9 @@ class RideService {
             distance_m:   row.distance_m,
             eta_min:      Math.ceil(row.distance_m / 400),
             heading:      row.heading ?? null,
-            motogo_score: motogoScore,
-            _score:       distScore + ratingScore + consist,
+            zenith_score: zenithScore,
+            is_elite:     elite,
+            _score:       distScore + ratingScore + zenithPenalty + (elite ? -90 : 0),
           };
         });
 
@@ -228,15 +243,16 @@ class RideService {
         const rawDrivers = data as Array<{
           driver_id: string; driver_name: string; rating: number; distance_m: number;
           avatar_url?: string | null; total_rides?: number; level?: string;
-          eta_min?: number; heading?: number | null; motogo_score?: number;
+          eta_min?: number; heading?: number | null; zenith_score?: number; motogo_score?: number;
         }>;
 
         const scored = rawDrivers.map(row => {
           const rating      = typeof row.rating === 'number' ? row.rating : 5.0;
-          const distScore   = row.distance_m * 0.5;
-          const ratingScore = (5 - rating) * 500 * 0.3;
-          const motogoScore = row.motogo_score ?? 500;
-          const consist     = (1 - motogoScore / 1000) * 200 * 0.2;
+          const distScore   = row.distance_m * 0.48;
+          const ratingScore = (5 - rating) * 500 * 0.24;
+          const zenithScore = row.zenith_score ?? row.motogo_score ?? 500;
+          const zenithPenalty = (1000 - zenithScore) * 0.08;
+          const elite = isEliteDriver(row.level, zenithScore);
           return {
             driver_id:    row.driver_id,
             driver_name:  row.driver_name,
@@ -247,8 +263,9 @@ class RideService {
             distance_m:   row.distance_m,
             eta_min:      row.eta_min ?? Math.ceil(row.distance_m / 400),
             heading:      row.heading ?? null,
-            motogo_score: motogoScore,
-            _score:       distScore + ratingScore + consist,
+            zenith_score: zenithScore,
+            is_elite:     elite,
+            _score:       distScore + ratingScore + zenithPenalty + (elite ? -90 : 0),
           };
         });
 
@@ -271,23 +288,41 @@ class RideService {
     try {
       const { data: locations } = await supabase
         .from('driver_locations')
-        .select('driver_id, heading, status, location')
+        .select('driver_id, heading, status, location, updated_at')
         .eq('status', 'available')
-        .limit(8);
+        .order('updated_at', { ascending: false })
+        .limit(50);
 
       if (!locations || locations.length === 0) return [];
 
       const driverIds = locations.map((d: { driver_id: string }) => d.driver_id);
+      const { data: activeRides } = await supabase
+        .from('rides')
+        .select('driver_id')
+        .in('driver_id', driverIds)
+        .in('status', [RideStatus.ACCEPTED, RideStatus.PICKING_UP, RideStatus.IN_PROGRESS]);
+
+      const busyDriverIds = new Set(
+        (activeRides ?? [])
+          .map((ride: { driver_id: string | null }) => ride.driver_id)
+          .filter((driverId): driverId is string => !!driverId),
+      );
+
+      const availableLocations = locations.filter(
+        (loc: { driver_id: string }) => !busyDriverIds.has(loc.driver_id),
+      );
+      if (availableLocations.length === 0) return [];
+
       const { data: profiles } = await supabase
         .from('profiles')
         .select('user_id, name, avatar_url, rating, total_rides, level')
-        .in('user_id', driverIds);
+        .in('user_id', availableLocations.map((d: { driver_id: string }) => d.driver_id));
 
       return (profiles ?? []).map((p: {
         user_id: string; name: string; avatar_url: string | null;
         rating: number; total_rides: number; level: string;
       }) => {
-        const loc = locations.find((l: { driver_id: string }) => l.driver_id === p.user_id);
+        const loc = availableLocations.find((l: { driver_id: string }) => l.driver_id === p.user_id);
 
         // FIX 3: calcular distância real se tiver coordenadas
         let distance_m = 3000; // fallback quando sem coords
@@ -306,7 +341,8 @@ class RideService {
           distance_m:   Math.round(distance_m),
           eta_min:      Math.ceil(distance_m / 400),
           heading:      loc?.heading ?? null,
-          motogo_score: 500,
+          zenith_score: 500,
+          is_elite:     false,
         };
       }).sort((a, b) => a.distance_m - b.distance_m);
 
@@ -326,17 +362,70 @@ class RideService {
     if (input.origin_lat == null || input.origin_lng == null || input.dest_lat == null || input.dest_lng == null) {
       return { data: null, error: { code: 'validation', message: 'Coordenadas inválidas.' } };
     }
+    if (input.selected_driver_id && !isUuid(input.selected_driver_id)) {
+      return { data: null, error: { code: 'validation', message: 'ID de motorista inválido.' } };
+    }
 
     try {
-      const estimate = await this.getPriceEstimate(
-        { lat: input.origin_lat, lng: input.origin_lng },
-        { lat: input.dest_lat,   lng: input.dest_lng }
-      );
-      if (!estimate) {
-        return { data: null, error: { code: 'price_error', message: 'Não foi possível calcular o preço.' } };
+      // v3.5 PERFORMANCE FIX: Se o frontend já calculou distância/duração/preço,
+      // usa-os directamente em vez de chamar a Edge Function (que demora 5-8s).
+      // O preço já foi validado pelo RPC calculate_fare_engine_pro no PassengerHome.
+      let distance_km  = input.distance_km;
+      let duration_min = input.duration_min;
+      let price_kz     = input.proposed_price;
+      let surge        = 1.0;
+
+      if (!distance_km || !price_kz) {
+        // Fallback local ultra-rápido (Haversine) — sem rede
+        const fallback = this._localPriceEstimate(
+          { lat: input.origin_lat, lng: input.origin_lng },
+          { lat: input.dest_lat,   lng: input.dest_lng }
+        );
+        distance_km  = distance_km  ?? fallback.distance_km;
+        duration_min = duration_min ?? fallback.duration_min;
+        price_kz     = price_kz     ?? fallback.price_kz;
+        surge        = fallback.surge_multiplier;
       }
 
-      const isAuction = !!input.selected_driver_id;
+      if (input.selected_driver_id) {
+        const { data, error } = await supabase.rpc('create_selected_ride_atomic', {
+          p_passenger_id: input.passenger_id,
+          p_driver_id: input.selected_driver_id,
+          p_origin_address: input.origin_address,
+          p_origin_lat: input.origin_lat,
+          p_origin_lng: input.origin_lng,
+          p_dest_address: input.dest_address,
+          p_dest_lat: input.dest_lat,
+          p_dest_lng: input.dest_lng,
+          p_distance_km: distance_km,
+          p_duration_min: duration_min,
+          p_surge_multiplier: surge,
+          p_price_kz: price_kz,
+          p_vehicle_type: input.vehicle_type ?? 'standard',
+          p_traffic_factor: input.traffic_factor ?? 1.0,
+        });
+
+        if (error || !data) {
+          console.error('[rideService.createRide:selected_driver]', error);
+          const reason = error?.message?.trim?.() ?? '';
+          const messageByReason: Record<string, string> = {
+            driver_not_available: 'O motorista escolhido já não está disponível.',
+            driver_active_ride: 'O motorista escolhido ficou ocupado noutra corrida.',
+            not_allowed: 'Sessão inválida para criar a corrida.',
+          };
+          return {
+            data: null,
+            error: {
+              code: error?.code ?? 'selected_driver_create_failed',
+              message: messageByReason[reason] ?? 'Não foi possível reservar o motorista escolhido.',
+            },
+          };
+        }
+
+        console.log('[rideService.createRide] Corrida criada atomicamente:', (data as DbRide).id);
+        return { data: data as DbRide, error: null };
+      }
+
       const { data, error } = await supabase.from('rides').insert({
         passenger_id:     input.passenger_id,
         origin_address:   input.origin_address,
@@ -345,13 +434,13 @@ class RideService {
         dest_address:     input.dest_address,
         dest_lat:         input.dest_lat,
         dest_lng:         input.dest_lng,
-        distance_km:      estimate.distance_km,
-        duration_min:     estimate.duration_min,
-        surge_multiplier: estimate.surge_multiplier,
-        price_kz:         input.proposed_price ?? estimate.price_kz,
-        driver_id:        input.selected_driver_id ?? null,
-        status:           isAuction ? RideStatus.ACCEPTED : RideStatus.SEARCHING,
-        accepted_at:      isAuction ? new Date().toISOString() : null,
+        distance_km,
+        duration_min,
+        surge_multiplier: surge,
+        price_kz,
+        driver_id:        null,
+        status:           RideStatus.SEARCHING,
+        accepted_at:      null,
         driver_confirmed: false,
         vehicle_type:     input.vehicle_type ?? 'standard',
         traffic_factor:   input.traffic_factor ?? 1.0,
@@ -362,14 +451,8 @@ class RideService {
         return { data: null, error: { code: error.code, message: 'Não foi possível criar a corrida.' } };
       }
 
-      if (input.selected_driver_id) {
-        supabase.from('driver_locations')
-          .update({ status: 'busy' })
-          .eq('driver_id', input.selected_driver_id)
-          .then(res => { if (res.error) console.warn('[rideService.createRide] busy update failed:', res.error); });
-      }
-
       console.log('[rideService.createRide] Corrida criada:', (data as DbRide).id);
+      void this.triggerDriverWhatsAppFallback((data as DbRide).id);
       return { data: data as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.createRide] Excepção:', err);
@@ -377,7 +460,65 @@ class RideService {
     }
   }
 
+  private async triggerDriverWhatsAppFallback(rideId: string): Promise<void> {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        return;
+      }
+
+      const response = await fetch(edgeFunctionUrl('whatsapp-webhook'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          action: 'driver_fallback_for_ride',
+          ride_id: rideId,
+        }),
+        signal: AbortSignal.timeout(6000),
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        console.warn('[rideService.triggerDriverWhatsAppFallback] Falhou:', response.status, body);
+      }
+    } catch (error) {
+      console.warn('[rideService.triggerDriverWhatsAppFallback] Excepção:', error);
+    }
+  }
+
   // ── driverConfirmRide ──────────────────────────────────────────────────────
+  private async notifyPassengerRideAccepted(rideId: string): Promise<void> {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        return;
+      }
+
+      const response = await fetch(edgeFunctionUrl('whatsapp-webhook'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          action: 'passenger_ride_accepted',
+          ride_id: rideId,
+        }),
+        signal: AbortSignal.timeout(6000),
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        console.warn('[rideService.notifyPassengerRideAccepted] Falhou:', response.status, body);
+      }
+    } catch (error) {
+      console.warn('[rideService.notifyPassengerRideAccepted] Excepcao:', error);
+    }
+  }
+
   async driverConfirmRide(rideId: string, driverId: string): Promise<RideUpdateResult> {
     try {
       const { data, error } = await supabase.from('rides')
@@ -457,8 +598,8 @@ class RideService {
       }
 
       // CORRIDA ACEITE ATOMICAMENTE! Agora atualizar no frontend.
-      let rideData: any = null;
-      let rideError: any = null;
+      let rideData: DbRide | null = null;
+      let rideError: { code?: string; message?: string } | null = null;
       // Retentar a leitura da corrida até 3 vezes (delay para eventuais réplicas)
       for (let i = 0; i < 3; i++) {
         const res = await supabase.from('rides')
@@ -473,6 +614,7 @@ class RideService {
       }
 
       if (rideError || !rideData) return { data: null, error: { code: rideError?.code || 'read_fail', message: 'Corrida aceite, mas erro ao ler dados.' } };
+      void this.notifyPassengerRideAccepted(rideId);
       return { data: rideData as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.acceptRide] Excepção:', err);
@@ -495,6 +637,10 @@ class RideService {
     if (f) payload[f] = new Date().toISOString();
 
     try {
+      if (!isUuid(actorId)) {
+        return { data: null, error: { code: 'invalid_actor', message: 'Sessão inválida para actualizar a corrida.' } };
+      }
+
       let query = supabase.from('rides').update(payload).eq('id', rideId);
       if (driverOnlyStates.includes(status)) {
         query = query.eq('driver_id', actorId);
@@ -505,10 +651,44 @@ class RideService {
       const { data, error } = await query.select().single();
       if (error) return { data: null, error: { code: error.code, message: 'Erro ao actualizar estado da corrida.' } };
 
+      const updatedRide = data as DbRide;
+
+      if (status === RideStatus.IN_PROGRESS && updatedRide.driver_id) {
+        await supabase.from('driver_locations')
+          .update({
+            status: 'busy',
+            online_minutes_idle: 0,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('driver_id', updatedRide.driver_id);
+
+        if (updatedRide.passenger_id === actorId) {
+          try {
+            const { data: passengerProfile } = await supabase
+              .from('profiles')
+              .select('emergency_contact_phone')
+              .eq('user_id', updatedRide.passenger_id)
+              .maybeSingle();
+
+            if (passengerProfile?.emergency_contact_phone) {
+              await this.autoShareLiveTrackingOnRideStart({
+                rideId: updatedRide.id,
+                ownerUserId: updatedRide.passenger_id,
+                emergencyPhone: passengerProfile.emergency_contact_phone,
+              });
+            }
+          } catch (shareError) {
+            console.warn('[rideService.updateRideStatus] Partilha live automatica falhou:', shareError);
+          }
+        }
+      }
+
       if (status === RideStatus.COMPLETED || status === RideStatus.CANCELLED) {
-        const updated = data as DbRide | null;
+        const updated = updatedRide ?? null;
         if (updated?.driver_id) {
-          supabase.from('driver_locations').update({ status: 'available' }).eq('driver_id', updated.driver_id).then(() => {});
+          await supabase.from('driver_locations')
+            .update({ status: 'available', online_minutes_idle: 0, updated_at: new Date().toISOString() })
+            .eq('driver_id', updated.driver_id);
         }
         if (status === RideStatus.COMPLETED && updated?.passenger_id) {
           const distKm = (updated as unknown as { route_distance_km?: number }).route_distance_km ?? updated.distance_km ?? 0;
@@ -519,7 +699,7 @@ class RideService {
         }
       }
 
-      return { data: data as DbRide, error: null };
+      return { data: updatedRide, error: null };
     } catch (err) {
       console.error('[rideService.updateRideStatus] Excepção:', err);
       return { data: null, error: { code: 'unknown', message: 'Erro ao actualizar corrida.' } };
@@ -546,30 +726,108 @@ class RideService {
   }
 
   // ── cancelRide ─────────────────────────────────────────────────────────────
+  async ensureRideTrackingShare(
+    rideId: string,
+    ownerUserId: string,
+    baseUrl?: string,
+  ): Promise<{ publicToken: string; shareLink: string } | null> {
+    try {
+      const { data: existing } = await supabase
+        .from('ride_tracking_shares')
+        .select('public_token, expires_at')
+        .eq('ride_id', rideId)
+        .eq('owner_user_id', ownerUserId)
+        .eq('status', 'active')
+        .gte('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const origin = baseUrl ?? window.location.origin;
+      const existingToken = existing?.[0]?.public_token;
+
+      if (existingToken) {
+        return {
+          publicToken: existingToken,
+          shareLink: `${origin}/track/${existingToken}`,
+        };
+      }
+
+      const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+      const { data, error } = await supabase
+        .from('ride_tracking_shares')
+        .insert({
+          ride_id: rideId,
+          owner_user_id: ownerUserId,
+          status: 'active',
+          expires_at: expiresAt,
+        })
+        .select('public_token')
+        .single();
+
+      if (error || !data?.public_token) {
+        throw error ?? new Error('Falha ao gerar token publico.');
+      }
+
+      return {
+        publicToken: data.public_token,
+        shareLink: `${origin}/track/${data.public_token}`,
+      };
+    } catch (error) {
+      console.warn('[rideService.ensureRideTrackingShare] Falha:', error);
+      return null;
+    }
+  }
+
+  async autoShareLiveTrackingOnRideStart(params: {
+    rideId: string;
+    ownerUserId: string;
+    emergencyPhone: string;
+    driverName?: string;
+    pickup?: string;
+    destination?: string;
+  }): Promise<boolean> {
+    const share = await this.ensureRideTrackingShare(params.rideId, params.ownerUserId);
+    if (!share) {
+      return false;
+    }
+
+    const digits = params.emergencyPhone.replace(/\D/g, '');
+    const phone = digits.startsWith('244') ? digits : `244${digits}`;
+    const driverLine = params.driverName ? `🚗 Motorista: ${params.driverName}\n` : '';
+    const routeLine = params.pickup && params.destination
+      ? `📍 ${params.pickup} -> ${params.destination}\n`
+      : '';
+
+    const message = encodeURIComponent(
+      `🛡️ Zenith Ride - Corrida iniciada\n\n` +
+      `${driverLine}${routeLine}` +
+      `Segue a viagem ao vivo aqui:\n${share.shareLink}\n\n` +
+      `_Link activo por 4 horas._`,
+    );
+
+    window.open(`https://wa.me/${phone}?text=${message}`, '_blank', 'noopener,noreferrer');
+    return true;
+  }
+
   async cancelRide(rideId: string, userId: string, reason?: string): Promise<AppError | null> {
     try {
+      if (!isUuid(userId)) {
+        return { code: 'invalid_actor', message: 'Sessão inválida para cancelar a corrida.' };
+      }
       const { data, error } = await supabase.rpc('cancel_ride_safe', {
-        p_ride_id: rideId, p_user_id: userId, p_reason: reason ?? 'Cancelado',
+        p_ride_id: rideId,
+        p_user_id: userId,
+        p_reason: reason ?? 'Cancelado pelo utilizador',
       });
-      if (!error) {
-        const result = (data as Array<{ success: boolean; message: string }>)?.[0];
-        if (result?.success) return null;
-        return { code: 'cancel_denied', message: result?.message ?? 'Não foi possível cancelar.' };
+
+      if (error) {
+        console.error('[rideService.cancelRide] RPC error:', error);
+        return { code: error.code ?? 'cancel_rpc_failed', message: 'Não foi possível cancelar a corrida agora.' };
       }
-      console.warn('[rideService.cancelRide] RPC falhou, fallback directo:', error.message);
-      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
-        return { code: 'invalid_user', message: 'ID malformado' };
-      }
-      const { data: updateData, error: updateErr } = await supabase.from('rides')
-        .update({ status: RideStatus.CANCELLED, cancelled_at: new Date().toISOString(), cancel_reason: reason ?? 'Cancelado' })
-        .eq('id', rideId)
-        .or(`passenger_id.eq.${userId},driver_id.eq.${userId}`)
-        .not('status', 'in', `(${RideStatus.COMPLETED},${RideStatus.CANCELLED})`)
-        .select()
-        .single();
-        
-      if (updateErr || !updateData) return { code: updateErr?.code ?? 'unknown', message: 'A corrida já foi aceite ou cancelada.' };
-      return null;
+
+      const result = (data as Array<{ success: boolean; message: string }>)?.[0];
+      if (result?.success) return null;
+      return { code: 'cancel_denied', message: result?.message ?? 'Não foi possível cancelar.' };
     } catch (err) {
       console.error('[rideService.cancelRide] Excepção:', err);
       return { code: 'unknown', message: 'Erro ao cancelar corrida.' };
@@ -612,6 +870,7 @@ class RideService {
   // ── getRideHistory ─────────────────────────────────────────────────────────
   async getRideHistory(userId: string, page = 0, pageSize = 20): Promise<{ rides: DbRide[]; total: number }> {
     try {
+      if (!isUuid(userId)) return { rides: [], total: 0 };
       const from = page * pageSize;
       const { data, error, count } = await supabase.from('rides')
         .select('*', { count: 'exact' })

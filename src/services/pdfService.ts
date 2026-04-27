@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import { Filesystem, Directory } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { Capacitor } from '@capacitor/core';
+import type { FleetBillingEvent } from '../types';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
@@ -38,6 +39,15 @@ export interface ContractData {
   route_deviation_alert: boolean;
   max_deviation_km: number;
   parent_monitoring: boolean;
+}
+
+export interface FleetBillingPdfData {
+  fleetId: string;
+  plan: 'free' | 'pro' | 'elite';
+  activeCars: number;
+  totalSpentThisMonth: number;
+  costPerCar: number;
+  items: FleetBillingEvent[];
 }
 
 // ── Busca imagem do mapa como base64 ────────────────────────────────────────
@@ -300,6 +310,109 @@ export async function buildContractPDF(c: ContractData): Promise<string> {
   y = 255;
   doc.setFontSize(6.5); doc.setTextColor(180, 180, 180);
   doc.text('Zenith Ride \u00B7 Mobilidade Urbana Angola', W / 2, y, { align: 'center' });
+
+  return doc.output('datauristring').split(',')[1];
+}
+
+export async function buildFleetBillingPDF(data: FleetBillingPdfData): Promise<string> {
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+  const W = 210;
+  const M = 15;
+  let y = 0;
+
+  doc.setFillColor(10, 10, 10);
+  doc.rect(0, 0, W, 38, 'F');
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.setTextColor(255, 255, 255);
+  doc.text('ZENITH FLEET', M, 17);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(190, 190, 190);
+  doc.text('RELATORIO DE FATURACAO', M, 25);
+  doc.text(new Date().toLocaleDateString('pt-AO'), W - M, 25, { align: 'right' });
+
+  y = 50;
+  doc.setFillColor(248, 248, 248);
+  doc.roundedRect(M, y, W - M * 2, 30, 4, 4, 'F');
+
+  const summaryCols = [
+    { label: 'Plano', value: data.plan.toUpperCase() },
+    { label: 'Carros activos', value: String(data.activeCars) },
+    { label: 'Total do mes', value: `${Math.round(data.totalSpentThisMonth).toLocaleString('pt-AO')} Kz` },
+  ];
+  const summaryWidth = (W - M * 2) / summaryCols.length;
+
+  summaryCols.forEach((item, index) => {
+    const x = M + summaryWidth * index + summaryWidth / 2;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(130, 130, 130);
+    doc.text(item.label.toUpperCase(), x, y + 8, { align: 'center' });
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(11);
+    doc.setTextColor(20, 20, 20);
+    doc.text(item.value, x, y + 18, { align: 'center' });
+  });
+
+  y += 40;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(20, 20, 20);
+  doc.text('Resumo operacional', M, y);
+
+  y += 8;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.setTextColor(90, 90, 90);
+  doc.text(`Frota #${data.fleetId.slice(0, 8).toUpperCase()}`, M, y);
+  y += 6;
+  doc.text(`Custo medio por carro: ${Math.round(data.costPerCar).toLocaleString('pt-AO')} Kz`, M, y);
+  y += 10;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text('Historico de cobrancas', M, y);
+  y += 6;
+
+  doc.setFillColor(245, 245, 245);
+  doc.roundedRect(M, y, W - M * 2, 10, 2, 2, 'F');
+  doc.setFontSize(8);
+  doc.setTextColor(100, 100, 100);
+  doc.text('MES', M + 4, y + 6.5);
+  doc.text('PLANO', M + 64, y + 6.5);
+  doc.text('CARROS', M + 108, y + 6.5);
+  doc.text('VALOR', W - M - 4, y + 6.5, { align: 'right' });
+  y += 14;
+
+  data.items.forEach((item) => {
+    if (y > 270) {
+      doc.addPage();
+      y = 20;
+    }
+
+    doc.setDrawColor(235, 235, 235);
+    doc.line(M, y + 7, W - M, y + 7);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(30, 30, 30);
+    doc.text(
+      new Date(item.billing_month).toLocaleDateString('pt-AO', { month: 'short', year: 'numeric' }),
+      M + 4,
+      y + 4,
+    );
+    doc.text(item.plan.toUpperCase(), M + 64, y + 4);
+    doc.text(String(item.cars_count), M + 112, y + 4);
+    doc.text(`${Math.round(item.amount_kz).toLocaleString('pt-AO')} Kz`, W - M - 4, y + 4, { align: 'right' });
+    y += 12;
+  });
+
+  y = Math.min(y + 8, 278);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.5);
+  doc.setTextColor(170, 170, 170);
+  doc.text('Zenith Fleet · Relatorio financeiro gerado automaticamente.', W / 2, y, { align: 'center' });
 
   return doc.output('datauristring').split(',')[1];
 }

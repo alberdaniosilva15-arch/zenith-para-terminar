@@ -206,14 +206,23 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
     setSending(false);
   };
 
-  // FIX: UPDATE directo (evita 404 do RPC increment_post_likes)
   const handleConfirm = async (msg: TalkMessage) => {
-    const newCount = (msg.confirmations ?? 0) + 1;
-    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, confirmations: newCount } : m));
-    await supabase
-      .from('posts')
-      .update({ likes: newCount })
-      .eq('id', msg.id);
+    const previousCount = msg.confirmations ?? 0;
+    const optimisticCount = previousCount + 1;
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, confirmations: optimisticCount } : m));
+
+    const { data, error } = await supabase.rpc('increment_post_likes', {
+      p_post_id: msg.id,
+    });
+    const nextCount = Number(data);
+
+    if (error || !Number.isFinite(nextCount) || nextCount < 0) {
+      if (error) console.error('[RideTalk] Erro ao confirmar:', error.message);
+      setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, confirmations: previousCount } : m));
+      return;
+    }
+
+    setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, confirmations: nextCount } : m));
   };
 
   // ── Gravação de voz real com MediaRecorder ───────────────────────────────────

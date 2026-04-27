@@ -5,7 +5,7 @@
 // Funcionalidades:
 //   1. Gera link público com tracking ao vivo da corrida
 //   2. Abre WhatsApp com link + nome do motorista para contacto de emergência
-//   3. Cria sessão de tracking no Supabase (tabela school_tracking_sessions reutilizada)
+//   3. Cria partilha pública própria para rides (sem reutilizar tabela escolar)
 //   4. Tudo que o passageiro precisa: 1 toque → link partilhado
 // =============================================================================
 
@@ -42,25 +42,22 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
 
     setLoading(true);
     try {
-      // Gerar token público único para o link de tracking
-      const publicToken = crypto.randomUUID();
-      const expiresAt   = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(); // 4 horas
+      const expiresAt = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(); // 4 horas
 
-      // Persistir a sessão de tracking (reutiliza tabela school_tracking_sessions)
-      await supabase.from('school_tracking_sessions').insert({
-        contract_id:   rideId, // usa rideId como referência
+      const { data, error } = await supabase.from('ride_tracking_shares').insert({
         ride_id:       rideId,
-        public_token:  publicToken,
+        owner_user_id: userId,
         status:        'active',
         expires_at:    expiresAt,
-        parent_name:   driverName ?? null,
-        parent_phone:  emergencyPhone ?? null,
-        alerts_sent:   0,
-      });
+      }).select('public_token').single();
+
+      if (error || !data?.public_token) {
+        throw error ?? new Error('Não foi possível gerar o token de rastreio.');
+      }
 
       // Construir link público
       const appBase = window.location.origin;
-      const shareLink = `${appBase}/tracking/${publicToken}`;
+      const shareLink = `${appBase}/track/${data.public_token}`;
       setLink(shareLink);
       setShared(true);
 
@@ -99,10 +96,10 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
       });
     } else if (emergencyPhone) {
       openWhatsApp(message);
-    } else {
-      // Copiar para clipboard
-      navigator.clipboard.writeText(shareLink).catch(() => {});
-    }
+      } else {
+        // Copiar para clipboard
+        navigator.clipboard.writeText(shareLink).catch(() => {});
+      }
   };
 
   const doShareFallback = () => {

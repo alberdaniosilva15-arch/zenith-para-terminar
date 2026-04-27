@@ -227,12 +227,17 @@ function computeScore(d: RawDriver): number {
   const acceptance = d.acceptance_rate     ?? 0.85;
   const cancel     = d.cancel_rate         ?? 0.05;
   const response   = d.avg_response_time_s ?? 8.0;
+  const zenithScore = d.zenith_score ?? d.motogo_score ?? 500;
+  const eliteBonus = d.level === 'Diamante' && zenithScore >= 800 ? -90 : 0;
+  const zenithPenalty = (1000 - zenithScore) * 0.08;
 
   return (d.distance_m        * 0.40)
        + ((5 - rating)        * 400  * 0.20)
        + ((1 - acceptance)    * 1000 * 0.20)
        + (cancel              * 2000 * 0.15)
-       + (response            * 8    * 0.05);
+       + (response            * 8    * 0.05)
+       + zenithPenalty
+       + eliteBonus;
 }
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -241,7 +246,10 @@ interface RawDriver {
   driver_name:          string;
   rating:               number;
   distance_m:           number;
+  level?:               string;
   heading?:             number | null;
+  zenith_score?:        number;
+  motogo_score?:        number;
   acceptance_rate?:     number;
   cancel_rate?:         number;
   avg_response_time_s?: number;

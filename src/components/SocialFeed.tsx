@@ -205,19 +205,30 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     }
   };
 
-  // FIX: UPDATE directo em vez de RPC inexistente
   const handleLike = async (post: Post) => {
     if (likedIds.has(post.id)) return;
-    const newLikes = (post.likes ?? 0) + 1;
+    const previousLikes = post.likes ?? 0;
+    const optimisticLikes = previousLikes + 1;
     setLikedIds(prev => new Set([...prev, post.id]));
-    setPosts(prev => prev.map(p => p.id === post.id ? { ...p, likes: newLikes } : p));
+    setPosts(prev => prev.map(p => p.id === post.id ? { ...p, likes: optimisticLikes } : p));
 
-    const { error } = await supabase
-      .from('posts')
-      .update({ likes: newLikes })
-      .eq('id', post.id);
+    const { data, error } = await supabase.rpc('increment_post_likes', {
+      p_post_id: post.id,
+    });
+    const nextLikes = Number(data);
 
-    if (error) console.error('[SocialFeed] Erro ao dar like:', error.message);
+    if (error || !Number.isFinite(nextLikes) || nextLikes < 0) {
+      if (error) console.error('[SocialFeed] Erro ao dar like:', error.message);
+      setLikedIds(prev => {
+        const next = new Set(prev);
+        next.delete(post.id);
+        return next;
+      });
+      setPosts(prev => prev.map(p => p.id === post.id ? { ...p, likes: previousLikes } : p));
+      return;
+    }
+
+    setPosts(prev => prev.map(p => p.id === post.id ? { ...p, likes: nextLikes } : p));
   };
 
   const timeAgo = (ts: number) => {
@@ -234,8 +245,21 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     if (remaining <= 0) return 'expirado';
     const hours = Math.floor(remaining / 3600000);
     const mins  = Math.floor((remaining % 3600000) / 60000);
-    if (hours > 0) return `${hours}h ${mins}m restantes`;
-    return `${mins}m restantes`;
+    if (hours > 0) return `⏱ ${hours}h restantes`;
+    return `⏱ ${Math.max(mins, 1)}min`;
+  };
+
+  const expiryProgress = (timestamp: number, expiresAt: number | null | undefined) => {
+    if (!expiresAt) return null;
+
+    const totalWindow = Math.max(expiresAt - timestamp, 1);
+    const remaining = Math.max(0, expiresAt - Date.now());
+    const progress = Math.max(6, Math.min(100, Math.round((remaining / totalWindow) * 100)));
+
+    return {
+      progress,
+      urgent: remaining < 3600000,
+    };
   };
 
   return (
@@ -364,9 +388,22 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
             <p className="text-xs text-on-surface-variant/50 mt-1 font-bold">Sê o primeiro a partilhar um alerta!</p>
           </div>
         ) : (
-          posts.map(post => (
+          posts.map(post => {
+            const expiry = expiryProgress(post.timestamp, post.expiresAt);
+            return (
             <div key={post.id}
-              className="bg-surface-container-low p-4 rounded-2xl shadow-sm border border-outline-variant/20 animate-in fade-in duration-300">
+              className={`bg-surface-container-low p-4 rounded-2xl shadow-sm border border-outline-variant/20 animate-in fade-in duration-300 overflow-hidden ${
+                expiry?.urgent ? 'opacity-70' : ''
+              }`}>
+
+              {expiry && (
+                <div className="mb-4 -mx-4 -mt-4 h-1 bg-white/5">
+                  <div
+                    className={`h-full ${expiry.urgent ? 'bg-red-400' : 'bg-primary'}`}
+                    style={{ width: `${expiry.progress}%` }}
+                  />
+                </div>
+              )}
 
               <div className="flex justify-between items-start mb-3">
                 <div className="flex gap-3 items-center">
@@ -401,7 +438,6 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
                         ? 'bg-red-500/15 text-red-400 animate-pulse'
                         : 'bg-surface-container text-on-surface-variant/50'
                     }`}>
-                      <Clock className="w-2.5 h-2.5" />
                       {timeRemaining(post.expiresAt)}
                     </span>
                   )}
@@ -457,7 +493,7 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
                 </button>
               </div>
             </div>
-          ))
+          )})
         )}
       </div>
     </div>

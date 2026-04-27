@@ -154,7 +154,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         >
           <div className="flex items-center gap-2 mb-2">
             <span className="w-2 h-2 rounded-full bg-primary animate-ping" />
-            <p className="text-[10px] font-black text-primary uppercase tracking-widest">Kaze · Lukeni</p>
+            <p className="text-[10px] font-black text-primary uppercase tracking-widest">Kaze - Zenith Ride</p>
           </div>
           <p className="text-xs font-bold italic">"{thought}"</p>
         </div>

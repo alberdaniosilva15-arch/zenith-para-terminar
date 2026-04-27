@@ -1,13 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import type { ServiceType } from '../../types';
 import { RideStatus } from '../../types';
+import ServiceCarousel from './ServiceCarousel';
 
-type VehicleType = 'standard' | 'moto' | 'comfort' | 'xl';
+type VehicleType = Extract<ServiceType, 'standard' | 'moto' | 'comfort' | 'xl'>;
+type PremiumServiceType = Extract<ServiceType, 'private_driver' | 'charter' | 'cargo'>;
 
 interface RideRequestFormProps {
   rideStatus: RideStatus;
   fareData: any;
   routeData: any;
-  priceTimer: number;
+  fareExpiresAt: number | null;
+  onFareExpire: () => void;
   isReady: boolean;
   searching: boolean;
   calculating: boolean;
@@ -16,14 +20,25 @@ interface RideRequestFormProps {
   onConfirmRideRequest: (finalPriceKz: number) => void;
   onNegotiate?: (proposedPrice: number) => void;
   selectedVehicle?: VehicleType;
-  onVehicleChange?: (v: VehicleType) => void;
+  onVehicleChange?: (vehicle: VehicleType) => void;
+  onOpenService?: (service: PremiumServiceType) => void;
 }
+
+const MOTO_INSURANCE_PRICE = 50;
+const MOTO_SAFETY_WARNING = `Por favor, certifica-te de que:
+
+- Tens capacete disponivel (obrigatorio por lei)
+- A zona de partida e chegada e segura
+- Evita distancias superiores a 20 km
+
+A Zenith recomenda moto-taxi apenas em percursos urbanos conhecidos.`;
 
 const RideRequestForm: React.FC<RideRequestFormProps> = ({
   rideStatus,
   fareData,
   routeData,
-  priceTimer,
+  fareExpiresAt,
+  onFareExpire,
   isReady,
   searching,
   calculating,
@@ -31,73 +46,97 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
   onCallTaxi,
   onConfirmRideRequest,
   onNegotiate,
-  selectedVehicle: initialVehicle = 'standard',
+  selectedVehicle: controlledVehicle,
   onVehicleChange,
+  onOpenService,
 }) => {
-  const [selectedVehicle, setSelectedVehicle] = useState<VehicleType>(initialVehicle);
+  const [localVehicle, setLocalVehicle] = useState<VehicleType>(controlledVehicle ?? 'standard');
   const [showNegotiate, setShowNegotiate] = useState(false);
   const [proposedPrice, setProposedPrice] = useState('');
   const [showMotoWarning, setShowMotoWarning] = useState(false);
   const [hasInsurance, setHasInsurance] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(0);
 
-  const MOTO_INSURANCE_PRICE = 50;
+  const selectedVehicle = controlledVehicle ?? localVehicle;
+
+  useEffect(() => {
+    if (controlledVehicle) {
+      setLocalVehicle(controlledVehicle);
+    }
+  }, [controlledVehicle]);
+
+  useEffect(() => {
+    if (!fareExpiresAt) {
+      setTimeLeft(0);
+      return;
+    }
+
+    const calculateTimeLeft = () => Math.max(0, Math.floor((fareExpiresAt - Date.now()) / 1000));
+    setTimeLeft(calculateTimeLeft());
+
+    const interval = window.setInterval(() => {
+      const remaining = calculateTimeLeft();
+      setTimeLeft(remaining);
+      if (remaining === 0) {
+        window.clearInterval(interval);
+        onFareExpire();
+      }
+    }, 1000);
+
+    return () => window.clearInterval(interval);
+  }, [fareExpiresAt, onFareExpire]);
+
   const baseFare = fareData ? Number(fareData.fare_kz) : 0;
   const finalFare = baseFare + (hasInsurance ? MOTO_INSURANCE_PRICE : 0);
 
-  const handleVehicleChange = (type: VehicleType) => {
-    if (type === 'moto' && selectedVehicle !== 'moto') {
+  const commitVehicleChange = (vehicle: VehicleType) => {
+    setLocalVehicle(vehicle);
+    onVehicleChange?.(vehicle);
+  };
+
+  const handleVehicleChange = (vehicle: VehicleType) => {
+    if (vehicle === 'moto' && selectedVehicle !== 'moto') {
       setShowMotoWarning(true);
       return;
     }
-    setSelectedVehicle(type);
-    onVehicleChange?.(type);
+
+    commitVehicleChange(vehicle);
   };
 
-  const vehicles = [
-    { type: 'standard' as VehicleType, icon: '🚗', label: 'Táxi', priceNote: 'Normal' },
-    { type: 'moto' as VehicleType, icon: '🏍️', label: 'Moto', priceNote: '-40%' },
-    { type: 'comfort' as VehicleType, icon: '🚙', label: 'Comfort', priceNote: '+40%' },
-    { type: 'xl' as VehicleType, icon: '🚐', label: 'XL', priceNote: '+80%' },
-  ];
-
-  const MOTO_SAFETY_WARNING = `Por favor, certifica-te de que:\n\n• Tens capacete disponível (obrigatório por lei)\n• A zona de partida e chegada é segura\n• Evita distâncias superiores a 20 km\n\nA Zenith recomenda moto-táxi apenas em percursos urbanos conhecidos.`;
-
-  if (rideStatus !== RideStatus.IDLE) return null;
+  if (rideStatus !== RideStatus.IDLE) {
+    return null;
+  }
 
   return (
     <div className="space-y-4">
-      {/* Selector de Tipo de Veículo */}
-      <div className="grid grid-cols-4 gap-2">
-        {vehicles.map(v => (
-          <button
-            key={v.type}
-            onClick={() => handleVehicleChange(v.type)}
-            className={`flex flex-col items-center py-3 rounded-2xl border transition-all ${
-              selectedVehicle === v.type 
-                ? 'border-primary bg-primary/10' 
-                : 'border-white/10 bg-white/5'
-            }`}
-          >
-            <span className="text-2xl">{v.icon}</span>
-            <span className="text-[10px] font-bold mt-1">{v.label}</span>
-            <span className="text-[9px] text-white/50">{v.priceNote}</span>
-          </button>
-        ))}
-      </div>
+      <ServiceCarousel
+        selectedVehicle={selectedVehicle}
+        onSelectVehicle={handleVehicleChange}
+        onOpenService={(service) => onOpenService?.(service)}
+      />
 
-      {/* Diálogo de aviso para Moto */}
       {showMotoWarning && (
-        <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-6">
-          <div className="bg-[#1a1a1a] rounded-3xl p-6 max-w-sm">
-            <p className="font-bold text-lg mb-3 text-yellow-400">⚠️ Aviso de Segurança</p>
-            <p className="text-sm text-white/80 whitespace-pre-line mb-4">{MOTO_SAFETY_WARNING}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
+          <div className="max-w-sm rounded-3xl bg-[#1a1a1a] p-6">
+            <p className="mb-3 text-lg font-bold text-yellow-400">Aviso de seguranca</p>
+            <p className="mb-4 whitespace-pre-line text-sm text-white/80">{MOTO_SAFETY_WARNING}</p>
             <div className="flex gap-3">
-              <button onClick={() => { setSelectedVehicle('standard'); setShowMotoWarning(false); }}
-                className="flex-1 py-3 border border-white/20 rounded-2xl text-sm font-bold">
+              <button
+                onClick={() => {
+                  commitVehicleChange('standard');
+                  setShowMotoWarning(false);
+                }}
+                className="flex-1 rounded-2xl border border-white/20 py-3 text-sm font-bold"
+              >
                 Cancelar
               </button>
-              <button onClick={() => { setSelectedVehicle('moto'); onVehicleChange?.('moto'); setShowMotoWarning(false); }}
-                className="flex-1 py-3 bg-yellow-500 text-black rounded-2xl text-sm font-bold">
+              <button
+                onClick={() => {
+                  commitVehicleChange('moto');
+                  setShowMotoWarning(false);
+                }}
+                className="flex-1 rounded-2xl bg-yellow-500 py-3 text-sm font-bold text-black"
+              >
                 Entendido
               </button>
             </div>
@@ -105,45 +144,46 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
         </div>
       )}
 
-      {/* Card de preço Engine Pro (aparece após calcular) */}
       {fareData && (
         <div
-          className="rounded-2xl p-5 space-y-3"
+          className="space-y-3 rounded-2xl p-5"
           style={{
             background: 'linear-gradient(135deg, #0E0E0E 0%, #1A1600 100%)',
             border: '1px solid rgba(230,195,100,0.3)',
           }}
         >
-          {/* Preço principal + Countdown */}
           <div className="flex items-end justify-between">
             <div>
-              <p className="text-[10px] uppercase tracking-widest font-bold" style={{ color: 'rgba(230,195,100,0.5)' }}>
-                Preço estimado
+              <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'rgba(230,195,100,0.5)' }}>
+                Preco estimado
               </p>
-              <p className="text-3xl font-black mt-1" style={{ color: '#E6C364' }}>
+              <p className="mt-1 text-3xl font-black" style={{ color: '#E6C364' }}>
                 {finalFare.toLocaleString('pt-AO')} Kz
               </p>
             </div>
-            {priceTimer > 0 && (
+            {timeLeft > 0 && (
               <div className="text-right">
-                <p className="text-[9px] uppercase tracking-widest font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>
-                  Preço bloqueado
+                <p className="text-[9px] font-bold uppercase tracking-widest" style={{ color: 'rgba(230,195,100,0.4)' }}>
+                  Preco bloqueado
                 </p>
                 <p className="text-sm font-mono font-bold" style={{ color: 'rgba(230,195,100,0.7)' }}>
-                  {Math.floor(priceTimer / 60)}:{String(priceTimer % 60).padStart(2, '0')}
+                  {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
                 </p>
               </div>
             )}
           </div>
 
-          {/* Badges dinâmicos */}
           {fareData.badges && (fareData.badges as string[]).length > 0 && (
             <div className="flex flex-wrap gap-2">
-              {(fareData.badges as string[]).map((badge: string, i: number) => (
+              {(fareData.badges as string[]).map((badge: string, index: number) => (
                 <span
-                  key={i}
-                  className="px-2 py-1 rounded-full text-[9px] font-black uppercase tracking-wider"
-                  style={{ background: 'rgba(230,195,100,0.12)', border: '1px solid rgba(230,195,100,0.3)', color: '#E6C364' }}
+                  key={`${badge}-${index}`}
+                  className="rounded-full px-2 py-1 text-[9px] font-black uppercase tracking-wider"
+                  style={{
+                    background: 'rgba(230,195,100,0.12)',
+                    border: '1px solid rgba(230,195,100,0.3)',
+                    color: '#E6C364',
+                  }}
                 >
                   {badge}
                 </span>
@@ -151,111 +191,110 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
             </div>
           )}
 
-          {/* Seguro MotoGo Basic Toggle */}
-          <div 
-            onClick={() => setHasInsurance(!hasInsurance)}
-            className={`flex items-center justify-between p-3 rounded-xl cursor-pointer border transition-all ${
-              hasInsurance 
-                ? 'border-primary bg-primary/10' 
+          <div
+            onClick={() => setHasInsurance((value) => !value)}
+            className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all ${
+              hasInsurance
+                ? 'border-primary bg-primary/10'
                 : 'border-white/10 bg-white/5 hover:bg-white/10'
             }`}
           >
             <div className="flex items-center gap-3">
-              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${hasInsurance ? 'border-primary bg-primary' : 'border-white/30'}`}>
-                {hasInsurance && <span className="text-white text-[10px] font-black">✓</span>}
+              <div className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${hasInsurance ? 'border-primary bg-primary' : 'border-white/30'}`}>
+                {hasInsurance && <span className="text-[10px] font-black text-white">OK</span>}
               </div>
               <div className="flex flex-col">
-                <span className="text-xs font-black text-white leading-tight">Seguro MotoGo Basic</span>
-                <span className="text-[9px] font-bold text-white/50 leading-tight">Protecção em viagem</span>
+                <span className="text-xs font-black leading-tight text-white">Seguro Zenith Basic</span>
+                <span className="text-[9px] font-bold leading-tight text-white/50">Proteccao em viagem</span>
               </div>
             </div>
             <span className="text-xs font-black text-primary">+50 Kz</span>
           </div>
 
-          {/* Detalhes da rota */}
           {routeData && (
-            <div className="flex gap-4 pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-              <div>
-                <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Distância</p>
-                <p className="text-xs font-black text-white">{routeData.distanceKm.toFixed(1)} km</p>
-              </div>
-              <div>
-                <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Tempo</p>
-                <p className="text-xs font-black text-white">~{Math.round(routeData.durationMin)} min</p>
-              </div>
+            <div className="flex gap-4 border-t pt-2" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+              <MetricBlock label="Distancia" value={`${routeData.distanceKm.toFixed(1)} km`} />
+              <MetricBlock label="Tempo" value={`~${Math.round(routeData.durationMin)} min`} />
               {routeData.trafficFactor > 1.3 && (
-                <div>
-                  <p className="text-[9px] uppercase tracking-wider font-bold" style={{ color: 'rgba(230,195,100,0.4)' }}>Trânsito</p>
-                  <p className="text-xs font-black" style={{ color: '#ff6b35' }}>Intenso</p>
-                </div>
+                <MetricBlock label="Trafego" value="Intenso" tone="#ff6b35" />
               )}
             </div>
           )}
         </div>
       )}
 
-      {/* Botão principal — fluxo dinâmico */}
       {!fareData ? (
-        // Botao para calcular o preço via Engine Pro
         <button
           onClick={isReady ? onCalculatePrice : onCallTaxi}
           disabled={searching || calculating}
-          className={`w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-50 ${
+          className={`w-full rounded-[2.5rem] py-6 text-lg font-black uppercase tracking-[0.15em] shadow-2xl transition-all active:scale-98 disabled:opacity-50 ${
             isReady
               ? 'bg-primary text-white shadow-[0_20px_50px_rgba(37,99,235,0.4)]'
-              : 'bg-[#1a1a1a] text-white border border-white/10'
+              : 'border border-white/10 bg-[#1a1a1a] text-white'
           }`}
         >
           {calculating ? (
             <span className="flex items-center justify-center gap-3">
-              <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <span className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
               A calcular rota...
             </span>
           ) : searching ? (
             <span className="flex items-center justify-center gap-3">
-              <span className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+              <span className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
               A localizar...
             </span>
           ) : isReady ? (
-            <span className="flex items-center justify-center gap-3">
-              💰 CALCULAR PREÇO
-            </span>
-          ) : 'CHAMAR TÁXI'}
+            'CALCULAR PRECO'
+          ) : (
+            'CHAMAR TAXI'
+          )}
         </button>
       ) : (
         <div className="space-y-3">
-          {/* Botão de pedir corrida com preço confirmado */}
           <button
             onClick={() => onConfirmRideRequest(finalFare)}
-            disabled={priceTimer === 0}
-            className="w-full py-6 rounded-[2.5rem] font-black text-lg uppercase shadow-2xl tracking-[0.15em] transition-all active:scale-98 disabled:opacity-40"
+            disabled={timeLeft === 0}
+            className="w-full rounded-[2.5rem] py-6 text-lg font-black uppercase tracking-[0.15em] shadow-2xl transition-all active:scale-98 disabled:opacity-40"
             style={{ background: '#E6C364', color: '#050505', boxShadow: '0 20px 50px rgba(230,195,100,0.35)' }}
           >
-            🚖 PEDIR CORRIDA — {finalFare.toLocaleString('pt-AO')} Kz
+            PEDIR CORRIDA - {finalFare.toLocaleString('pt-AO')} Kz
           </button>
 
-          {/* Botão Negociar — estilo InDriver */}
           {!showNegotiate ? (
             <button
-              onClick={() => { setShowNegotiate(true); setProposedPrice(String(Math.round(baseFare * 0.85) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0))); }}
-              className="w-full py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest border-2 border-dashed transition-all active:scale-98"
-              style={{ borderColor: 'rgba(230,195,100,0.4)', color: '#E6C364', background: 'rgba(230,195,100,0.05)' }}
+              onClick={() => {
+                setShowNegotiate(true);
+                setProposedPrice(String(Math.round(baseFare * 0.85) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0)));
+              }}
+              className="w-full rounded-2xl border-2 border-dashed py-4 text-[11px] font-black uppercase tracking-widest transition-all active:scale-98"
+              style={{
+                borderColor: 'rgba(230,195,100,0.4)',
+                color: '#E6C364',
+                background: 'rgba(230,195,100,0.05)',
+              }}
             >
-              🤝 Podemos negociar?
+              Podemos negociar?
             </button>
           ) : (
-            <div className="rounded-2xl p-4 space-y-3" style={{ background: 'rgba(230,195,100,0.08)', border: '1px solid rgba(230,195,100,0.25)' }}>
+            <div
+              className="space-y-3 rounded-2xl p-4"
+              style={{ background: 'rgba(230,195,100,0.08)', border: '1px solid rgba(230,195,100,0.25)' }}
+            >
               <div className="flex items-center justify-between">
-                <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#E6C364' }}>A tua proposta</p>
-                <button onClick={() => setShowNegotiate(false)} className="text-[9px] font-black text-white/40 uppercase">✕ Fechar</button>
+                <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#E6C364' }}>
+                  A tua proposta
+                </p>
+                <button onClick={() => setShowNegotiate(false)} className="text-[9px] font-black uppercase text-white/40">
+                  Fechar
+                </button>
               </div>
               <div className="flex items-center gap-3">
-                <div className="flex-1 relative">
+                <div className="relative flex-1">
                   <input
                     type="number"
                     value={proposedPrice}
-                    onChange={e => setProposedPrice(e.target.value)}
-                    className="w-full bg-black/30 border border-white/10 rounded-xl px-4 py-3 text-xl font-black text-white outline-none text-center focus:border-[#E6C364]/50"
+                    onChange={(event) => setProposedPrice(event.target.value)}
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-center text-xl font-black text-white outline-none focus:border-[#E6C364]/50"
                     placeholder="0"
                     min={100}
                   />
@@ -263,14 +302,14 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
                 </div>
               </div>
               <div className="flex gap-2">
-                {[0.8, 0.85, 0.9, 0.95].map(pct => {
-                  const val = Math.round(baseFare * pct) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0);
+                {[0.8, 0.85, 0.9, 0.95].map((pct) => {
+                  const value = Math.round(baseFare * pct) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0);
                   return (
                     <button
                       key={pct}
-                      onClick={() => setProposedPrice(String(val))}
-                      className={`flex-1 py-2 rounded-lg text-[9px] font-black transition-all ${
-                        proposedPrice === String(val)
+                      onClick={() => setProposedPrice(String(value))}
+                      className={`flex-1 rounded-lg py-2 text-[9px] font-black transition-all ${
+                        proposedPrice === String(value)
                           ? 'bg-[#E6C364] text-black'
                           : 'bg-white/5 text-white/50'
                       }`}
@@ -280,22 +319,22 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
                   );
                 })}
               </div>
-              <p className="text-[8px] text-white/30 font-bold text-center">
-                Motoristas próximos verão a tua proposta e decidem se aceitam
+              <p className="text-center text-[8px] font-bold text-white/30">
+                Motoristas proximos vao ver a tua proposta e decidir se aceitam.
               </p>
               <button
                 onClick={() => {
-                  const price = parseInt(proposedPrice);
-                  if (!isNaN(price) && price >= 100) {
-                    onNegotiate?.(price);
+                  const value = parseInt(proposedPrice, 10);
+                  if (!Number.isNaN(value) && value >= 100) {
+                    onNegotiate?.(value);
                     setShowNegotiate(false);
                   }
                 }}
-                disabled={!proposedPrice || parseInt(proposedPrice) < 100}
-                className="w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest transition-all active:scale-98 disabled:opacity-40"
+                disabled={!proposedPrice || parseInt(proposedPrice, 10) < 100}
+                className="w-full rounded-2xl py-4 text-sm font-black uppercase tracking-widest transition-all active:scale-98 disabled:opacity-40"
                 style={{ background: '#E6C364', color: '#050505' }}
               >
-                🚀 LANÇAR PROPOSTA — {proposedPrice ? parseInt(proposedPrice).toLocaleString('pt-AO') : '0'} Kz
+                LANCAR PROPOSTA - {proposedPrice ? parseInt(proposedPrice, 10).toLocaleString('pt-AO') : '0'} Kz
               </button>
             </div>
           )}
@@ -304,5 +343,26 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
     </div>
   );
 };
+
+function MetricBlock({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: string;
+}) {
+  return (
+    <div>
+      <p className="text-[9px] font-bold uppercase tracking-wider" style={{ color: 'rgba(230,195,100,0.4)' }}>
+        {label}
+      </p>
+      <p className="text-xs font-black text-white" style={tone ? { color: tone } : undefined}>
+        {value}
+      </p>
+    </div>
+  );
+}
 
 export default RideRequestForm;
