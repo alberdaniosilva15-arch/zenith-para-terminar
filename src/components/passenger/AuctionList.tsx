@@ -79,6 +79,11 @@ const DriverAuctionCard: React.FC<{
         <div className="flex items-center gap-2 mb-1">
           <p className="font-black text-on-surface text-sm truncate">{driver.driver_name}</p>
           {selected && <span className="text-[8px] bg-primary text-white px-2 py-0.5 rounded-full font-black shrink-0">SELECCIONADO</span>}
+          {driver.is_elite && (
+            <span className="text-[8px] bg-yellow-400 text-[#0A0A0A] px-2 py-0.5 rounded-full font-black shrink-0">
+              ⚡ ELITE
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 flex-wrap">
           <span className="text-[9px] font-bold text-primary/80">⭐ {driver.rating.toFixed(1)}</span>

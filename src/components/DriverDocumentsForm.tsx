@@ -13,6 +13,7 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
   const [carModel, setCarModel] = useState('');
   const [carPlate, setCarPlate] = useState('');
   const [carColor, setCarColor] = useState('');
+  const [expiryDate, setExpiryDate] = useState('');
   const [biFile, setBiFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const { showToast } = useAppStore();
@@ -50,6 +51,7 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
         car_plate: carPlate,
         car_color: carColor,
         status: 'pending',
+        expires_at: expiryDate || null,
         updated_at: new Date().toISOString()
       };
 
@@ -110,6 +112,11 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
             <label className="flex flex-col gap-1">
               <span className="text-[10px] text-on-surface font-bold uppercase">Cor do Veículo</span>
               <input required value={carColor} onChange={e=>setCarColor(e.target.value)} placeholder="Ex: Branco" className="bg-surface-container border border-outline-variant p-3 rounded-xl text-white text-sm" />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-[10px] text-on-surface font-bold uppercase">Validade dos Documentos</span>
+              <input type="date" value={expiryDate} onChange={e=>setExpiryDate(e.target.value)} className="bg-surface-container border border-outline-variant p-3 rounded-xl text-white text-sm" />
             </label>
 
             <label className="flex flex-col gap-1 mt-2">

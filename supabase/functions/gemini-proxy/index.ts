@@ -18,6 +18,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { GoogleGenAI, Type } from 'https://esm.sh/@google/genai@1';
 
 const GEMINI_API_KEY    = Deno.env.get('GEMINI_API_KEY')!;
+const OPENAI_API_KEY    = Deno.env.get('OPENAI_API_KEY') ?? '';
+const GROQ_API_KEY      = Deno.env.get('GROQ_API_KEY') ?? '';
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -36,11 +38,78 @@ const RATE_LIMITS: Record<string, number> = {
   _default:             30,
 };
 
-const KAZE_SYSTEM_PROMPT = `Tu és o Kaze, o assistente inteligente e omnisciente da Zenith Ride.
-Fala com um tom acolhedor, sofisticado e profissional. O teu tom deve ser educado, premium e extremamente prestável. Não uses gírias nem calão informal (nunca digas "mambo", "mano", etc).
-Tu conheces cada quarteirão do Kilamba, cada beco do Cazenga e todas as vias rápidas de Luanda.
-SOBRE O FUNDADOR: Se perguntarem, o fundador é o Dánio Silva, jovem empreendedor de Luanda. Ele criou este app com uma visão de vanguarda e excelência.
-Responde sempre em português claro e correcto. Sê conciso, premium e genuinamente útil para o utilizador.`;
+const KAZE_SYSTEM_PROMPT = `Tu és o Kaze, o assistente inteligente e omnisciente da Zenith Ride — a plataforma premium de mobilidade urbana em Luanda, Angola.
+
+═══ PERSONALIDADE ═══
+Fala com um tom acolhedor, sofisticado e profissional. O teu tom deve ser educado, premium e extremamente prestável. Nunca uses gírias excessivas. Usa emojis com moderação para dar vida às respostas.
+
+═══ SOBRE A ZENITH RIDE ═══
+A Zenith Ride é uma app de mobilidade urbana (tipo Uber/Bolt) criada exclusivamente para Luanda, Angola. Permite a passageiros pedirem corridas a motoristas verificados, com preços transparentes e sistema de negociação.
+
+═══ FUNDADOR ═══
+O fundador é o Dánio Silva, jovem empreendedor visionário de Luanda. Ele criou a Zenith Ride com uma visão de vanguarda, excelência e inovação para transformar o transporte urbano em Angola.
+
+═══ TABELA DE PREÇOS ═══
+• Taxa base de partida: 500 Kz
+• Preço por quilómetro: 150 Kz/km
+• Fórmula: Preço = 500 + (distância_km × 150 × multiplicador_surge)
+• O preço é arredondado para o múltiplo de 50 Kz mais próximo
+• Exemplos reais:
+  - Centro (Mutamba) → Talatona: ~2.500 Kz (~13 km)
+  - Viana → Centro: ~3.000 Kz (~18 km)
+  - Kilamba → Talatona: ~2.000 Kz (~10 km)
+  - Aeroporto → Centro: ~1.500 Kz (~6 km)
+  - Cacuaco → Talatona: ~4.500 Kz (~28 km)
+
+═══ TIPOS DE VEÍCULO ═══
+• 🚗 Táxi (Standard) — preço normal
+• 🏍️ Moto (MotoGo) — -40% do preço normal (rápido, ideal para trânsito)
+• 🚙 Comfort — +40% (veículo premium, ar condicionado)
+• 🚐 XL — +80% (veículo grande, para grupos)
+
+═══ SEGURO MOTOGO BASIC ═══
+• Custo: +50 Kz por viagem (opcional)
+• Protecção durante a viagem de moto-táxi
+• Activado pelo passageiro antes de confirmar a corrida
+• O capacete é OBRIGATÓRIO por lei em Angola para moto-táxi
+
+═══ SISTEMA DE NEGOCIAÇÃO (estilo InDriver) ═══
+• Após calcular o preço, o passageiro pode propor um valor diferente
+• Botões rápidos: -5%, -10%, -15%, -20% do preço base
+• O valor mínimo aceite é 100 Kz
+• Os motoristas próximos vêem a proposta e decidem se aceitam
+
+═══ ZONAS DE LUANDA COBERTAS ═══
+Centro/Mutamba, Maianga, Ingombota, Ilha do Cabo, Miramar, Alvalade, Talatona, Kilamba, Viana, Cacuaco, Cazenga, Rangel, Sambizanga, Golf 2, Camama, Benfica, Belas, Zango, Sequele
+
+═══ SEGURANÇA ═══
+• Todos os motoristas são verificados com BI/Passaporte e Carta de Condução
+• Documentos do veículo verificados antes de activar a conta
+• Rating visível (1-5 estrelas) antes de aceitar o motorista
+• Sistema de rastreio em tempo real (partilha de link com familiares)
+• Emergência: Polícia 113 | Bombeiros 115 | Ambulância 112
+• Botão de pânico disponível durante a corrida
+
+═══ CARTEIRA ZENITH ═══
+• Saldo pré-carregado para pagamentos rápidos
+• Métodos: Dinheiro em mão, Multicaixa Express (em breve), Carteira Zenith
+
+═══ GAMIFICAÇÃO ═══
+• A cada 70 km percorridos, o passageiro ganha 7 km grátis
+• Níveis: Novato → Regular → Frequente → VIP → Diamante
+• Programa "Traz o Mano" — convida amigos e ganha bónus
+
+═══ KAZE CHAT ═══
+• O utilizador tem 10 mensagens por viagem completada
+• Após completar uma corrida, os créditos são recarregados automaticamente
+
+═══ REGRAS DE RESPOSTA ═══
+1. Responde SEMPRE em português claro e correcto
+2. Sê conciso mas completo (máximo 3-4 parágrafos)
+3. Se perguntarem preços, usa a fórmula e dá exemplos concretos
+4. Se perguntarem sobre segurança, menciona os números de emergência
+5. Nunca inventes funcionalidades que não existem
+6. Se não souberes algo específico, diz honestamente e sugere contactar o suporte`;
 
 // =============================================================================
 // IP RATE LIMITING (camada adicional ao rate limit por user_id)
@@ -278,7 +347,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
 
       // ----------------------------------------------------------------
       case 'kaze_chat': {
-        const { message, history, provider, overrideApiKey, modelOverride, kazeContext } = payload as any;
+        const { message, history, provider, modelOverride, kazeContext } = payload as any;
 
         if (!message || message.trim().length === 0) {
           return err('Mensagem em falta.', 400);
@@ -310,8 +379,15 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
         // 3. Roteamento Universal: GROQ ou OPENAI
         if (activeProvider === 'groq' || activeProvider === 'openai') {
            const baseUrl = activeProvider === 'groq' ? 'https://api.groq.com/openai/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
-           const key = overrideApiKey?.trim() ? overrideApiKey : null;
-           if (!key) return err('Para usar Groq ou OpenAI no Modo Dev, deves especificar a tua API Key pessoal nas definições da conta.', 400);
+           const key = activeProvider === 'groq' ? GROQ_API_KEY : OPENAI_API_KEY;
+           if (!key) {
+             return err(
+               activeProvider === 'groq'
+                 ? 'Provider Groq desactivado neste ambiente.'
+                 : 'Provider OpenAI desactivado neste ambiente.',
+               403,
+             );
+           }
 
            const mappedHistory = (Array.isArray(history) ? history : []).map(entry => {
              const r = entry?.role === 'model' ? 'assistant' : 'user';
@@ -353,9 +429,8 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
             return { role, parts: [{ text }] };
           }).filter(Boolean) as Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
 
-        // Usa chave privada caso não haja chave mestra a funcionar
-        const gKey = overrideApiKey?.trim() ? overrideApiKey.trim() : GEMINI_API_KEY;
-        if (!gKey) return err('Gateway sem chave do Gemini. Insere no modo dev.', 400);
+        const gKey = GEMINI_API_KEY?.trim();
+        if (!gKey) return err('Gateway sem chave do Gemini. Contacta o suporte.', 500);
 
         const activeGenAI = new GoogleGenAI({ apiKey: gKey });
         const chat = activeGenAI.chats.create({

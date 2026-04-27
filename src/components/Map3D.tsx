@@ -81,6 +81,12 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
     return () => resizeObserver.disconnect();
   }, []);
 
+  useEffect(() => {
+    const handleExternalResize = () => MapSingleton.resize();
+    window.addEventListener('zenith:map-resize', handleExternalResize);
+    return () => window.removeEventListener('zenith:map-resize', handleExternalResize);
+  }, []);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div

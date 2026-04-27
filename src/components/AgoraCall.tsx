@@ -268,7 +268,7 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
             {peerName ?? 'Utilizador'}
           </p>
           <p className="text-[9px] text-on-surface-variant font-label uppercase tracking-widest mt-1">
-            {peerJoined ? 'Ligado via VoIP MotoGo' : 'A aguardar ligação...'}
+            {peerJoined ? 'Ligado via VoIP Zenith' : 'A aguardar ligação...'}
           </p>
         </div>
       </div>
@@ -318,7 +318,7 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
       {/* Aviso de privacidade */}
       <div className="px-6 pb-6 text-center">
         <p className="text-[8px] text-on-surface-variant/40 font-label uppercase tracking-wider">
-          Chamada protegida com AES-256-GCM via MotoGo VoIP
+          Chamada protegida com AES-256-GCM via Zenith VoIP
         </p>
       </div>
     </div>

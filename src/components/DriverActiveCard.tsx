@@ -1,9 +1,9 @@
 import React, { Suspense } from 'react';
 import RideChat from './RideChat';
-
-const AgoraCall = React.lazy(() => import('./AgoraCall'));
 import type { RideState } from '../types';
 import { RideStatus } from '../types';
+
+const AgoraCall = React.lazy(() => import('./AgoraCall'));
 
 interface DriverActiveCardProps {
   ride: RideState;

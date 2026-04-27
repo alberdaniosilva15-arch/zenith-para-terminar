@@ -7,22 +7,30 @@
 
 import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import RideTalk from './RideTalk';
-
-const Map3D = React.lazy(() => import('./Map3D'));
-
 import AvailableRidesList from './AvailableRidesList';
 import DriverActiveCard from './DriverActiveCard';
 import { DriverDocumentsForm } from './DriverDocumentsForm';
+import PanicButton from './PanicButton';
 import { geminiService } from '../services/geminiService';
 import { rideService } from '../services/rideService';
 import { mapService } from '../services/mapService';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import type { RideState, DbRide } from '../types';
+import { useIdleMount } from '../hooks/useIdleMount';
+import { useSilentTripleTap } from '../hooks/useSilentTripleTap';
+import DriverCopilot from './driver/DriverCopilot';
+import DocExpiryBanner from './driver/DocExpiryBanner';
+import DriverTierCard from './driver/DriverTierCard';
+import FatigueAlert from './driver/FatigueAlert';
+import MinIncomeGuard from './driver/MinIncomeGuard';
+import DriverAgreementModal from './fleet/DriverAgreementModal';
+import type { RideState, DbRide, FleetDriverAgreementRecord, LatLng } from '../types';
 import { RideStatus, UserRole } from '../types';
 import { useToastStore } from '../store/useAppStore';
 import { cellToLatLng } from 'h3-js';
 import { MapSingleton } from '../lib/mapInstance';
+
+const Map3D = React.lazy(() => import('./Map3D'));
 
 interface DriverHomeProps {
   ride:            RideState;
@@ -54,6 +62,14 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     dailyEstimateKz: number; bestZones: string[]; tips: string;
   } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [heatmapData, setHeatmapData] = useState<Array<{ h3_index: string; demand_count: number; supply_count: number }>>([]);
+  const [driverCoords, setDriverCoords] = useState<LatLng | null>(null);
+  const [idleMinutes, setIdleMinutes] = useState(0);
+  const [onlineSince, setOnlineSince] = useState<string | null>(null);
+  const [clockTick, setClockTick] = useState(() => Date.now());
+  const [silentPanicSignal, setSilentPanicSignal] = useState(0);
+  const [suspiciousPassenger, setSuspiciousPassenger] = useState<{ message: string; severity: 'soft' | 'high' } | null>(null);
+  const [pendingAgreement, setPendingAgreement] = useState<(FleetDriverAgreementRecord & { fleet_name?: string | null }) | null>(null);
   // Contagem de notificações pendentes não lidas
   const [pendingNotifCount, setPendingNotifCount] = useState(0);
 
@@ -96,7 +112,15 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
   const [driverDocStatus, setDriverDocStatus] = useState<'approved' | 'pending' | 'rejected' | 'none'>('none');
   const [showDocsForm, setShowDocsForm] = useState(false);
+  const [isSwitchingOnline, setIsSwitchingOnline] = useState(false);
   const isOnlineRef = useRef(false);
+  const shouldMountMap = useIdleMount(true);
+  const onlineHours = onlineSince ? (clockTick - new Date(onlineSince).getTime()) / 3_600_000 : 0;
+
+  useSilentTripleTap({
+    enabled: isOnline && !!ride.rideId,
+    onTrigger: () => setSilentPanicSignal((value) => value + 1),
+  });
 
   // ── Heatmap (F5) ────────────────────────────────────────────────────────
   const heatmapMarkersRef = useRef<any[]>([]);
@@ -104,6 +128,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const fetchAndDrawHeatmap = useCallback(async () => {
     if (!isOnline) return;
     const data = await rideService.getDemandHeatmap();
+    setHeatmapData(data);
     
     // Limpar markers
     heatmapMarkersRef.current.forEach(m => m.remove());
@@ -118,7 +143,6 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       if (ratio < 1.5 || item.demand_count === 0) return; // Só mostrar zonas ardentes
 
       const [lat, lng] = cellToLatLng(item.h3_index);
-      const intensity = ratio > 3 ? 'bg-red-500' : 'bg-orange-500';
       const mapboxgl = (window as any).mapboxgl;
       if (!mapboxgl) return;
 
@@ -155,11 +179,115 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     return () => clearInterval(interval);
   }, [isOnline, fetchAndDrawHeatmap]);
 
+  useEffect(() => {
+    if (!isOnline || !onlineSince) {
+      return;
+    }
+
+    setClockTick(Date.now());
+    const interval = window.setInterval(() => setClockTick(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, [isOnline, onlineSince]);
+
+  useEffect(() => {
+    if (!isOnline || !onlineSince) {
+      setIdleMinutes(0);
+      return;
+    }
+
+    if (ride.rideId) {
+      setIdleMinutes(0);
+      return;
+    }
+
+    const recalc = () => {
+      const minutes = Math.max(0, Math.floor((Date.now() - new Date(onlineSince).getTime()) / 60_000));
+      setIdleMinutes(minutes);
+      void supabase
+        .from('driver_locations')
+        .update({ online_minutes_idle: minutes })
+        .eq('driver_id', driverId);
+    };
+
+    recalc();
+    const interval = window.setInterval(recalc, 60_000);
+    return () => window.clearInterval(interval);
+  }, [driverId, isOnline, onlineSince, ride.rideId]);
+
+  useEffect(() => {
+    if (!ride.passengerId) {
+      setSuspiciousPassenger(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadPassengerRisk = async () => {
+      try {
+        const [{ data: passengerProfile }, { count: totalTrips }, { count: cancelledTrips }] = await Promise.all([
+          supabase.from('profiles').select('rating').eq('user_id', ride.passengerId!).maybeSingle(),
+          supabase.from('rides').select('id', { count: 'exact', head: true }).eq('passenger_id', ride.passengerId!),
+          supabase.from('rides').select('id', { count: 'exact', head: true }).eq('passenger_id', ride.passengerId!).eq('status', 'cancelled'),
+        ]);
+
+        if (cancelled) {
+          return;
+        }
+
+        const rating = Number(passengerProfile?.rating ?? 5);
+        const cancelRate = totalTrips ? ((cancelledTrips ?? 0) / totalTrips) * 100 : 0;
+
+        if (rating < 3.5 || cancelRate > 40) {
+          setSuspiciousPassenger({
+            severity: rating < 3 || cancelRate > 55 ? 'high' : 'soft',
+            message: rating < 3.5
+              ? `⚠️ Passageiro com rating ${rating.toFixed(1)}`
+              : `⚠️ Passageiro com historico de cancelamentos (${cancelRate.toFixed(0)}%)`,
+          });
+          return;
+        }
+
+        setSuspiciousPassenger(null);
+      } catch (error) {
+        console.warn('[DriverHome] Nao foi possivel calcular risco do passageiro:', error);
+      }
+    };
+
+    void loadPassengerRisk();
+    return () => {
+      cancelled = true;
+    };
+  }, [ride.passengerId]);
+
+  useEffect(() => {
+    if (!driverId) {
+      return;
+    }
+
+    const loadPendingAgreement = async () => {
+      const { data } = await supabase
+        .from('fleet_driver_agreements')
+        .select('*, fleets(name)')
+        .eq('driver_id', driverId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      const agreement = data?.[0] as (FleetDriverAgreementRecord & { fleets?: { name?: string | null } | null }) | undefined;
+      setPendingAgreement(agreement ? {
+        ...agreement,
+        fleet_name: agreement.fleets?.name ?? null,
+      } : null);
+    };
+
+    void loadPendingAgreement();
+  }, [driverId]);
+
   // ── Ler estado dos documentos ao iniciar ────────────────────────────────────
   useEffect(() => {
     if (!driverId) return;
     const fetchStatus = async () => {
-      const { data } = await supabase.from('driver_documents').select('status').eq('driver_id', driverId).single();
+      const { data } = await supabase.from('driver_documents').select('status').eq('driver_id', driverId).maybeSingle();
       setDriverDocStatus(data ? data.status as any : 'none');
     };
     fetchStatus();
@@ -167,11 +295,15 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
   // ── Ir online ────────────────────────────────────────────────────────────
   const goOnline = useCallback(async () => {
+    if (isSwitchingOnline) return;
+
     if (driverDocStatus !== 'approved') {
       showToast('Precisas de submeter e aprovar os dados do teu Carro e BI primeiro.', 'error');
       setShowDocsForm(true);
       return;
     }
+
+    setIsSwitchingOnline(true);
 
     // Tentar obter localização imediatamente para não falhar o UPSERT na base de dados
     let coords: { lat: number; lng: number } | undefined;
@@ -185,24 +317,40 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
     const success = await rideService.setDriverStatus(driverId, 'available', coords);
     if (!success) {
-      const { showToast } = await import('../store/useAppStore').then(m => m.useAppStore.getState());
       showToast('Erro interno: O teu estado não pôde ser atualizado. Tenta novamente.', 'error');
       isOnlineRef.current = false;
       setIsOnline(false);
+      setIsSwitchingOnline(false);
       return;
     }
 
+    const onlineStartedAt = new Date().toISOString();
+    setDriverCoords(coords ?? null);
+    setOnlineSince(onlineStartedAt);
+    setIdleMinutes(0);
+    void supabase
+      .from('driver_locations')
+      .update({ online_since: onlineStartedAt, online_minutes_idle: 0 })
+      .eq('driver_id', driverId);
+
     isOnlineRef.current = true;
     setIsOnline(true);
-  }, [driverId, driverDocStatus]);
+    setIsSwitchingOnline(false);
+  }, [driverId, driverDocStatus, isSwitchingOnline, showToast]);
 
   const goOffline = useCallback(async () => {
+    if (isSwitchingOnline) return;
+    setIsSwitchingOnline(true);
     isOnlineRef.current = false;
     setIsOnline(false);
     setAvailableRides([]);
     setIncomingRide(null);
+    setOnlineSince(null);
+    setIdleMinutes(0);
+    setSuspiciousPassenger(null);
     await rideService.setDriverStatus(driverId, 'offline');
-  }, [driverId]);
+    setIsSwitchingOnline(false);
+  }, [driverId, isSwitchingOnline]);
 
   // ── Ler notificações pendentes (BD) ao reconectar ─────────────────────────
   const loadPendingNotifications = useCallback(async () => {
@@ -385,8 +533,22 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     }
 
     const initOnline = async () => {
+      const { data: locationRow } = await supabase
+        .from('driver_locations')
+        .select('online_since, online_minutes_idle')
+        .eq('driver_id', driverId)
+        .maybeSingle();
+
+      if (locationRow?.online_since) {
+        setOnlineSince(locationRow.online_since);
+      }
+      if (typeof locationRow?.online_minutes_idle === 'number') {
+        setIdleMinutes(locationRow.online_minutes_idle);
+      }
+
       // GPS tracking
       gpsRef.current = mapService.watchPosition(async (coords, heading) => {
+        setDriverCoords(coords);
         await rideService.updateDriverLocation(driverId, coords, heading);
       });
 
@@ -471,6 +633,11 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   return (
     <div className="p-4 space-y-5 bg-[#F8FAFC] min-h-screen pb-32">
 
+      <DocExpiryBanner
+        driverId={driverId}
+        onOpenDocuments={() => setShowDocsForm(true)}
+      />
+
       {/* HUD ganhos + toggle online + rating */}
       <div className="bg-surface-container-low border border-outline-variant/20 p-6 rounded-[2.5rem] shadow-sm space-y-4">
         <div className="flex justify-between items-center">
@@ -514,17 +681,24 @@ const DriverHome: React.FC<DriverHomeProps> = ({
             )}
             <button
               onClick={isOnline ? goOffline : goOnline}
+              disabled={isSwitchingOnline}
               className={`px-8 py-4 rounded-3xl font-black text-[10px] uppercase flex items-center gap-3 active:scale-95 transition-all ${
                 isOnline
                   ? 'bg-primary/100 text-white shadow-[0_15px_30px_rgba(34,197,94,0.3)]'
                   : 'bg-[#0A0A0A] text-white shadow-xl'
-              }`}
+              } ${isSwitchingOnline ? 'opacity-50 cursor-wait' : ''}`}
             >
               <div className="relative">
-                <span className={`w-2.5 h-2.5 rounded-full bg-surface-container-low block ${isOnline ? 'animate-pulse' : ''}`} />
-                {isOnline && <span className="absolute inset-0 bg-surface-container-low rounded-full animate-ping opacity-50" />}
+                {isSwitchingOnline ? (
+                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin block" />
+                ) : (
+                  <>
+                    <span className={`w-2.5 h-2.5 rounded-full bg-surface-container-low block ${isOnline ? 'animate-pulse' : ''}`} />
+                    {isOnline && <span className="absolute inset-0 bg-surface-container-low rounded-full animate-ping opacity-50" />}
+                  </>
+                )}
               </div>
-              {isOnline ? 'ONLINE' : 'FICAR ONLINE'}
+              {isSwitchingOnline ? 'AGUARDA...' : isOnline ? 'ONLINE' : 'FICAR ONLINE'}
             </button>
           </div>
         </div>
@@ -540,12 +714,18 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
       {/* Mapa */}
       <div className="aspect-[4/3] w-full relative z-0 overflow-hidden rounded-[3rem] shadow-2xl border-4 border-white">
-        <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-surface-container-low text-on-surface-variant text-xs">A carregar mapa...</div>}>
-          <Map3D
-            mode="driver"
-            center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
-          />
-        </Suspense>
+        {shouldMountMap ? (
+          <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-surface-container-low text-on-surface-variant text-xs">A carregar mapa...</div>}>
+            <Map3D
+              mode="driver"
+              center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
+            />
+          </Suspense>
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-surface-container-low text-on-surface-variant text-xs">
+            A preparar mapa...
+          </div>
+        )}
         <div className="absolute top-6 right-6 bg-surface-container-low/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-outline-variant/20 flex items-center gap-3">
           <div className="w-10 h-10 bg-primary/8 rounded-xl flex items-center justify-center text-xl">⛽</div>
           <div>
@@ -561,6 +741,59 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           </div>
         </div>
       </div>
+
+      <DriverCopilot
+        isOnline={isOnline}
+        hasActiveRide={!!ride.rideId}
+        driverCoords={driverCoords}
+        heatmapData={heatmapData}
+      />
+
+      {!isOnline && !ride.rideId && (
+        <DriverTierCard driverId={driverId} />
+      )}
+
+      <MinIncomeGuard
+        isOnline={isOnline}
+        hasActiveRide={!!ride.rideId}
+        idleMinutes={idleMinutes}
+      />
+
+      <FatigueAlert
+        isOnline={isOnline}
+        onlineHours={onlineHours}
+      />
+
+      {isOnline && (
+        <div className="rounded-[2.5rem] border border-red-500/20 bg-red-500/5 p-5 space-y-4">
+          <div>
+            <p className="text-[9px] font-black uppercase tracking-[0.22em] text-red-300/70">Safety Driver</p>
+            <p className="text-sm font-black text-red-100 mt-2">
+              Triple-tap no ecra em 1.5s activa o SOS silencioso sem feedback visual.
+            </p>
+          </div>
+
+          {suspiciousPassenger && ride.rideId && (
+            <div className={`rounded-2xl border px-4 py-3 ${
+              suspiciousPassenger.severity === 'high'
+                ? 'border-yellow-400/30 bg-yellow-400/10 text-yellow-100'
+                : 'border-white/10 bg-white/5 text-white/80'
+            }`}>
+              <p className="text-[10px] font-black uppercase tracking-widest">Aviso discreto</p>
+              <p className="text-sm font-bold mt-1">{suspiciousPassenger.message}</p>
+            </div>
+          )}
+
+          <PanicButton
+            userId={driverId}
+            rideId={ride.rideId}
+            emergencyPhone={profile?.emergency_contact_phone ?? undefined}
+            counterpartyName={ride.passengerName}
+            counterpartyLabel="Passageiro"
+            silentSignal={silentPanicSignal}
+          />
+        </div>
+      )}
 
       {/* POPUP: passageiro escolheu-te ou nova corrida */}
       <AvailableRidesList 
@@ -607,6 +840,29 @@ const DriverHome: React.FC<DriverHomeProps> = ({
             setDriverDocStatus(status as any);
             setShowDocsForm(false);
           }} 
+        />
+      )}
+
+      {pendingAgreement && (
+        <DriverAgreementModal
+          agreementId={pendingAgreement.id}
+          fleetName={pendingAgreement.fleet_name ?? 'Nova frota'}
+          onClose={() => setPendingAgreement(null)}
+          onResolved={async () => {
+            const { data } = await supabase
+              .from('fleet_driver_agreements')
+              .select('*, fleets(name)')
+              .eq('driver_id', driverId)
+              .eq('status', 'pending')
+              .order('created_at', { ascending: false })
+              .limit(1);
+
+            const agreement = data?.[0] as (FleetDriverAgreementRecord & { fleets?: { name?: string | null } | null }) | undefined;
+            setPendingAgreement(agreement ? {
+              ...agreement,
+              fleet_name: agreement.fleets?.name ?? null,
+            } : null);
+          }}
         />
       )}
     </div>

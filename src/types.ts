@@ -6,6 +6,7 @@
 export enum UserRole {
   PASSENGER = 'passenger',
   DRIVER    = 'driver',
+  FLEET_OWNER = 'fleet_owner',
   ADMIN     = 'admin',
 }
 
@@ -60,6 +61,7 @@ export interface DbProfile {
   phone_privacy: boolean;
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
+  chat_quota?: number | null;
 
   // ── Sistema de níveis / gamificação ────────────────────────
   level: UserLevel;
@@ -138,7 +140,8 @@ export interface AuctionDriver {
   distance_m:  number;
   eta_min:     number;
   heading:     number | null;
-  motogo_score: number;
+  zenith_score: number;
+  is_elite?:   boolean;
 }
 
 /** Estado do leilão no frontend */
@@ -181,6 +184,7 @@ export interface PostRideReviewInput {
 export interface RideState {
   status:          RideStatus;
   rideId?:         string;
+  passengerId?:    string;
   pickup?:         string;
   destination?:    string;
   pickupCoords?:   LatLng;
@@ -288,6 +292,102 @@ export interface Post {
   timestamp: number;
   expiresAt?: number | null; // timestamp de expiração (auto-destrutiva)
 }
+export type ServiceType =
+  | 'standard'
+  | 'moto'
+  | 'comfort'
+  | 'xl'
+  | 'private_driver'
+  | 'charter'
+  | 'cargo';
+
+export interface ServicePricing {
+  id: string;
+  service_type: ServiceType;
+  city: string;
+  base_fare_kz: number;
+  price_per_km_kz: number;
+  price_per_minute_kz: number;
+  price_per_hour_kz: number;
+  minimum_fare_kz: number;
+  surge_multiplier: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PremiumBooking {
+  id: string;
+  user_id: string;
+  service_type: ServiceType;
+  status: 'pending' | 'confirmed' | 'in_progress' | 'completed' | 'cancelled';
+  driver_id: string | null;
+  favorite_driver_id: string | null;
+  pickup_address: string | null;
+  pickup_lat: number | null;
+  pickup_lng: number | null;
+  dest_address: string | null;
+  dest_lat: number | null;
+  dest_lng: number | null;
+  scheduled_at: string | null;
+  duration_hours: number | null;
+  vehicle_class: 'standard' | 'suv' | 'executive' | null;
+  price_kz: number;
+  notes: string | null;
+  notify_me: boolean;
+  route_stops: string[] | null;
+  pricing_snapshot: Record<string, unknown> | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CargoBooking {
+  id: string;
+  booking_id: string;
+  cargo_type: 'light' | 'medium' | 'heavy';
+  needs_helpers: boolean;
+  helper_count: number;
+  estimated_weight_kg: number | null;
+  urgency: 'normal' | 'express';
+  special_instructions: string | null;
+}
+
+export interface CharterBooking {
+  id: string;
+  booking_id: string;
+  capacity: number;
+  event_type: string | null;
+  route_description: string | null;
+  return_trip: boolean;
+}
+
+export type DriverTier = 'taxi' | 'comfort' | 'private' | 'logistics';
+
+export interface FleetBillingEvent {
+  id: string;
+  fleet_id: string;
+  plan: 'free' | 'pro' | 'elite';
+  amount_kz: number;
+  cars_count: number;
+  billing_month: string;
+  pdf_url: string | null;
+  created_at: string;
+}
+
+export interface PanicAlertRecord {
+  id: string;
+  user_id: string;
+  ride_id: string | null;
+  driver_name: string | null;
+  lat: number | null;
+  lng: number | null;
+  status: 'active' | 'resolved' | 'false_alarm';
+  severity: 'medium' | 'high' | 'critical';
+  audio_storage_path: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: string | null;
+}
 // =============================================================================
 // ZENITH RIDE v3.0 — NOVOS TIPOS
 // =============================================================================
@@ -317,10 +417,44 @@ export interface RidePrediction {
   frequency:       number;
   last_used_at:    string;
   best_hour:       number | null;
+  day_of_week?:    number | null;
   avg_price_kz:    number | null;
   zone_price_kz:   number | null;
   origin_zone:     string | null;
   dest_zone:       string | null;
+}
+
+export type FleetAgreementType = 'weekly' | 'transparent' | 'minimal';
+
+export interface FleetRecord {
+  id: string;
+  owner_id: string;
+  name: string;
+  created_at: string;
+}
+
+export interface FleetCarRecord {
+  id: string;
+  fleet_id: string;
+  plate: string;
+  model: string | null;
+  year: number | null;
+  driver_id: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export interface FleetDriverAgreementRecord {
+  id: string;
+  fleet_id: string;
+  driver_id: string;
+  car_id: string | null;
+  agreement_type: FleetAgreementType;
+  privacy_blackout_start: string;
+  privacy_blackout_end: string;
+  weekly_fee_kz: number;
+  status: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+  created_at: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -338,7 +472,7 @@ export interface FreePerkState {
 // ─────────────────────────────────────────────────────────────────────────────
 export type ScoreLabel = 'Sem Historial' | 'Básico' | 'Médio' | 'Bom' | 'Excelente' | 'Extraordinário';
 
-export interface MotoGoScore {
+export interface ZenithScore {
   driver_id:        string;
   score:            number;         // 0-1000
   score_label:      ScoreLabel;
@@ -354,7 +488,7 @@ export interface MotoGoScore {
 // ─────────────────────────────────────────────────────────────────────────────
 export type PartnerCategory = 'fuel' | 'food' | 'insurance' | 'mechanic' | 'supermarket';
 
-export interface MotoGoPayPartner {
+export interface ZenithPayPartner {
   id:           string;
   name:         string;
   category:     PartnerCategory;

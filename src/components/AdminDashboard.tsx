@@ -18,6 +18,9 @@ import { supabase } from '../lib/supabase';
 import { parseSupabasePoint } from '../services/rideService';
 import { zonePriceService } from '../services/zonePrice';
 import { AdminDriverDocs } from './AdminDriverDocs';
+import AdminSOSPanel from './admin/AdminSOSPanel';
+import AdminUsersPanel from './admin/AdminUsersPanel';
+import AdminServicesPanel from './admin/AdminServicesPanel';
 
 interface AdminDashboardProps {
   lastCommand?: AutonomousCommand | null;
@@ -29,6 +32,13 @@ interface DashboardMetrics {
   revenueKzLast24h: number;
   activeRides:      number;
   loadingMetrics:   boolean;
+}
+
+interface ReferralStats {
+  totalCodes: number;
+  usedCodes: number;
+  revenueKz: number;
+  topReferrers: Array<{ name: string; total: number }>;
 }
 
 interface DriverMarker {
@@ -57,12 +67,21 @@ const INITIAL_METRICS: DashboardMetrics = {
   ridesLast24h: 0, activeDrivers: 0, revenueKzLast24h: 0, activeRides: 0, loadingMetrics: true,
 };
 
+const INITIAL_REFERRAL_STATS: ReferralStats = {
+  totalCodes: 0,
+  usedCodes: 0,
+  revenueKz: 0,
+  topReferrers: [],
+};
+
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
-  const [activeTab, setActiveTab] = useState<'map' | 'security' | 'market' | 'prices' | 'kaze' | 'drivers'>('map');
+  const [activeTab, setActiveTab] = useState<'map' | 'market' | 'prices' | 'sos' | 'users' | 'services' | 'drivers' | 'security'>('map');
   const [commands, setCommands]   = useState<AutonomousCommand[]>([]);
   const [loading, setLoading]     = useState(false);
   const [metrics, setMetrics]     = useState<DashboardMetrics>(INITIAL_METRICS);
   const [zonesData, setZonesData] = useState<{ name: string; demand: number; risk: number }[]>([]);
+  const [activeSosCount, setActiveSosCount] = useState(0);
+  const [referralStats, setReferralStats] = useState<ReferralStats>(INITIAL_REFERRAL_STATS);
   
   // Mapa
   const [driverMarkers, setDriverMarkers] = useState<DriverMarker[]>([]);
@@ -70,6 +89,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef          = useRef<mapboxgl.Map | null>(null);
   const markersRef      = useRef<mapboxgl.Marker[]>([]);
+  const mapboxglRef     = useRef<typeof import('mapbox-gl').default | null>(null);
+  const [mapReady, setMapReady] = useState(false);
   
   // Realtime
   const realtimeRef  = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -178,6 +199,52 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
     }
   }, []);
 
+  const fetchReferralStats = useCallback(async () => {
+    try {
+      const { data: referrals } = await supabase
+        .from('referrals')
+        .select('referrer_id, status, reward_kz');
+
+      if (!referrals?.length) {
+        setReferralStats(INITIAL_REFERRAL_STATS);
+        return;
+      }
+
+      const totalsByReferrer = referrals.reduce<Record<string, number>>((acc, referral) => {
+        if (referral.referrer_id) {
+          acc[referral.referrer_id] = (acc[referral.referrer_id] ?? 0) + 1;
+        }
+        return acc;
+      }, {});
+
+      const referrerIds = Object.keys(totalsByReferrer);
+      const { data: profiles } = referrerIds.length === 0
+        ? { data: [] as Array<{ user_id: string; name: string | null }> }
+        : await supabase.from('profiles').select('user_id, name').in('user_id', referrerIds);
+
+      const profileMap = new Map((profiles ?? []).map((profile) => [profile.user_id, profile.name ?? 'Utilizador Zenith']));
+      const usedCodes = referrals.filter((referral) => referral.status === 'completed').length;
+      const revenueKz = referrals
+        .filter((referral) => referral.status === 'completed')
+        .reduce((sum, referral) => sum + Number(referral.reward_kz ?? 0), 0);
+
+      setReferralStats({
+        totalCodes: referrals.length,
+        usedCodes,
+        revenueKz,
+        topReferrers: referrerIds
+          .map((id) => ({
+            name: profileMap.get(id) ?? 'Utilizador Zenith',
+            total: totalsByReferrer[id],
+          }))
+          .sort((left, right) => right.total - left.total)
+          .slice(0, 10),
+      });
+    } catch (e) {
+      console.error('[AdminDashboard] Erro referral stats:', e);
+    }
+  }, []);
+
   // ── Salvar preço editado ─────────────────────────────────────────────────
   const handleSavePrice = async (priceId: string) => {
     const newPrice = parseInt(editValue);
@@ -214,6 +281,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
       const token = import.meta.env.VITE_MAPBOX_TOKEN;
       if (!token) return;
       mapboxgl.accessToken = token;
+      mapboxglRef.current = mapboxgl;
 
       const map = new mapboxgl.Map({
         container: mapContainerRef.current!,
@@ -224,12 +292,14 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
       });
 
       map.addControl(new mapboxgl.NavigationControl(), 'bottom-right');
+      map.on('load', () => setMapReady(true));
       mapRef.current = map;
     };
 
     initMap();
 
     return () => {
+      setMapReady(false);
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
@@ -239,13 +309,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
 
   // ── Actualizar markers no mapa ───────────────────────────────────────────
   useEffect(() => {
-    if (!mapRef.current) return;
+    if (!mapReady || !mapRef.current) return;
 
     // Limpar markers antigos
     markersRef.current.forEach(m => m.remove());
     markersRef.current = [];
 
-    const mapboxgl = (window as any).mapboxgl;
+    const mapboxgl = mapboxglRef.current;
     if (!mapboxgl) return;
 
     // Markers de motoristas
@@ -292,7 +362,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
       }
     });
 
-  }, [driverMarkers, activeRides]);
+  }, [activeRides, driverMarkers, mapReady]);
 
   // ── Subscrição Realtime ──────────────────────────────────────────────────
   useEffect(() => {
@@ -330,10 +400,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
     fetchDriverLocations();
     fetchActiveRides();
     fetchPrices();
+    fetchReferralStats();
 
     const interval = setInterval(fetchMetrics, 60_000);
     return () => clearInterval(interval);
-  }, [fetchMetrics, fetchDriverLocations, fetchActiveRides, fetchPrices]);
+  }, [fetchMetrics, fetchDriverLocations, fetchActiveRides, fetchPrices, fetchReferralStats]);
 
   // ── AI Vigilante ─────────────────────────────────────────────────────────
   useEffect(() => {
@@ -369,8 +440,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
     { id: 'map',      icon: '🗺️', label: 'Mapa' },
     { id: 'market',   icon: '📈', label: 'Mercado' },
     { id: 'prices',   icon: '💰', label: 'Preços' },
-    { id: 'security', icon: '🛡️', label: 'Segurança' },
+    { id: 'sos',      icon: '🚨', label: 'SOS', badge: activeSosCount },
+    { id: 'users',    icon: '👥', label: 'Utilizadores' },
+    { id: 'services', icon: '🚀', label: 'Serviços' },
     { id: 'drivers',  icon: '🪪', label: 'BI / Carros' },
+    { id: 'security', icon: '🛡️', label: 'Segurança' },
   ] as const;
 
   return (
@@ -413,18 +487,23 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
 
       {/* Tabs */}
       <div className="px-4 -mt-4 relative z-20">
-        <div className="bg-surface-container-low p-1.5 rounded-2xl shadow-2xl flex gap-1 border border-outline-variant/20">
+        <div className="no-scrollbar overflow-x-auto bg-surface-container-low p-1.5 rounded-2xl shadow-2xl flex gap-1 border border-outline-variant/20">
           {TABS.map(tab => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as any)}
-              className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${
+              className={`relative shrink-0 min-w-[112px] py-3 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${
                 activeTab === tab.id
                   ? 'golden-gradient text-on-primary shadow-lg'
                   : 'text-on-surface-variant/70 hover:bg-surface-container-lowest'
               }`}
             >
               {tab.icon} {tab.label}
+              {'badge' in tab && tab.badge > 0 && (
+                <span className="absolute right-2 top-1.5 flex min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[8px] font-black text-white animate-pulse">
+                  {tab.badge}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -500,6 +579,24 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
           </div>
         )}
 
+        {activeTab === 'sos' && (
+          <div className="p-6">
+            <AdminSOSPanel onActiveCountChange={setActiveSosCount} />
+          </div>
+        )}
+
+        {activeTab === 'users' && (
+          <div className="animate-in fade-in duration-300">
+            <AdminUsersPanel />
+          </div>
+        )}
+
+        {activeTab === 'services' && (
+          <div className="animate-in fade-in duration-300">
+            <AdminServicesPanel />
+          </div>
+        )}
+
         {/* ── TAB: MOTORISTAS SENSÍVEIS (AdminDriverDocs) ── */}
         {activeTab === 'drivers' && (
           <div className="h-[600px] bg-surface-container-lowest rounded-[2.5rem] overflow-hidden mb-6">
@@ -557,6 +654,52 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
                   </BarChart>
                 </ResponsiveContainer>
               )}
+            </div>
+
+            <div className="bg-surface-container-low p-6 rounded-[2.5rem] shadow-sm border border-outline-variant/20 space-y-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[9px] font-black text-on-surface-variant/70 uppercase tracking-widest">Programa Referral</p>
+                  <h3 className="mt-1 text-lg font-black text-on-surface">Convites e receita por indicação</h3>
+                </div>
+                <button
+                  onClick={fetchReferralStats}
+                  className="rounded-full bg-primary/10 px-3 py-1.5 text-[8px] font-black uppercase tracking-widest text-primary"
+                >
+                  Actualizar
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest p-4">
+                  <p className="text-[8px] font-black uppercase tracking-widest text-on-surface-variant/50">Códigos gerados</p>
+                  <p className="mt-2 text-2xl font-black text-on-surface">{referralStats.totalCodes}</p>
+                </div>
+                <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest p-4">
+                  <p className="text-[8px] font-black uppercase tracking-widest text-on-surface-variant/50">Códigos usados</p>
+                  <p className="mt-2 text-2xl font-black text-on-surface">{referralStats.usedCodes}</p>
+                </div>
+                <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest p-4">
+                  <p className="text-[8px] font-black uppercase tracking-widest text-on-surface-variant/50">Receita referral</p>
+                  <p className="mt-2 text-2xl font-black text-primary">{formatKz(referralStats.revenueKz)} Kz</p>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-outline-variant/15 bg-surface-container-lowest p-4">
+                <p className="text-[8px] font-black uppercase tracking-widest text-on-surface-variant/50">Top 10 referrers</p>
+                <div className="mt-4 space-y-2">
+                  {referralStats.topReferrers.length === 0 ? (
+                    <p className="text-xs font-bold text-on-surface-variant/50">Sem convites concluídos ainda.</p>
+                  ) : (
+                    referralStats.topReferrers.map((referrer, index) => (
+                      <div key={`${referrer.name}-${index}`} className="flex items-center justify-between rounded-xl bg-surface-container-low p-3">
+                        <p className="text-xs font-black text-on-surface">{index + 1}. {referrer.name}</p>
+                        <span className="text-[10px] font-black uppercase tracking-widest text-primary">{referrer.total} convites</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
 
             <button

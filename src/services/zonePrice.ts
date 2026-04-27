@@ -5,7 +5,7 @@
 // Estratégia de negócio:
 //   - Passageiro vê preço ANTES de pedir → confiança
 //   - Motorista sabe exactamente quanto vai ganhar → satisfação
-//   - MotoGo cobra 15% de comissão fixa → previsível para os 3
+//   - Zenith cobra 15% de comissão fixa → previsível para os 3
 //
 // Integração:
 //   import { zonePriceService } from './services/zonePrice';

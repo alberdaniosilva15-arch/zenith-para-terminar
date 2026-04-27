@@ -77,9 +77,9 @@ cp .env.example .env
 
 ```env
 VITE_SUPABASE_URL=https://<ref>.supabase.co
-VITE_SUPABASE_ANON_KEY=<chave-anon-pública>
-VITE_MAPBOX_TOKEN=pk.eyJ1...
-VITE_GOOGLE_MAPS_KEY=AIza...   # geocoding + search
+VITE_SUPABASE_ANON_KEY=<supabase-anon-public-key>
+VITE_MAPBOX_TOKEN=<mapbox-public-token>
+VITE_GOOGLE_MAPS_KEY=<google-maps-browser-key>   # geocoding + search
 ```
 
 ---

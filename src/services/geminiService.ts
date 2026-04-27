@@ -198,38 +198,54 @@ export class GeminiChatService {
     // Converter histórico para formato Gemini ANTES de enviar (excluindo a mensagem actual)
     const geminiHistory = toGeminiHistory(this.history.slice(0, -1));
 
-    const response = await fetch(edgeFunctionUrl('gemini-proxy'), {
-      method: 'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${authToken}`,
-      },
-      body: JSON.stringify({
-        action:  'kaze_chat',
-        message: userText,
-        history: geminiHistory,
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000); // 12s timeout para Kaze
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => 'Erro desconhecido');
-      throw new Error(`[GeminiService] Edge Function erro ${response.status}: ${errorText}`);
+    try {
+      const response = await fetch(edgeFunctionUrl('gemini-proxy'), {
+        method: 'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({
+          action:  'kaze_chat',
+          message: userText,
+          history: geminiHistory,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new Error(`[GeminiService] Edge Function erro ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      const modelText: string =
+        data?.candidates?.[0]?.content?.parts?.[0]?.text ??
+        data?.text ?? '';
+
+      if (!modelText) {
+        throw new Error('[GeminiService] Resposta vazia do modelo.');
+      }
+
+      this.history.push({ role: 'model', content: modelText });
+      this.trimHistory(20);
+
+      return modelText;
+    } catch (err) {
+      clearTimeout(timeout);
+      
+      // Remover a mensagem do user para não quebrar a ordem se quisermos tentar de novo
+      this.history.pop();
+      
+      // FALLBACK IMEDIATO: Resposta offline local super rápida
+      console.warn('[GeminiService] Kaze cloud falhou/timeout. Usando fallback offline.');
+      return getLocalKazeResponse(userText);
     }
-
-    const data = await response.json();
-
-    const modelText: string =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text ??
-      data?.text ?? '';
-
-    if (!modelText) {
-      throw new Error('[GeminiService] Resposta vazia do modelo.');
-    }
-
-    this.history.push({ role: 'model', content: modelText });
-    this.trimHistory(20);
-
-    return modelText;
   }
 
   clearHistory(): void {

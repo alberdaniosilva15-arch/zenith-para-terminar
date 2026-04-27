@@ -80,10 +80,12 @@ export function AdminDriverDocs() {
 
   const handleUpdateStatus = async (docId: string, status: 'approved' | 'rejected') => {
     try {
-      const { error } = await supabase
-        .from('driver_documents')
-        .update({ status })
-        .eq('id', docId);
+      const error = status === 'approved'
+        ? (await supabase.rpc('approve_driver_document', { p_doc_id: docId })).error
+        : (await supabase
+          .from('driver_documents')
+          .update({ status })
+          .eq('id', docId)).error;
 
       if (error) throw error;
       showToast(`Documento ${status === 'approved' ? 'Aprovado' : 'Rejeitado'} com sucesso`, 'success');

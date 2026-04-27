@@ -29,7 +29,7 @@ cp .env.example .env
 # zenith_schema_final.sql
 
 # Deploy da Edge Function Gemini:
-npx supabase secrets set GEMINI_API_KEY="TUA_CHAVE"
+npx supabase secrets set GEMINI_API_KEY="<gemini-secret>"
 npx supabase functions deploy gemini-proxy --no-verify-jwt
 ```
 

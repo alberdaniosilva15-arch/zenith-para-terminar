@@ -4,12 +4,13 @@
 // =============================================================================
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { toDataURL } from 'qrcode';
 import { supabase } from '../lib/supabase';
 import { rideService } from '../services/rideService';
 import { useAuth } from '../contexts/AuthContext';
 import type { DbWallet, DbTransaction } from '../types';
 import { UserRole } from '../types';
-import MotoGoPayPartners from './MotoGoPayPartners';
+import ZenithPayPartners from './MotoGoPayPartners';
 
 interface WalletProps { userId: string; }
 
@@ -51,6 +52,71 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
   // v3.0: tabs da carteira
   const [walletTab, setWalletTab] = useState<'transactions' | 'partners' | 'advance'>('transactions');
   const [showZenithPay, setShowZenithPay] = useState(false);
+  const [zenithPayToken, setZenithPayToken] = useState<string | null>(null);
+  const [zenithPayCopied, setZenithPayCopied] = useState(false);
+  const [zenithPayQrDataUrl, setZenithPayQrDataUrl] = useState<string | null>(null);
+  const [zenithPayQrError, setZenithPayQrError] = useState(false);
+
+  const zenithPayUri = zenithPayToken ? `zenithpay://session/${zenithPayToken}` : '';
+
+  const openZenithPay = () => {
+    const tempToken = globalThis.crypto?.randomUUID?.()
+      ?? `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    setZenithPayToken(tempToken);
+    setZenithPayCopied(false);
+    setZenithPayQrDataUrl(null);
+    setZenithPayQrError(false);
+    setShowZenithPay(true);
+  };
+
+  const closeZenithPay = () => {
+    setShowZenithPay(false);
+    setZenithPayToken(null);
+    setZenithPayCopied(false);
+    setZenithPayQrDataUrl(null);
+    setZenithPayQrError(false);
+  };
+
+  const copyZenithPayCode = async () => {
+    if (!zenithPayUri) return;
+    try {
+      await navigator.clipboard.writeText(zenithPayUri);
+      setZenithPayCopied(true);
+    } catch {
+      setZenithPayCopied(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showZenithPay) return;
+
+    let cancelled = false;
+
+    toDataURL(zenithPayUri || 'zenithpay://session/pending', {
+      errorCorrectionLevel: 'M',
+      margin: 1,
+      width: 200,
+      color: {
+        dark: '#111111',
+        light: '#FFFFFF',
+      },
+    })
+      .then((dataUrl: string) => {
+        if (cancelled) return;
+        setZenithPayQrDataUrl(dataUrl);
+        setZenithPayQrError(false);
+      })
+      .catch((error: unknown) => {
+        console.warn('[Wallet] Falha ao gerar QR local:', error);
+        if (cancelled) return;
+        setZenithPayQrDataUrl(null);
+        setZenithPayQrError(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showZenithPay, zenithPayUri]);
 
   // ------------------------------------------------------------------
   const loadData = useCallback(async (pageNum = 0) => {
@@ -145,7 +211,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
             {isDriver ? 'LUCRO LÍQUIDO' : 'SALDO ZENITH'}
           </p>
           <button 
-            onClick={() => setShowZenithPay(true)}
+            onClick={openZenithPay}
             className="flex items-center gap-1.5 bg-white/10 hover:bg-white/20 transition-all rounded-full px-3 py-1.5"
           >
             <span className="text-xs">📱</span>
@@ -246,7 +312,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
                 <p className="text-[10px] uppercase font-bold tracking-widest text-on-surface-variant/70">Pagamento Aproximado</p>
               </div>
               <button 
-                onClick={() => setShowZenithPay(false)}
+                onClick={closeZenithPay}
                 className="w-10 h-10 bg-surface-container rounded-full flex items-center justify-center font-black active:scale-90 transition-all"
               >
                 ✕
@@ -254,12 +320,35 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
             </div>
             
             <div className="bg-white p-4 rounded-3xl mx-auto w-48 h-48 flex items-center justify-center mb-6">
-              {/* QR Code Placeholder (Dicebear) */}
-              <img 
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=zenithpay://${userId}`} 
-                alt="ZenithPay QR" 
-                className="w-full h-full object-cover rounded-xl"
-              />
+              {zenithPayQrDataUrl ? (
+                <img
+                  src={zenithPayQrDataUrl}
+                  alt="ZenithPay QR"
+                  className="w-full h-full object-cover rounded-xl"
+                />
+              ) : (
+                <div className="w-full h-full rounded-xl border border-black/10 flex flex-col items-center justify-center text-center px-4">
+                  <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin mb-3" />
+                  <p className="text-[10px] font-black uppercase tracking-widest text-black/60">
+                    {zenithPayQrError ? 'QR indisponivel' : 'A gerar QR local'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="bg-surface-container rounded-2xl border border-outline-variant/20 p-4 mb-6">
+              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/70 mb-2">
+                Sessao temporaria
+              </p>
+              <p className="text-[11px] font-mono break-all text-on-surface mb-3">
+                {zenithPayToken ?? 'a preparar...'}
+              </p>
+              <button
+                onClick={copyZenithPayCode}
+                className="w-full py-3 rounded-2xl bg-surface-container-highest text-[10px] font-black uppercase tracking-widest text-white transition-all active:scale-95"
+              >
+                {zenithPayCopied ? 'Codigo copiado' : 'Copiar codigo temporario'}
+              </button>
             </div>
             
             <p className="text-center text-xs font-bold text-on-surface-variant mb-6 leading-relaxed">
@@ -290,7 +379,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
       {walletTab === 'advance' && (
         <div className="space-y-4 animate-in slide-in-from-right duration-300">
           <div className="bg-surface-container-low p-6 rounded-[2rem] border border-outline-variant/20">
-            <h3 className="text-sm font-black text-on-surface mb-2">MotoGo Cash Advance</h3>
+            <h3 className="text-sm font-black text-on-surface mb-2">Zenith Cash Advance</h3>
             <p className="text-xs font-bold text-on-surface-variant/70 mb-6 leading-relaxed">
               Disponível apenas para motoristas nível <strong className="text-primary">Diamante</strong>. 
               Pede até 20.000 Kz de adiantamento descontado automaticamente das tuas próximas corridas (taxa 0%).
@@ -347,7 +436,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
       )}
 
       {walletTab === 'partners' && (
-        <MotoGoPayPartners userId={userId} walletBalance={wallet?.balance ?? 0} />
+        <ZenithPayPartners userId={userId} walletBalance={wallet?.balance ?? 0} />
       )}
     </div>
   );

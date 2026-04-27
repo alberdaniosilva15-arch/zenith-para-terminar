@@ -4,7 +4,6 @@
 // =============================================================================
 
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
 import type { DbUser, DbProfile, RideState, AuctionState, PostRideState, LatLng } from '../types';
 import { RideStatus, UserRole } from '../types';
 
@@ -58,65 +57,58 @@ export const INITIAL_POST_RIDE: PostRideState = {
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────────
+// v3.5: Removido middleware `persist` — não persistia nada (partialize retornava {})
+// e causava overhead desnecessário de serialização a cada mudança de estado.
+// O ride state é sempre refrescado de getActiveRide() no arranque.
 
 export const useAppStore = create<AppStore>()(
-  persist(
-    (set) => ({
-      // ── Auth ───────────────────────────────────────────────────────────────
-      dbUser: null,
-      profile: null,
-      role: UserRole.PASSENGER,
+  (set) => ({
+    // ── Auth ───────────────────────────────────────────────────────────────
+    dbUser: null,
+    profile: null,
+    role: UserRole.PASSENGER,
 
-      setUser: (dbUser, profile) => set({
-        dbUser,
-        profile,
-        role: (dbUser?.role as UserRole) ?? UserRole.PASSENGER,
-      }),
-      clearUser: () => set({
-        dbUser: null, profile: null, role: UserRole.PASSENGER,
-      }),
-      updateProfile: (data) => set((s) => ({
-        profile: s.profile ? { ...s.profile, ...data } : null,
-      })),
-
-      // ── Ride ───────────────────────────────────────────────────────────────
-      ride:     INITIAL_RIDE,
-      auction:  INITIAL_AUCTION,
-      postRide: INITIAL_POST_RIDE,
-
-      setRide:      (partial) => set((s) => ({ ride: { ...s.ride, ...partial } })),
-      resetRide:    () => set({ ride: INITIAL_RIDE }),
-      setAuction:   (partial) => set((s) => ({ auction: { ...s.auction, ...partial } })),
-      resetAuction: () => set({ auction: INITIAL_AUCTION }),
-      setPostRide:  (postRide) => set({ postRide }),
-      resetPostRide: () => set({ postRide: INITIAL_POST_RIDE }),
-
-      // ── Driver Tracking ────────────────────────────────────────────────────
-      driverCoords:  null,
-      isTracking:    false,
-      trackingError: null,
-
-      setDriverCoords: (driverCoords) => set({ driverCoords }),
-      setIsTracking:   (isTracking) => set({ isTracking }),
-      setTrackingError:(trackingError) => set({ trackingError }),
-
-      // ── Toast ──────────────────────────────────────────────────────────────
-      toast: null,
-      showToast: (message, type = 'info') => {
-        set({ toast: { message, type } });
-        setTimeout(() => set({ toast: null }), 4000);
-      },
-      clearToast: () => set({ toast: null }),
+    setUser: (dbUser, profile) => set({
+      dbUser,
+      profile,
+      role: (dbUser?.role as UserRole) ?? UserRole.PASSENGER,
     }),
-    {
-      name: 'zenith-ride-store-v3',
-      version: 2,
-      migrate: () => ({}),
-      // Não persistir ride state — é sempre refrescado de getActiveRide() no arranque
-      // (evita estados fantasma de corrida quando a app é fechada durante uma viagem)
-      partialize: () => ({}),
-    }
-  )
+    clearUser: () => set({
+      dbUser: null, profile: null, role: UserRole.PASSENGER,
+    }),
+    updateProfile: (data) => set((s) => ({
+      profile: s.profile ? { ...s.profile, ...data } : null,
+    })),
+
+    // ── Ride ───────────────────────────────────────────────────────────────
+    ride:     INITIAL_RIDE,
+    auction:  INITIAL_AUCTION,
+    postRide: INITIAL_POST_RIDE,
+
+    setRide:      (partial) => set((s) => ({ ride: { ...s.ride, ...partial } })),
+    resetRide:    () => set({ ride: INITIAL_RIDE }),
+    setAuction:   (partial) => set((s) => ({ auction: { ...s.auction, ...partial } })),
+    resetAuction: () => set({ auction: INITIAL_AUCTION }),
+    setPostRide:  (postRide) => set({ postRide }),
+    resetPostRide: () => set({ postRide: INITIAL_POST_RIDE }),
+
+    // ── Driver Tracking ────────────────────────────────────────────────────
+    driverCoords:  null,
+    isTracking:    false,
+    trackingError: null,
+
+    setDriverCoords: (driverCoords) => set({ driverCoords }),
+    setIsTracking:   (isTracking) => set({ isTracking }),
+    setTrackingError:(trackingError) => set({ trackingError }),
+
+    // ── Toast ──────────────────────────────────────────────────────────────
+    toast: null,
+    showToast: (message, type = 'info') => {
+      set({ toast: { message, type } });
+      setTimeout(() => set({ toast: null }), 4000);
+    },
+    clearToast: () => set({ toast: null }),
+  })
 );
 
 // ─── Selectors tipados ────────────────────────────────────────────────────────
