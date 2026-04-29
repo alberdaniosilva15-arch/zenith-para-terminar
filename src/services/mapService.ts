@@ -12,6 +12,7 @@ import type { LatLng, LocationResult } from '../types';
 import { haversineKm as _haversineKm, haversineMeters as _haversineMeters } from '../lib/geo';
 
 const MAPBOX_TOKEN   = import.meta.env.VITE_MAPBOX_TOKEN   as string | undefined;
+const LOCATION_NAME_SEPARATOR = 'â€”';
 
 // Coordenadas reais: Luanda + Bengo + Ícolo e Bengo (cache estática para offline / sugestões rápidas)
 export const LUANDA_STATIC_LOCATIONS: LocationResult[] = [
@@ -125,6 +126,10 @@ function haversineKm(a: LatLng, b: LatLng): number {
   return _haversineKm(a.lat, a.lng, b.lat, b.lng);
 }
 
+function getPrimaryLocationName(name: string): string {
+  return name.split(LOCATION_NAME_SEPARATOR)[0]?.trim() || name.trim();
+}
+
 // ─── Encontrar bairro mais próximo das coordenadas ────────────────────────────
 function nearestNeighbourhood(coords: LatLng): string {
   let best: LocationResult | null = null;
@@ -134,9 +139,10 @@ function nearestNeighbourhood(coords: LatLng): string {
     if (d < bestDist) { bestDist = d; best = loc; }
   }
   if (!best) return 'Luanda';
-  if (bestDist > 10) return `Angola (perto de ${best.name.split('—')[0].trim()})`;
-  if (bestDist > 5) return `Luanda (perto de ${best.name.split('—')[0].trim()})`;
-  return best.name.split('—')[0].trim();
+  const bestName = getPrimaryLocationName(best.name);
+  if (bestDist > 10) return `Angola (perto de ${bestName})`;
+  if (bestDist > 5) return `Luanda (perto de ${bestName})`;
+  return bestName;
 }
 
 // ─── Mapbox Geocoding: pesquisa de texto → lista de locais ───────────────────
@@ -264,16 +270,17 @@ export const mapService = {
     if (MAPBOX_TOKEN) {
       try {
         const results = await mapboxForwardGeocode(address);
-        if (results.length > 0) {
-          geocodeCache.set(cacheKey, results[0].coords);
-          return results[0].coords;
+        const firstResult = results[0];
+        if (firstResult) {
+          geocodeCache.set(cacheKey, firstResult.coords);
+          return firstResult.coords;
         }
       } catch { /* fallthrough to static */ }
     }
 
     // 2. Lista estática (fallback offline)
     const local = LUANDA_STATIC_LOCATIONS.find(
-      (l) => l.name.toLowerCase().includes(cacheKey) || cacheKey.includes(l.name.toLowerCase().split('—')[0].trim())
+      (l) => l.name.toLowerCase().includes(cacheKey) || cacheKey.includes(getPrimaryLocationName(l.name).toLowerCase())
     );
     if (local) { geocodeCache.set(cacheKey, local.coords); return local.coords; }
 
@@ -367,7 +374,7 @@ export const mapService = {
         if (!matches) return false;
         // Verificar se já existe um resultado Mapbox com nome similar
         const isDuplicate = mapboxResults.some(r =>
-          r.name.toLowerCase().includes(l.name.toLowerCase().split('—')[0].trim().substring(0, 8)) ||
+          r.name.toLowerCase().includes(getPrimaryLocationName(l.name).toLowerCase().slice(0, 8)) ||
           l.name.toLowerCase().includes(r.name.toLowerCase().substring(0, 8))
         );
         return !isDuplicate;
@@ -418,8 +425,8 @@ export const mapService = {
     let lastLng    = 0;
     let retryCount = 0;
     let watchId: number | undefined;
-    const MIN_MS   = 5000; // 5 segundos mínimo entre updates
-    const MIN_M    = 10;   // 10 metros — sensível a trânsito lento de Luanda
+    const MIN_MS   = 3000; // 3 segundos mínimo entre updates (throttle)
+    const MIN_M    = 15;   // 15 metros de distância mínima para enviar (otimização de DB)
 
     const haversineM = (la1: number, lo1: number, la2: number, lo2: number) =>
       _haversineMeters(la1, lo1, la2, lo2);

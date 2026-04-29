@@ -19,7 +19,9 @@ interface KazeMascotProps {
 
 const MASCOT_IMG = 'https://img.icons8.com/3d-fluency/180/robot-3.png';
 
-const KAZE_GREETINGS: Record<string, string[]> = {
+type SupportedKazeGreetingRole = UserRole.PASSENGER | UserRole.DRIVER;
+
+const KAZE_GREETINGS: Record<SupportedKazeGreetingRole, readonly string[]> = {
   passenger: [
     'Olá! Sou o Kaze, o teu assistente de corridas em Luanda. Como posso ajudar?',
     'Pronto para a tua próxima corrida? Diz-me onde queres ir!',
@@ -31,6 +33,15 @@ const KAZE_GREETINGS: Record<string, string[]> = {
     'O trânsito de Luanda está aí. O Kaze tem dicas para ti!',
   ],
 };
+
+function getGreetingPool(role: UserRole): readonly string[] {
+  return role === UserRole.DRIVER ? KAZE_GREETINGS.driver : KAZE_GREETINGS.passenger;
+}
+
+function pickGreeting(greetings: readonly string[]): string {
+  const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
+  return randomGreeting ?? greetings[0] ?? 'Estou aqui para ajudar.';
+}
 
 const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, userName }) => {
   const [isOpen,      setIsOpen]      = useState(false);
@@ -54,8 +65,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
   // Mostrar mensagem de boas-vindas ao abrir o chat pela primeira vez
   useEffect(() => {
     if (isOpen && messages.length === 0) {
-      const greetings = KAZE_GREETINGS[role] ?? KAZE_GREETINGS.passenger;
-      const greeting = greetings[Math.floor(Math.random() * greetings.length)];
+      const greeting = pickGreeting(getGreetingPool(role));
       const name = userName ? `, ${userName.split(' ')[0]}` : '';
       setMessages([{
         role: 'model',

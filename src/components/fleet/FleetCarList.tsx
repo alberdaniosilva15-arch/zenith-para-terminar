@@ -5,9 +5,10 @@ interface FleetCarListProps {
   cars: FleetCarRecord[];
   driverNames: Record<string, string>;
   agreementByCarId: Record<string, FleetDriverAgreementRecord | undefined>;
+  onTrackCar?: (carId: string) => void;
 }
 
-const FleetCarList: React.FC<FleetCarListProps> = ({ cars, driverNames, agreementByCarId }) => {
+const FleetCarList: React.FC<FleetCarListProps> = ({ cars, driverNames, agreementByCarId, onTrackCar }) => {
   if (cars.length === 0) {
     return (
       <div className="rounded-[2rem] border border-white/10 bg-white/5 p-5 text-sm text-white/60">
@@ -48,6 +49,15 @@ const FleetCarList: React.FC<FleetCarListProps> = ({ cars, driverNames, agreemen
                 </p>
               </div>
             </div>
+
+            {onTrackCar && (
+              <button
+                onClick={() => onTrackCar(car.id)}
+                className="mt-3 w-full rounded-2xl bg-white/5 border border-white/10 px-4 py-2.5 text-[10px] font-black uppercase tracking-widest hover:bg-white/10 transition-colors"
+              >
+                📍 Rastrear no mapa
+              </button>
+            )}
           </div>
         );
       })}

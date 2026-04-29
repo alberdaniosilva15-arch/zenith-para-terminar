@@ -7,6 +7,9 @@ import FleetAI from './FleetAI';
 import FleetBilling from './FleetBilling';
 import FleetCarList from './FleetCarList';
 import FleetUpgradeModal from './FleetUpgradeModal';
+import Map3D from '../Map3D';
+import mapboxgl from 'mapbox-gl';
+import FleetCarTracker from './FleetCarTracker';
 
 interface FleetDashboardProps {
   ownerId: string;
@@ -18,7 +21,7 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
   const [cars, setCars] = useState<FleetCarRecord[]>([]);
   const [agreements, setAgreements] = useState<FleetDriverAgreementRecord[]>([]);
   const [driverNames, setDriverNames] = useState<Record<string, string>>({});
-  const [driverLocations, setDriverLocations] = useState<Record<string, string>>({});
+  const [driverLocations, setDriverLocations] = useState<Record<string, { label: string; coords?: [number, number] }>>({});
   const [subscriptionPlan, setSubscriptionPlan] = useState<'free' | 'pro' | 'elite'>('free');
   const [search, setSearch] = useState('');
   const [newFleetName, setNewFleetName] = useState(`${ownerName ?? 'Zenith'} Fleet`);
@@ -26,6 +29,9 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
   const [showAddCar, setShowAddCar] = useState(false);
   const [showUpgrade, setShowUpgrade] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'billing'>('overview');
+  const [trackingCarId, setTrackingCarId] = useState<string | null>(null);
+  const [mapObj, setMapObj] = useState<mapboxgl.Map | null>(null);
+  const markersRef = React.useRef<Record<string, mapboxgl.Marker>>({});
 
   const loadFleetData = useCallback(async () => {
     setLoading(true);
@@ -82,7 +88,7 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
       const locationMap = Object.fromEntries((locations ?? []).map((location) => {
         const agreement = agreementByDriverId[location.driver_id] as FleetDriverAgreementRecord | undefined;
         if (agreement?.status === 'accepted' && isInBlackoutWindow(agreement.privacy_blackout_start, agreement.privacy_blackout_end)) {
-          return [location.driver_id, 'Localizacao protegida pelo blackout'];
+          return [location.driver_id, { label: 'Localizacao protegida pelo blackout' }];
         }
 
         const coords = parseSupabasePoint(location.location);
@@ -91,7 +97,7 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
           : location.status === 'available'
             ? 'Disponivel sem coordenadas'
             : 'Privado ou offline';
-        return [location.driver_id, pretty];
+        return [location.driver_id, { label: pretty, coords: coords ? [coords.lng, coords.lat] : undefined }];
       }));
 
       setDriverNames(profileMap);
@@ -104,6 +110,43 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
   useEffect(() => {
     void loadFleetData();
   }, [loadFleetData]);
+
+  useEffect(() => {
+    if (!mapObj) return;
+    
+    // Remover marcadores antigos
+    Object.values(markersRef.current).forEach(marker => marker.remove());
+    markersRef.current = {};
+
+    let minLng = 180, maxLng = -180, minLat = 90, maxLat = -90;
+    let hasCoords = false;
+
+    cars.forEach(car => {
+      const loc = car.driver_id ? driverLocations[car.driver_id] : null;
+      if (loc && loc.coords) {
+        const el = createWhiteCarMarkerElement();
+        const marker = new mapboxgl.Marker({ element: el })
+          .setLngLat(loc.coords)
+          .addTo(mapObj);
+        markersRef.current[car.id] = marker;
+
+        minLng = Math.min(minLng, loc.coords[0]);
+        maxLng = Math.max(maxLng, loc.coords[0]);
+        minLat = Math.min(minLat, loc.coords[1]);
+        maxLat = Math.max(maxLat, loc.coords[1]);
+        hasCoords = true;
+      }
+    });
+
+    if (hasCoords && cars.length > 1) {
+      mapObj.fitBounds(
+        [[minLng, minLat], [maxLng, maxLat]],
+        { padding: 40, maxZoom: 15 }
+      );
+    } else if (hasCoords && cars.length === 1) {
+      mapObj.flyTo({ center: [minLng, minLat], zoom: 15 });
+    }
+  }, [mapObj, cars, driverLocations]);
 
   const filteredCars = useMemo(() => {
     if (!search.trim()) {
@@ -248,20 +291,33 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
           />
         </div>
 
+        <div className="mb-4 h-[250px] w-full overflow-hidden rounded-[1.5rem] border border-white/10 relative">
+          <Map3D
+            center={[13.2344, -8.8383]} // Luanda padrão
+            zoom={11}
+            mode="admin"
+            onMapReady={(map) => setMapObj(map)}
+          />
+        </div>
+
         <div className="space-y-3">
-          {filteredCars.map((car) => (
-            <div key={car.id} className="rounded-2xl bg-black/20 border border-white/10 px-4 py-3 flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-black">{car.plate}</p>
-                <p className="text-[11px] text-white/55">
-                  {car.driver_id ? driverNames[car.driver_id] ?? 'Motorista associado' : 'Sem motorista'} · {car.active ? 'activo' : 'inactivo'}
+          {filteredCars.map((car) => {
+            const locInfo = car.driver_id ? driverLocations[car.driver_id] : null;
+            const label = locInfo?.label ?? 'Sem localizacao';
+            return (
+              <div key={car.id} className="rounded-2xl bg-black/20 border border-white/10 px-4 py-3 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-black">{car.plate}</p>
+                  <p className="text-[11px] text-white/55">
+                    {car.driver_id ? driverNames[car.driver_id] ?? 'Motorista associado' : 'Sem motorista'} · {car.active ? 'activo' : 'inactivo'}
+                  </p>
+                </div>
+                <p className="text-[11px] text-white/75 text-right">
+                  {label}
                 </p>
               </div>
-              <p className="text-[11px] text-white/75 text-right">
-                {car.driver_id ? driverLocations[car.driver_id] ?? 'Localizacao em proteccao' : 'Sem localizacao'}
-              </p>
-            </div>
-          ))}
+            );
+          })}
           {filteredCars.length === 0 && (
             <p className="text-sm text-white/55">Nenhum carro corresponde a esta pesquisa.</p>
           )}
@@ -272,6 +328,7 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
         cars={filteredCars}
         driverNames={driverNames}
         agreementByCarId={agreementByCarId}
+        onTrackCar={(carId) => setTrackingCarId(carId)}
       />
 
       <FleetAI
@@ -302,6 +359,15 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
           onSaved={loadFleetData}
         />
       )}
+
+      {trackingCarId && (
+        <FleetCarTracker
+          car={cars.find(c => c.id === trackingCarId)!}
+          driverName={cars.find(c => c.id === trackingCarId)?.driver_id ? driverNames[cars.find(c => c.id === trackingCarId)!.driver_id!] : undefined}
+          locationInfo={cars.find(c => c.id === trackingCarId)?.driver_id ? driverLocations[cars.find(c => c.id === trackingCarId)!.driver_id!] : undefined}
+          onClose={() => setTrackingCarId(null)}
+        />
+      )}
     </div>
   );
 };
@@ -318,8 +384,8 @@ function Metric({ label, value }: { label: string; value: string }) {
 function isInBlackoutWindow(start: string, end: string) {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Luanda' }));
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const [startHour, startMinute] = start.split(':').map(Number);
-  const [endHour, endMinute] = end.split(':').map(Number);
+  const [startHour = 0, startMinute = 0] = start.split(':').map(Number);
+  const [endHour = 0, endMinute = 0] = end.split(':').map(Number);
   const startMinutes = startHour * 60 + startMinute;
   const endMinutes = endHour * 60 + endMinute;
 
@@ -328,6 +394,22 @@ function isInBlackoutWindow(start: string, end: string) {
   }
 
   return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+}
+
+function createWhiteCarMarkerElement() {
+  const el = document.createElement('div');
+  el.className = 'fleet-car-marker';
+  el.style.width = '36px';
+  el.style.height = '36px';
+  el.style.backgroundColor = '#FFFFFF';
+  el.style.borderRadius = '50%';
+  el.style.border = '2px solid #E6C364';
+  el.style.boxShadow = '0 0 15px rgba(255,255,255,0.4)';
+  el.style.display = 'flex';
+  el.style.alignItems = 'center';
+  el.style.justifyContent = 'center';
+  el.innerHTML = '<span style="font-size:18px;">🚗</span>';
+  return el;
 }
 
 export default FleetDashboard;

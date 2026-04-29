@@ -8,11 +8,18 @@
 // =============================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  applyCors,
+  corsForbidden,
+  resolveCorsHeaders,
+} from '../_shared/cors.ts';
 
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
+const CORS_OPTIONS = {
+  methods: 'POST, OPTIONS',
+};
 
 // ─── Configuração de preços dinâmicos (fallback) ─────────────────────────────
 const PRICING = {
@@ -51,6 +58,30 @@ function detectZone(address: string): string | null {
 
 // =============================================================================
 Deno.serve(async (req: Request) => {
+  const corsHeaders = resolveCorsHeaders(req, CORS_OPTIONS);
+  if (req.headers.get('Origin') && !corsHeaders) {
+    return corsForbidden();
+  }
+
+  const corsOk = () =>
+    applyCors(new Response(null, { status: 204 }), corsHeaders);
+  const jsonOk = (data: unknown) =>
+    applyCors(
+      new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      corsHeaders,
+    );
+  const jsonError = (message: string, status: number) =>
+    applyCors(
+      new Response(JSON.stringify({ error: true, message }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      corsHeaders,
+    );
+
   if (req.method === 'OPTIONS') return corsOk();
 
   try {
@@ -240,13 +271,4 @@ async function getSurgeMultiplierReal(
   // Fallback: surge por hora do dia
   for (const s of SURGE_HOURS) if (h >= s.start && h < s.end) return s.multiplier;
   return 1.0;
-}
-function corsOk(): Response {
-  return new Response(null, { headers: { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Access-Control-Allow-Headers':'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' } });
-}
-function jsonOk(d: unknown): Response {
-  return new Response(JSON.stringify(d), { status:200, headers:{'Content-Type':'application/json','Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
-}
-function jsonError(m: string, s: number): Response {
-  return new Response(JSON.stringify({error:true,message:m}), { status:s, headers:{'Content-Type':'application/json','Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
 }

@@ -76,7 +76,7 @@ const ZonePriceMap: React.FC<{
         )}
         <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
           {ALL_ZONES.map(zone => {
-            const color = ZONE_COLORS[zone];
+            const color = ZONE_COLORS[zone] ?? { bg: 'bg-surface-container-low', text: 'text-on-surface-variant', label: 'Zona' };
             const active = originFilter === zone;
             return (
               <button

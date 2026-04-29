@@ -31,6 +31,7 @@ const CLIENT_ONLY_STORAGE_KEYS = [
 
 const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
 const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
+const REST_FALLBACK_TIMEOUT_MS = 6000;
 
 function clearBrowserAuthStorage(): void {
   if (typeof window === 'undefined') {
@@ -141,6 +142,39 @@ function resolveSessionRole(role: unknown): UserRole {
   return UserRole.PASSENGER;
 }
 
+function timeoutAfter<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+    }),
+  ]);
+}
+
+async function fetchPublicRow<T>(path: string, accessToken: string): Promise<T | null> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    throw new Error('VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY em falta para fallback REST.');
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/${path}`, {
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`REST fallback falhou (${response.status}): ${details}`);
+  }
+
+  const rows = await response.json() as T[];
+  return rows[0] ?? null;
+}
+
 // =============================================================================
 // TIPOS DO CONTEXTO
 // =============================================================================
@@ -230,12 +264,44 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     while (attempt < MAX_ATTEMPTS) {
       try {
         console.log(`[AuthContext] loadUserData attempt ${attempt + 1}/${MAX_ATTEMPTS} for ${userId}`);
-        
-        const [{ data: userRow, error: userErr }, { data: profileRow, error: profErr }] =
-          await Promise.all([
-            supabase.from('users').select('*').eq('id', userId).maybeSingle(),
-            supabase.from('profiles').select('*').eq('user_id', userId).maybeSingle(),
+
+        let userRow: DbUser | null = null;
+        let profileRow: DbProfile | null = null;
+        let userErr: unknown = null;
+        let profErr: unknown = null;
+
+        try {
+          const [
+            { data: fetchedUserRow, error: fetchedUserErr },
+            { data: fetchedProfileRow, error: fetchedProfileErr },
+          ] = await timeoutAfter(
+            Promise.all([
+              supabase.from('users').select('*').eq('id', userId).maybeSingle(),
+              supabase.from('profiles').select('*').eq('user_id', userId).maybeSingle(),
+            ]),
+            REST_FALLBACK_TIMEOUT_MS,
+            'Supabase auth bootstrap',
+          );
+
+          userRow = fetchedUserRow as DbUser | null;
+          profileRow = fetchedProfileRow as DbProfile | null;
+          userErr = fetchedUserErr;
+          profErr = fetchedProfileErr;
+        } catch (queryErr) {
+          console.warn('[AuthContext] supabase-js bootstrap falhou; a tentar fallback REST:', queryErr);
+
+          const { data: { session: currentSession } } = await supabase.auth.getSession();
+          const accessToken = currentSession?.access_token;
+          if (!accessToken) {
+            throw queryErr;
+          }
+
+          const encodedUserId = encodeURIComponent(userId);
+          [userRow, profileRow] = await Promise.all([
+            fetchPublicRow<DbUser>(`users?id=eq.${encodedUserId}&select=*`, accessToken),
+            fetchPublicRow<DbProfile>(`profiles?user_id=eq.${encodedUserId}&select=*`, accessToken),
           ]);
+        }
 
         if (userErr) {
           if (isPermissionError(userErr)) {

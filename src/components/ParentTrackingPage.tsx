@@ -90,6 +90,12 @@ export default function ParentTrackingPage() {
       }
 
       const info = rows[0];
+      if (!info) {
+        if (initial) {
+          setError("Link de rastreio invalido ou expirado.");
+        }
+        return false;
+      }
       const destination = toTrackingPoint(info.dest_coords);
       const driverPoint = toTrackingPoint(info.driver_coords);
       const heading = toFiniteNumber(info.driver_heading);

@@ -13,7 +13,7 @@
 // =============================================================================
 
 import { supabase } from '../lib/supabase';
-import type { ZonePrice } from '../types';
+import type { ScoreDiscount, ZonePrice } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MAPA DE ZONAS DE LUANDA
@@ -202,6 +202,48 @@ export const zonePriceService = new ZonePriceService();
 // ─────────────────────────────────────────────────────────────────────────────
 // MULTIPLICADORES DE VEÍCULO
 // ─────────────────────────────────────────────────────────────────────────────
+interface ScoreDiscountRule {
+  score_min: number;
+  discount_pct: number;
+  label: string;
+}
+
+// IMPORTANTE: Este array TEM de estar ordenado por score_min de forma DECRESCENTE,
+// pois o `.find()` irá parar na primeira regra que for verdadeira.
+const SCORE_DISCOUNT_RULES: ScoreDiscountRule[] = [
+  { score_min: 800, discount_pct: 5, label: 'Passageiro Extraordinario' },
+  { score_min: 700, discount_pct: 3, label: 'Passageiro Excelente' },
+  { score_min: 500, discount_pct: 1, label: 'Bom Passageiro' },
+].sort((a, b) => b.score_min - a.score_min); // Protecção garantida
+
+export function applyScoreDiscount(basePrice: number, userScore?: number | null): ScoreDiscount {
+  const normalizedScore = typeof userScore === 'number' ? userScore : null;
+  const rule = normalizedScore == null
+    ? null
+    : SCORE_DISCOUNT_RULES.find((candidate) => normalizedScore >= candidate.score_min) ?? null;
+
+  if (!rule) {
+    const roundedPrice = Math.max(0, Math.round(basePrice));
+    return {
+      final_price: roundedPrice,
+      original_price: roundedPrice,
+      discount_pct: 0,
+      discount_label: null,
+    };
+  }
+
+  // O arredondamento só é feito no final para evitar acumulação de erros
+  const exactOriginal = Math.max(0, basePrice);
+  const exactFinal = exactOriginal - (exactOriginal * rule.discount_pct / 100);
+
+  return {
+    final_price: Math.max(0, Math.round(exactFinal)),
+    original_price: Math.max(0, Math.round(exactOriginal)),
+    discount_pct: rule.discount_pct,
+    discount_label: rule.label,
+  };
+}
+
 export type VehicleType = 'standard' | 'moto' | 'comfort' | 'xl';
 
 const VEHICLE_MULTIPLIER: Record<VehicleType, number> = {

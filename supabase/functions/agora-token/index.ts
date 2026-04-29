@@ -8,18 +8,18 @@
 // =============================================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  corsForbidden,
+  corsHeadersToObject,
+  resolveCorsHeaders,
+} from '../_shared/cors.ts';
 
 const AGORA_APP_ID   = Deno.env.get('AGORA_APP_ID')!;
 const AGORA_APP_CERT = Deno.env.get('AGORA_APP_CERT')!;
 const SUPABASE_URL   = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON  = Deno.env.get('SUPABASE_ANON_KEY')!;
-
-const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
-const corsHeaders = {
-  'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-  'Vary': 'Origin',
+const CORS_OPTIONS = {
+  methods: 'GET,POST,OPTIONS',
 };
 
 // Token expiry: 1 hora (em segundos)
@@ -30,6 +30,13 @@ const TOKEN_EXPIRY_SECONDS = 3600;
 const ROLE_PUBLISHER = 1;
 
 Deno.serve(async (req: Request) => {
+  const resolvedCorsHeaders = resolveCorsHeaders(req, CORS_OPTIONS);
+  if (req.headers.get('Origin') && !resolvedCorsHeaders) {
+    return corsForbidden();
+  }
+
+  const corsHeaders = corsHeadersToObject(resolvedCorsHeaders);
+
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }

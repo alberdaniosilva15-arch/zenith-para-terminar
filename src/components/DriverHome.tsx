@@ -79,6 +79,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const [todayEarnings, setTodayEarnings] = useState(0);
 
   const gpsRef    = useRef<(() => void) | null>(null);
+  
   const unsubRef1 = useRef<(() => void) | null>(null); // subscribeToAvailableRides
   const unsubRef2 = useRef<(() => void) | null>(null); // subscribeToDriverAssignments
   const unsubRef3 = useRef<ReturnType<typeof supabase.channel> | null>(null); // driver_notifications
@@ -98,16 +99,23 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     // Carregar ganhos de hoje
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    supabase
-      .from('rides')
-      .select('price_kz')
-      .eq('driver_id', driverId)
-      .eq('status', 'completed')
-      .gte('completed_at', today.toISOString())
-      .then(({ data }) => {
+    const loadEarnings = async () => {
+      try {
+        const { data } = await supabase
+          .from('rides')
+          .select('price_kz')
+          .eq('driver_id', driverId)
+          .eq('status', 'completed')
+          .gte('completed_at', today.toISOString());
+        
         const total = (data ?? []).reduce((sum, r) => sum + (Number(r.price_kz) || 0), 0);
         setTodayEarnings(total);
-      });
+      } catch (err) {
+        console.warn('[DriverHome] Falha ao carregar ganhos:', err);
+      }
+    };
+    loadEarnings();
+
   }, [profile, driverId]);
 
   const [driverDocStatus, setDriverDocStatus] = useState<'approved' | 'pending' | 'rejected' | 'none'>('none');
@@ -287,8 +295,12 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   useEffect(() => {
     if (!driverId) return;
     const fetchStatus = async () => {
-      const { data } = await supabase.from('driver_documents').select('status').eq('driver_id', driverId).maybeSingle();
-      setDriverDocStatus(data ? data.status as any : 'none');
+      try {
+        const { data } = await supabase.from('driver_documents').select('status').eq('driver_id', driverId).maybeSingle();
+        setDriverDocStatus(data ? data.status as any : 'none');
+      } catch (err) {
+        console.warn('[DriverHome] Falha ao ler estado dos documentos:', err);
+      }
     };
     fetchStatus();
   }, [driverId]);
@@ -368,6 +380,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
       setPendingNotifCount(notifs.length);
       const latest = notifs[0];
+      if (!latest) return;
       const payload = latest.payload as NotifPayload;
       const rideId  = payload.ride_id ?? latest.ride_id;
 
@@ -559,8 +572,12 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       const rides = await rideService.getAvailableRides();
       setAvailableRides(rides);
       if (rides.length > 0) {
+        const firstRide = rides[0];
+        if (!firstRide) {
+          return;
+        }
         setIncomingRide(prev => {
-          if (!prev) { setIsAuctionRide(false); return rides[0]; }
+          if (!prev) { setIsAuctionRide(false); return firstRide; }
           return prev;
         });
       }

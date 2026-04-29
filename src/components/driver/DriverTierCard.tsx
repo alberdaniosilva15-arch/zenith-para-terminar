@@ -60,6 +60,8 @@ const LEVEL_WEIGHT: Record<UserLevel, number> = {
   Diamante: 4,
 };
 
+const DEFAULT_TIER = TIER_ORDER[0]!;
+
 export default function DriverTierCard({ driverId }: DriverTierCardProps) {
   const [profile, setProfile] = useState<DriverTierSnapshot | null>(null);
   const [score, setScore] = useState<ZenithScoreType | null>(null);
@@ -123,7 +125,7 @@ export default function DriverTierCard({ driverId }: DriverTierCardProps) {
         profile.rating >= tier.minRating
         && profile.total_rides >= tier.minRides
         && (!tier.requiredLevel || LEVEL_WEIGHT[profile.level] >= LEVEL_WEIGHT[tier.requiredLevel])
-      )) ?? TIER_ORDER[0];
+      )) ?? DEFAULT_TIER;
 
     const currentIndex = TIER_ORDER.findIndex((tier) => tier.id === currentTier.id);
     const nextTier = TIER_ORDER[currentIndex + 1] ?? null;

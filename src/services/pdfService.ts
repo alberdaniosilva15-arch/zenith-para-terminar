@@ -258,7 +258,7 @@ export async function buildReceiptPDF(data: RideReceiptData): Promise<string> {
   doc.text('Este documento \u00E9 v\u00E1lido como comprovativo de servi\u00E7o prestado.', W / 2, y + 4, { align: 'center' });
 
   // Devolve base64 (sem o prefixo "data:application/pdf;base64,")
-  return doc.output('datauristring').split(',')[1];
+  return doc.output('datauristring').split(',')[1] ?? '';
 }
 
 // ── Gera o PDF de Contrato ──────────────────────────────────────────────────
@@ -311,7 +311,7 @@ export async function buildContractPDF(c: ContractData): Promise<string> {
   doc.setFontSize(6.5); doc.setTextColor(180, 180, 180);
   doc.text('Zenith Ride \u00B7 Mobilidade Urbana Angola', W / 2, y, { align: 'center' });
 
-  return doc.output('datauristring').split(',')[1];
+  return doc.output('datauristring').split(',')[1] ?? '';
 }
 
 export async function buildFleetBillingPDF(data: FleetBillingPdfData): Promise<string> {
@@ -414,7 +414,7 @@ export async function buildFleetBillingPDF(data: FleetBillingPdfData): Promise<s
   doc.setTextColor(170, 170, 170);
   doc.text('Zenith Fleet · Relatorio financeiro gerado automaticamente.', W / 2, y, { align: 'center' });
 
-  return doc.output('datauristring').split(',')[1];
+  return doc.output('datauristring').split(',')[1] ?? '';
 }
 
 // ── Generic Save File ───────────────────────────────────────────────────────
@@ -453,7 +453,7 @@ export async function shareFile(uriOrBase64: string, fileName: string, options: 
   } else {
     if (navigator.share) {
       try {
-        const base64Data = uriOrBase64.includes(',') ? uriOrBase64.split(',')[1] : uriOrBase64;
+        const base64Data = uriOrBase64.includes(',') ? (uriOrBase64.split(',')[1] ?? '') : uriOrBase64;
         const byteChars = atob(base64Data);
         const byteArray = new Uint8Array(byteChars.length);
         for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);

@@ -123,23 +123,26 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
     if (pageNum === 0) setLoading(true); else setLoadingMore(true);
     const from = pageNum * PAGE_SIZE;
 
-    const [walletRes, txRes] = await Promise.all([
-      pageNum === 0 ? supabase.from('wallets').select('*').eq('user_id', userId).single() : Promise.resolve({ data: null, error: null }),
-      supabase.from('transactions').select('*').eq('user_id', userId)
-        .order('created_at', { ascending: false }).range(from, from + PAGE_SIZE - 1),
-    ]);
+    try {
+      const [walletRes, txRes] = await Promise.all([
+        pageNum === 0 ? supabase.from('wallets').select('*').eq('user_id', userId).single() : Promise.resolve({ data: null, error: null }),
+        supabase.from('transactions').select('*').eq('user_id', userId)
+          .order('created_at', { ascending: false }).range(from, from + PAGE_SIZE - 1),
+      ]);
 
-    if (walletRes.data) setWallet(walletRes.data as DbWallet);
-    if (txRes.data) {
-      setTransactions(prev => pageNum === 0 ? txRes.data as DbTransaction[] : [...prev, ...txRes.data as DbTransaction[]]);
-      setHasMore(txRes.data.length === PAGE_SIZE);
+      if (walletRes.data) setWallet(walletRes.data as DbWallet);
+      if (txRes.data) {
+        setTransactions(prev => pageNum === 0 ? txRes.data as DbTransaction[] : [...prev, ...txRes.data as DbTransaction[]]);
+        setHasMore(txRes.data.length === PAGE_SIZE);
+      }
+    } catch (err) {
+      console.error('[Wallet.loadData] Erro ao carregar dados:', err);
+    } finally {
+      if (pageNum === 0) setLoading(false); else setLoadingMore(false);
     }
-    if (pageNum === 0) setLoading(false); else setLoadingMore(false);
   }, [userId]);
 
-  useEffect(() => { loadData(0); }, [userId]);
-
-  // Realtime
+  useEffect(() => { loadData(0); }, [loadData]);
   useEffect(() => {
     const ch = supabase.channel(`wallet:${userId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'wallets', filter: `user_id=eq.${userId}` },
@@ -175,13 +178,24 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
     setWithdrawLoading(true);
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        throw new Error('Sessão expirada. Faz login novamente.');
+      }
+
       const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/multicaixa-pay`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token ?? ''}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({ action: 'withdrawal', amount_kz: amount }),
       });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.message ?? 'Falha no processamento.');
+
+      if (!res.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+        throw new Error('Resposta inválida do servidor.');
+      }
+
+      const data = await res.json().catch(() => null) as { success?: boolean; message?: string } | null;
+      if (!res.ok || !data?.success) {
+        throw new Error(data?.message ?? 'Falha no processamento.');
+      }
       
       setShowWithdrawModal(false);
       loadData(0);

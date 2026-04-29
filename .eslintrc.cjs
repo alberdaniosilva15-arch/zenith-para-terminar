@@ -3,13 +3,12 @@ module.exports = {
   env: {
     browser: true,
     node: true,
-    es2021: true,
+    es2022: true,
   },
-  // Ignorar código de functions e build output para lint local
   ignorePatterns: ['dist/', 'supabase/**'],
   parser: '@typescript-eslint/parser',
   parserOptions: {
-    ecmaVersion: 2020,
+    ecmaVersion: 2022,
     sourceType: 'module',
     ecmaFeatures: { jsx: true },
   },
@@ -18,14 +17,14 @@ module.exports = {
   extends: [
     'eslint:recommended',
     'plugin:@typescript-eslint/recommended',
-    'plugin:react-hooks/recommended'
+    'plugin:react-hooks/recommended',
   ],
   rules: {
-    // Projetos legacy: relaxar regras que bloqueiam a verificação inicial
     'react/react-in-jsx-scope': 'off',
-    '@typescript-eslint/no-explicit-any': 'off',
-    '@typescript-eslint/no-unused-vars': 'off',
-    'react-hooks/exhaustive-deps': 'off',
+    '@typescript-eslint/no-explicit-any': 'warn',
+    '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+    'react-hooks/exhaustive-deps': 'warn',
+    '@typescript-eslint/consistent-type-imports': 'warn',
     'no-console': 'off',
   },
 };

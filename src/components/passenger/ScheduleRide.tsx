@@ -6,7 +6,7 @@
 
 import React, { useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Calendar, Clock, MapPin, CheckCircle, X, AlertCircle } from 'lucide-react';
+import { Calendar, Clock, CheckCircle, X, AlertCircle } from 'lucide-react';
 
 interface ScheduleRideProps {
   userId:      string;
@@ -14,15 +14,17 @@ interface ScheduleRideProps {
   destName:    string;
   pickupCoords: { lat: number; lng: number } | null;
   destCoords:   { lat: number; lng: number } | null;
+  defaultDate?: string;
+  defaultTime?: string;
   onClose:     () => void;
   onScheduled: () => void;
 }
 
 const ScheduleRide: React.FC<ScheduleRideProps> = ({
-  userId, pickupName, destName, pickupCoords, destCoords, onClose, onScheduled,
+  userId, pickupName, destName, pickupCoords, destCoords, defaultDate, defaultTime, onClose, onScheduled,
 }) => {
-  const [date, setDate]       = useState('');
-  const [time, setTime]       = useState('');
+  const [date, setDate]       = useState(defaultDate ?? '');
+  const [time, setTime]       = useState(defaultTime ?? '');
   const [saving, setSaving]   = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError]     = useState<string | null>(null);
@@ -48,7 +50,9 @@ const ScheduleRide: React.FC<ScheduleRideProps> = ({
       return;
     }
 
-    const scheduledAt = new Date(`${date}T${time}:00`);
+    // WAT (Africa/Luanda) = UTC+1 — garantir que a hora agendada é
+    // interpretada no fuso correcto independentemente do dispositivo.
+    const scheduledAt = new Date(`${date}T${time}:00+01:00`);
     const now = new Date();
     if (scheduledAt <= now) {
       setError('A data e hora devem ser no futuro.');
@@ -102,7 +106,7 @@ const ScheduleRide: React.FC<ScheduleRideProps> = ({
           </div>
           <h3 className="text-lg font-black text-on-surface">Corrida Agendada!</h3>
           <p className="text-sm text-on-surface-variant font-bold">
-            {new Date(`${date}T${time}`).toLocaleDateString('pt-AO', {
+            {new Date(`${date}T${time}:00+01:00`).toLocaleDateString('pt-AO', {
               weekday: 'long', day: 'numeric', month: 'long',
             })} às {time}
           </p>
@@ -189,7 +193,7 @@ const ScheduleRide: React.FC<ScheduleRideProps> = ({
             ].map(opt => (
               <button
                 key={opt.value}
-                onClick={() => setRecurrence(opt.value as any)}
+                onClick={() => setRecurrence(opt.value as 'none' | 'daily' | 'weekdays' | 'weekly')}
                 className={`px-3 py-1.5 rounded-full text-[9px] font-black transition-all border ${
                   recurrence === opt.value
                     ? 'bg-primary/15 text-primary border-primary/30'

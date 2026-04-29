@@ -90,9 +90,10 @@ export default function FleetBilling({ fleetId }: FleetBillingProps) {
     setDownloading(true);
 
     try {
+      const firstLedgerEntry = ledger[0];
       const base64 = await buildFleetBillingPDF({
         fleetId,
-        plan: subscription?.plan ?? ledger[0].plan,
+        plan: subscription?.plan ?? firstLedgerEntry?.plan ?? 'free',
         activeCars: carsCount,
         totalSpentThisMonth,
         costPerCar,

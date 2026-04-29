@@ -12,7 +12,9 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { AutonomousCommand } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import FullPageSpinner from './FullPageSpinner';
+import { AutonomousCommand, UserRole } from '../types';
 import { geminiService } from '../services/geminiService';
 import { supabase } from '../lib/supabase';
 import { parseSupabasePoint } from '../services/rideService';
@@ -74,7 +76,7 @@ const INITIAL_REFERRAL_STATS: ReferralStats = {
   topReferrers: [],
 };
 
-const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
+const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
   const [activeTab, setActiveTab] = useState<'map' | 'market' | 'prices' | 'sos' | 'users' | 'services' | 'drivers' | 'security'>('map');
   const [commands, setCommands]   = useState<AutonomousCommand[]>([]);
   const [loading, setLoading]     = useState(false);
@@ -235,7 +237,7 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
         topReferrers: referrerIds
           .map((id) => ({
             name: profileMap.get(id) ?? 'Utilizador Zenith',
-            total: totalsByReferrer[id],
+            total: totalsByReferrer[id] ?? 0,
           }))
           .sort((left, right) => right.total - left.total)
           .slice(0, 10),
@@ -843,6 +845,30 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ lastCommand }) => {
       </div>
     </div>
   );
+};
+
+const AdminDashboard: React.FC<AdminDashboardProps> = (props) => {
+  const { loading, role } = useAuth();
+
+  if (loading) {
+    return <FullPageSpinner label="A validar acesso de admin..." />;
+  }
+
+  if (role !== UserRole.ADMIN) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center p-6">
+        <div className="max-w-md rounded-[2rem] border border-outline-variant/20 bg-surface-container-low p-8 text-center">
+          <p className="text-[10px] font-black uppercase tracking-widest text-error">Acesso restrito</p>
+          <h2 className="mt-3 text-2xl font-black text-on-surface">Painel apenas para administradores</h2>
+          <p className="mt-3 text-sm font-bold text-on-surface-variant/70">
+            Esta área exige uma conta com role <code>admin</code>.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <AdminDashboardInner {...props} />;
 };
 
 export default AdminDashboard;

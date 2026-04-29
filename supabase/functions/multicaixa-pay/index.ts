@@ -1,272 +1,582 @@
-// =============================================================================
-// ZENITH RIDE v3.0 — Edge Function: multicaixa-pay
-// Ficheiro: supabase/functions/multicaixa-pay/index.ts
-//
-// Integração com Multicaixa Express (pagamento móvel Angola nativo)
-// Documentação: https://developers.multicaixaexpress.ao
-//
-// VARIÁVEIS DE AMBIENTE necessárias (Supabase → Settings → Secrets):
-//   MULTICAIXA_API_KEY    = chave de API do merchant
-//   MULTICAIXA_MERCHANT_ID = ID do comerciante
-//   MULTICAIXA_BASE_URL   = https://api.multicaixaexpress.ao/v1 (produção)
-//                           https://api-sandbox.multicaixaexpress.ao/v1 (testes)
-// =============================================================================
-
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import {
+  applyCors,
+  corsForbidden,
+  resolveCorsHeaders,
+} from '../_shared/cors.ts';
 
-const MULTICAIXA_API_KEY    = Deno.env.get('MULTICAIXA_API_KEY')!;
+const MULTICAIXA_API_KEY = Deno.env.get('MULTICAIXA_API_KEY')!;
 const MULTICAIXA_MERCHANT_ID = Deno.env.get('MULTICAIXA_MERCHANT_ID')!;
-const MULTICAIXA_BASE_URL   = Deno.env.get('MULTICAIXA_BASE_URL') ?? 'https://api-sandbox.multicaixaexpress.ao/v1';
+const MULTICAIXA_BASE_URL =
+  Deno.env.get('MULTICAIXA_BASE_URL') ??
+  'https://api-sandbox.multicaixaexpress.ao/v1';
 
-const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
-const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
+const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// Limites de carregamento (em KZS)
 const MIN_TOP_UP = 500;
 const MAX_TOP_UP = 500_000;
+const CORS_OPTIONS = {
+  methods: 'POST, OPTIONS',
+};
+
+type Action = 'initiate_payment' | 'check_status' | 'callback' | 'withdrawal';
+
+type AuthenticatedUser = {
+  id: string;
+};
+
+type PendingPaymentRow = {
+  reference: string;
+  user_id: string;
+  amount: number;
+  status: 'pending' | 'confirmed' | 'failed' | 'cancelled';
+  phone_number: string | null;
+};
+
+function jsonOk(
+  body: Record<string, unknown>,
+  corsHeaders: Headers | null,
+): Response {
+  const response = new Response(JSON.stringify(body), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  return applyCors(response, corsHeaders);
+}
+
+function jsonErr(
+  message: string,
+  status: number,
+  corsHeaders: Headers | null,
+): Response {
+  const response = new Response(
+    JSON.stringify({
+      error: true,
+      message,
+    }),
+    {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    },
+  );
+
+  return applyCors(response, corsHeaders);
+}
+
+function createSupabaseAdmin() {
+  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+}
+
+async function authenticateUser(
+  authHeader: string | null,
+): Promise<AuthenticatedUser | null> {
+  if (!authHeader) {
+    return null;
+  }
+
+  const supabaseUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: {
+      headers: {
+        Authorization: authHeader,
+      },
+    },
+  });
+
+  const {
+    data: { user },
+    error,
+  } = await supabaseUser.auth.getUser();
+
+  if (error || !user) {
+    return null;
+  }
+
+  return { id: user.id };
+}
+
+function generateReference(): string {
+  const suffix = crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase();
+  return `ZENITH-MCX-${Date.now()}-${suffix}`;
+}
+
+function normalizePendingPaymentStatus(
+  status: string | null | undefined,
+): PendingPaymentRow['status'] {
+  switch ((status ?? '').toUpperCase()) {
+    case 'CONFIRMED':
+    case 'SUCCESS':
+      return 'confirmed';
+    case 'FAILED':
+    case 'REJECTED':
+    case 'EXPIRED':
+      return 'failed';
+    case 'CANCELLED':
+    case 'CANCELED':
+      return 'cancelled';
+    default:
+      return 'pending';
+  }
+}
+
+async function verifyWebhookSignature(
+  bodyText: string,
+  signature: string,
+  secret: string,
+): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+
+  const signatureBytes = new Uint8Array(
+    signature.match(/[\da-f]{2}/gi)?.map((part) => parseInt(part, 16)) ?? [],
+  );
+
+  if (signatureBytes.length === 0) {
+    return false;
+  }
+
+  return crypto.subtle.verify('HMAC', key, signatureBytes, encoder.encode(bodyText));
+}
 
 Deno.serve(async (req: Request) => {
-  if (req.method === 'OPTIONS') return corsOk();
-  if (req.method !== 'POST') return jsonErr('Método não suportado.', 405);
+  const corsHeaders = resolveCorsHeaders(req, CORS_OPTIONS);
+  if (req.headers.get('Origin') && !corsHeaders) {
+    return corsForbidden();
+  }
+
+  if (req.method === 'OPTIONS') {
+    return applyCors(new Response(null, { status: 204 }), corsHeaders);
+  }
+
+  if (req.method !== 'POST') {
+    return jsonErr('Metodo nao suportado.', 405, corsHeaders);
+  }
 
   try {
-    // ----------------------------------------------------------------
-    // 1. Auth
-    // ----------------------------------------------------------------
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return jsonErr('Token em falta.', 401);
-
-    const supabaseUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const { data: { user }, error } = await supabaseUser.auth.getUser();
-    if (error || !user) return jsonErr('Sessão inválida.', 401);
-
-    // ----------------------------------------------------------------
-    // 2. Parse e validação
-    // ----------------------------------------------------------------
     const bodyText = await req.text();
-    const body = JSON.parse(bodyText);
-    const { action, ...params } = body as {
-      action: 'initiate_payment' | 'check_status' | 'callback' | 'withdrawal';
-      [k: string]: unknown;
-    };
+    const parsedBody = JSON.parse(bodyText) as Record<string, unknown>;
+    const signature = req.headers.get('X-Multicaixa-Signature');
+    const parsedAction =
+      typeof parsedBody.action === 'string' ? (parsedBody.action as Action) : null;
+    const action = parsedAction ?? (signature ? 'callback' : null);
 
-    // ----------------------------------------------------------------
-    // 3. Roteamento
-    // ----------------------------------------------------------------
+    if (!action) {
+      return jsonErr('Accao em falta.', 400, corsHeaders);
+    }
+
+    const params =
+      parsedAction === null
+        ? parsedBody
+        : Object.fromEntries(
+            Object.entries(parsedBody).filter(([key]) => key !== 'action'),
+          );
+
+    const supabaseAdmin = createSupabaseAdmin();
+
     switch (action) {
-
-      // ----------------------------------------------------------------
-      // INICIAR PAGAMENTO — passageiro carrega a carteira
-      // ----------------------------------------------------------------
       case 'initiate_payment': {
-        const { amount_kz, phone_number } = params as { amount_kz: number; phone_number: string };
+        const user = await authenticateUser(req.headers.get('Authorization'));
+        if (!user) {
+          return jsonErr('Sessao invalida.', 401, corsHeaders);
+        }
+
+        const { amount_kz, phone_number } = params as {
+          amount_kz: number;
+          phone_number: string;
+        };
 
         if (!amount_kz || amount_kz < MIN_TOP_UP || amount_kz > MAX_TOP_UP) {
-          return jsonErr(`Valor inválido. Min: ${MIN_TOP_UP} Kz | Max: ${MAX_TOP_UP} Kz`, 400);
+          return jsonErr(
+            `Valor invalido. Min: ${MIN_TOP_UP} Kz | Max: ${MAX_TOP_UP} Kz`,
+            400,
+            corsHeaders,
+          );
         }
 
-        // Validar formato telefone Angola: 9XXXXXXXX
         if (!/^9[0-9]{8}$/.test(phone_number)) {
-          return jsonErr('Número de telefone inválido. Formato: 9XXXXXXXX', 400);
+          return jsonErr(
+            'Numero de telefone invalido. Formato: 9XXXXXXXX',
+            400,
+            corsHeaders,
+          );
         }
 
-        // Gerar referência única
-        const reference = `ZENITH-${user.id.slice(0, 8).toUpperCase()}-${Date.now()}`;
+        // ── Idempotência: evitar pagamentos duplicados (double-click) ──
+        const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+        const { data: existingPayment } = await supabaseAdmin
+          .from('pending_payments')
+          .select('reference, created_at')
+          .eq('user_id', user.id)
+          .eq('amount', amount_kz)
+          .eq('status', 'pending')
+          .gte('created_at', twoMinutesAgo)
+          .order('created_at', { ascending: false })
+          .limit(1);
 
-        // Chamar API Multicaixa Express
+        if (existingPayment && existingPayment.length > 0) {
+          return jsonOk(
+            {
+              success: true,
+              reference: existingPayment[0].reference,
+              message: `Pagamento ja iniciado. Confirma no teu telemovel.`,
+              already_initiated: true,
+            },
+            corsHeaders,
+          );
+        }
+
+        const reference = generateReference();
         const mcxRes = await fetch(`${MULTICAIXA_BASE_URL}/payments/initiate`, {
           method: 'POST',
           headers: {
-            'Content-Type':  'application/json',
-            'Authorization': `Bearer ${MULTICAIXA_API_KEY}`,
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${MULTICAIXA_API_KEY}`,
             'X-Merchant-Id': MULTICAIXA_MERCHANT_ID,
           },
           body: JSON.stringify({
-            amount:      amount_kz,
-            currency:    'AOA',
-            phone:       `+244${phone_number}`,
+            amount: amount_kz,
+            currency: 'AOA',
+            phone: `+244${phone_number}`,
             reference,
-            description: `Carregamento Zenith Ride - ${user.id.slice(0, 8)}`,
+            description: `Carregamento Zenith Ride - ${user.id}`,
             callback_url: `${SUPABASE_URL}/functions/v1/multicaixa-pay`,
           }),
         });
 
         if (!mcxRes.ok) {
-          const mcxErr = await mcxRes.json().catch(() => ({}));
+          const mcxErr = await mcxRes.json().catch(async () => ({
+            raw: await mcxRes.text().catch(() => ''),
+          }));
           console.error('[multicaixa-pay] Erro API:', mcxErr);
-          return jsonErr('Erro ao iniciar pagamento Multicaixa. Tenta de novo.', 502);
+          return jsonErr(
+            'Erro ao iniciar pagamento Multicaixa. Tenta de novo.',
+            502,
+            corsHeaders,
+          );
         }
 
         const mcxData = await mcxRes.json();
+        const { error: pendingError } = await supabaseAdmin
+          .from('pending_payments')
+          .insert({
+            reference,
+            user_id: user.id,
+            amount: amount_kz,
+            phone_number,
+            provider: 'multicaixa',
+            status: 'pending',
+            provider_payload: mcxData,
+          });
 
-        // Registar tentativa de pagamento (para tracking + callback)
-        const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-        await supabaseAdmin.from('transactions').insert({
-          user_id:       user.id,
-          amount:        amount_kz,
-          type:          'top_up',
-          description:   `Carregamento pendente — Ref: ${reference}`,
-          balance_after: 0,  // actualizado no callback
-        });
+        if (pendingError) {
+          console.error('[multicaixa-pay] Erro ao registar pagamento pendente:', pendingError);
+          return jsonErr(
+            'Falha ao registar o pagamento pendente. Contacta o suporte.',
+            500,
+            corsHeaders,
+          );
+        }
 
-        return jsonOk({
-          success:      true,
-          reference,
-          message:      `Pedido enviado para ${phone_number}. Confirma no teu telemóvel.`,
-          payment_url:  mcxData.payment_url ?? null,
-          expires_at:   mcxData.expires_at ?? null,
-        });
+        return jsonOk(
+          {
+            success: true,
+            reference,
+            message: `Pedido enviado para ${phone_number}. Confirma no teu telemovel.`,
+            payment_url: mcxData.payment_url ?? null,
+            expires_at: mcxData.expires_at ?? null,
+          },
+          corsHeaders,
+        );
       }
 
-      // ----------------------------------------------------------------
-      // VERIFICAR ESTADO de um pagamento
-      // ----------------------------------------------------------------
       case 'check_status': {
+        const user = await authenticateUser(req.headers.get('Authorization'));
+        if (!user) {
+          return jsonErr('Sessao invalida.', 401, corsHeaders);
+        }
+
         const { reference } = params as { reference: string };
-        if (!reference) return jsonErr('Referência em falta.', 400);
+        if (!reference || reference.length > 128) {
+          return jsonErr('Referencia em falta.', 400, corsHeaders);
+        }
+
+        const { data: pendingPayment, error: pendingError } = await supabaseAdmin
+          .from('pending_payments')
+          .select('reference, amount, status')
+          .eq('reference', reference)
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (pendingError) {
+          console.error('[multicaixa-pay] Erro ao consultar pending_payments:', pendingError);
+          return jsonErr('Falha ao consultar pagamento.', 500, corsHeaders);
+        }
+
+        if (!pendingPayment) {
+          return jsonErr('Pagamento nao encontrado.', 404, corsHeaders);
+        }
 
         const mcxRes = await fetch(`${MULTICAIXA_BASE_URL}/payments/${reference}`, {
-          headers: { 'Authorization': `Bearer ${MULTICAIXA_API_KEY}`, 'X-Merchant-Id': MULTICAIXA_MERCHANT_ID },
+          headers: {
+            Authorization: `Bearer ${MULTICAIXA_API_KEY}`,
+            'X-Merchant-Id': MULTICAIXA_MERCHANT_ID,
+          },
         });
 
-        if (!mcxRes.ok) return jsonErr('Pagamento não encontrado.', 404);
+        if (!mcxRes.ok) {
+          return jsonErr('Pagamento nao encontrado.', 404, corsHeaders);
+        }
 
         const data = await mcxRes.json();
-        return jsonOk({ status: data.status, amount: data.amount, reference });
+        const normalizedStatus = normalizePendingPaymentStatus(data.status);
+
+        if (normalizedStatus !== 'confirmed') {
+          await supabaseAdmin
+            .from('pending_payments')
+            .update({
+              status: normalizedStatus,
+              provider_payload: data,
+            })
+            .eq('reference', reference)
+            .neq('status', 'confirmed');
+        } else {
+          await supabaseAdmin
+            .from('pending_payments')
+            .update({
+              provider_payload: data,
+            })
+            .eq('reference', reference);
+        }
+
+        return jsonOk(
+          {
+            status: data.status,
+            amount: data.amount ?? pendingPayment.amount,
+            reference,
+            local_status: pendingPayment.status,
+          },
+          corsHeaders,
+        );
       }
 
-      // ----------------------------------------------------------------
-      // CALLBACK do Multicaixa (webhook — chamado pelo Multicaixa, não pelo user)
-      // Accredita o saldo após confirmação de pagamento
-      // ----------------------------------------------------------------
       case 'callback': {
-        // Validar assinatura do webhook (segurança HMAC SHA256)
-        const signature = req.headers.get('X-Multicaixa-Signature');
-        if (!signature) return jsonErr('Assinatura em falta.', 401);
+        if (!signature) {
+          return jsonErr('Assinatura em falta.', 401, corsHeaders);
+        }
 
-        const MULTICAIXA_WEBHOOK_SECRET = Deno.env.get('MULTICAIXA_WEBHOOK_SECRET') || '';
-        if (MULTICAIXA_WEBHOOK_SECRET && MULTICAIXA_WEBHOOK_SECRET !== 'simulated_dev_secret') {
-          try {
-            const encoder = new TextEncoder();
-            const key = await crypto.subtle.importKey(
-              'raw',
-              encoder.encode(MULTICAIXA_WEBHOOK_SECRET),
-              { name: 'HMAC', hash: 'SHA-256' },
-              false,
-              ['verify']
-            );
-            
-            // Converter a assinatura hex recebida para Uint8Array
-            const sigBytes = new Uint8Array(signature.match(/[\da-f]{2}/gi)?.map(h => parseInt(h, 16)) || []);
-            
-            const isValid = await crypto.subtle.verify(
-              'HMAC',
-              key,
-              sigBytes,
-              encoder.encode(bodyText)
-            );
-            
-            if (!isValid) {
-              console.error('[multicaixa-pay] Falha na validação HMAC do webhook.');
-              return jsonErr('Assinatura inválida.', 401);
-            }
-          } catch (err) {
-            console.error('[multicaixa-pay] Erro na verificação HMAC:', err);
-            return jsonErr('Erro de validação.', 401);
-          }
+        const webhookSecret =
+          Deno.env.get('MULTICAIXA_WEBHOOK_SECRET')?.trim() ?? '';
+        if (!webhookSecret) {
+          return jsonErr(
+            'Webhook indisponivel: MULTICAIXA_WEBHOOK_SECRET em falta.',
+            503,
+            corsHeaders,
+          );
+        }
+
+        const isValidSignature = await verifyWebhookSignature(
+          bodyText,
+          signature,
+          webhookSecret,
+        );
+
+        if (!isValidSignature) {
+          console.error('[multicaixa-pay] Falha na validacao HMAC do webhook.');
+          return jsonErr('Assinatura invalida.', 401, corsHeaders);
         }
 
         const { reference, status, amount, payer_phone } = params as {
-          reference: string; status: string; amount: number; payer_phone: string;
+          reference: string;
+          status: string;
+          amount: number;
+          payer_phone?: string;
         };
+        const normalizedAmount = Number(amount);
 
-        if (status !== 'CONFIRMED') {
-          console.log(`[multicaixa-pay] Callback: pagamento ${reference} com status ${status} — ignorado`);
-          return jsonOk({ received: true });
+        if (!reference || !status || !Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+          return jsonErr('Payload de callback invalido.', 400, corsHeaders);
         }
 
-        // Extrair user_id da referência: ZENITH-{userId8chars}-{timestamp}
-        const userIdPrefix = reference.split('-')[1]?.toLowerCase();
-        if (!userIdPrefix) return jsonErr('Referência inválida.', 400);
+        const { data: pendingPayment, error: pendingError } = await supabaseAdmin
+          .from('pending_payments')
+          .select('reference, user_id, amount, status, phone_number')
+          .eq('reference', reference)
+          .maybeSingle();
 
-        const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+        if (pendingError) {
+          console.error('[multicaixa-pay] Erro ao ler pending_payments:', pendingError);
+          return jsonErr('Erro ao validar pagamento.', 500, corsHeaders);
+        }
 
-        // Encontrar utilizador pela referência parcial do ID
-        const { data: userData } = await supabaseAdmin
-          .from('users')
-          .select('id')
-          .ilike('id', `${userIdPrefix}%`)
-          .single();
+        if (!pendingPayment) {
+          return jsonErr('Pagamento pendente nao encontrado.', 404, corsHeaders);
+        }
 
-        if (!userData) return jsonErr('Utilizador não encontrado.', 404);
+        const normalizedStatus = normalizePendingPaymentStatus(status);
+        await supabaseAdmin
+          .from('pending_payments')
+          .update({
+            callback_payload: {
+              reference,
+              status,
+              amount: normalizedAmount,
+              payer_phone: payer_phone ?? null,
+              received_at: new Date().toISOString(),
+            },
+          })
+          .eq('reference', reference);
 
-        // TRANSACÇÃO ATÓMICA: creditar saldo
-        const { data: wallet } = await supabaseAdmin
-          .from('wallets')
-          .select('balance')
-          .eq('user_id', userData.id)
-          .single();
+        if (normalizedStatus !== 'confirmed') {
+          await supabaseAdmin
+            .from('pending_payments')
+            .update({
+              status: normalizedStatus,
+            })
+            .eq('reference', reference)
+            .neq('status', 'confirmed');
 
-        if (!wallet) return jsonErr('Wallet não encontrada.', 404);
+          console.log(
+            `[multicaixa-pay] Callback recebido para ${reference} com status ${status}`,
+          );
+          return jsonOk(
+            {
+              received: true,
+              status,
+            },
+            corsHeaders,
+          );
+        }
 
-        const newBalance = wallet.balance + amount;
+        if (normalizedAmount !== Number(pendingPayment.amount)) {
+          console.error('[multicaixa-pay] Valor do callback nao confere com pending_payments.', {
+            reference,
+            expected: pendingPayment.amount,
+            received: normalizedAmount,
+          });
+          return jsonErr('Valor do callback nao confere.', 400, corsHeaders);
+        }
 
-        await supabaseAdmin.from('wallets').update({
-          balance: newBalance, updated_at: new Date().toISOString()
-        }).eq('user_id', userData.id);
+        const { data: creditData, error: creditError } = await supabaseAdmin.rpc(
+          'credit_wallet_atomic',
+          {
+            p_user_id: pendingPayment.user_id,
+            p_amount: normalizedAmount,
+            p_description: `Carregamento Multicaixa - Ref: ${reference}`,
+            p_reference: reference,
+          },
+        );
 
-        await supabaseAdmin.from('transactions').insert({
-          user_id:       userData.id,
-          amount:        amount,
-          type:          'top_up',
-          description:   `Carregamento Multicaixa — Ref: ${reference}`,
-          balance_after: newBalance,
-        });
+        if (creditError) {
+          console.error('[multicaixa-pay] Erro no credito atomico:', creditError);
+          return jsonErr('Falha ao creditar saldo.', 500, corsHeaders);
+        }
 
-        console.log(`[multicaixa-pay] Saldo creditado: ${amount} Kz → user ${userData.id}`);
-        return jsonOk({ received: true, credited: amount });
+        const creditRow = Array.isArray(creditData) ? creditData[0] : creditData;
+        const credited = Boolean(creditRow?.credited);
+
+        console.log(
+          `[multicaixa-pay] Callback processado para ${reference} - credited=${credited}`,
+        );
+
+        return jsonOk(
+          {
+            received: true,
+            reference,
+            credited: credited ? normalizedAmount : 0,
+            already_processed: !credited,
+          },
+          corsHeaders,
+        );
       }
 
       case 'withdrawal': {
-        const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-        // Levantamento para conta bancária do motorista
-        const { amount_kz, iban } = params as { amount_kz: number; iban?: string };
+        const user = await authenticateUser(req.headers.get('Authorization'));
+        if (!user) {
+          return jsonErr('Sessao invalida.', 401, corsHeaders);
+        }
+
+        const { amount_kz } = params as { amount_kz: number };
         if (!amount_kz || amount_kz < 1000) {
-          return jsonErr('Levantamento mínimo: 1.000 Kz', 400);
+          return jsonErr('Levantamento minimo: 1.000 Kz', 400, corsHeaders);
         }
-        // Verificar saldo suficiente
-        const { data: wallet } = await supabaseAdmin
-          .from('wallets').select('balance').eq('user_id', user.id).single();
+
+        const { data: userRow, error: userError } = await supabaseAdmin
+          .from('users')
+          .select('role')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        if (userError) {
+          console.error('[multicaixa-pay] Erro ao validar role do utilizador:', userError);
+          return jsonErr('Falha ao validar o utilizador.', 500, corsHeaders);
+        }
+
+        if (!userRow || userRow.role !== 'driver') {
+          return jsonErr(
+            'Apenas motoristas podem solicitar levantamento.',
+            403,
+            corsHeaders,
+          );
+        }
+
+        const { data: wallet, error: walletError } = await supabaseAdmin
+          .from('wallets')
+          .select('balance')
+          .eq('user_id', user.id)
+          .single();
+
+        if (walletError) {
+          console.error('[multicaixa-pay] Erro ao consultar wallet:', walletError);
+          return jsonErr('Falha ao consultar saldo.', 500, corsHeaders);
+        }
+
         if (!wallet || wallet.balance < amount_kz) {
-          return jsonErr('Saldo insuficiente para levantamento.', 400);
+          return jsonErr(
+            'Saldo insuficiente para levantamento.',
+            400,
+            corsHeaders,
+          );
         }
-        // Debitar carteira e registar transacção
-        await supabaseAdmin.rpc('process_withdrawal', {
-          p_user_id: user.id,
-          p_amount:  amount_kz,
-        });
-        return jsonOk({
-          success: true,
-          message: `Levantamento de ${amount_kz.toLocaleString('pt-AO')} Kz iniciado. Processamento em 24h úteis.`,
-        });
+
+        const { error: withdrawalError } = await supabaseAdmin.rpc(
+          'process_withdrawal',
+          {
+            p_user_id: user.id,
+            p_amount: amount_kz,
+          },
+        );
+
+        if (withdrawalError) {
+          console.error('[multicaixa-pay] Erro ao processar levantamento:', withdrawalError);
+          return jsonErr('Falha ao iniciar levantamento.', 500, corsHeaders);
+        }
+
+        return jsonOk(
+          {
+            success: true,
+            message: `Levantamento de ${amount_kz.toLocaleString('pt-AO')} Kz iniciado. Processamento em 24h uteis.`,
+          },
+          corsHeaders,
+        );
       }
 
       default:
-        return jsonErr(`Acção desconhecida: "${action}"`, 400);
+        return jsonErr(`Accao desconhecida: "${action}"`, 400, corsHeaders);
     }
-
-  } catch (e) {
-    console.error('[multicaixa-pay] Erro:', e);
-    return jsonErr('Erro interno.', 500);
+  } catch (error) {
+    console.error('[multicaixa-pay] Erro:', error);
+    return jsonErr('Erro interno.', 500, resolveCorsHeaders(req, CORS_OPTIONS));
   }
 });
-
-const corsOk = () => new Response(null, {
-  headers: { 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Access-Control-Allow-Headers': 'authorization, content-type, x-client-info, apikey', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Vary': 'Origin' },
-});
-const jsonOk  = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
-const jsonErr = (m: string, s: number) => new Response(JSON.stringify({ error: true, message: m }), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });

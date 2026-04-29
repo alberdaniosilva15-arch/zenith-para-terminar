@@ -44,7 +44,9 @@ export function parseSupabasePoint(val: unknown): LatLng | null {
 
   if (val.startsWith('POINT')) {
     const match = val.match(/POINT\(([^ ]+)\s+([^ ]+)\)/);
-    if (match) return { lng: parseFloat(match[1]), lat: parseFloat(match[2]) };
+    const lngText = match?.[1];
+    const latText = match?.[2];
+    if (lngText && latText) return { lng: parseFloat(lngText), lat: parseFloat(latText) };
   }
 
   try {
@@ -91,6 +93,8 @@ interface CreateRideInput {
 interface RideUpdateResult { data: DbRide | null; error: AppError | null; }
 
 // ─── Rate limiter (por userId, 5 req / 60s) ──────────────────────────────────
+// Cliente: pre-throttle de UX.
+// A validacao autoritativa corre agora no Postgres via trigger/RPC.
 const rideRateTracker = new Map<string, number[]>();
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -412,6 +416,7 @@ class RideService {
             driver_not_available: 'O motorista escolhido já não está disponível.',
             driver_active_ride: 'O motorista escolhido ficou ocupado noutra corrida.',
             not_allowed: 'Sessão inválida para criar a corrida.',
+            ride_rate_limit: 'Demasiados pedidos de corrida. Aguarda 1 minuto.',
           };
           return {
             data: null,
@@ -448,7 +453,12 @@ class RideService {
 
       if (error) {
         console.error('[rideService.createRide]', error);
-        return { data: null, error: { code: error.code, message: 'Não foi possível criar a corrida.' } };
+        const reason = error.message?.trim?.() ?? '';
+        const message =
+          reason === 'ride_rate_limit'
+            ? 'Demasiados pedidos de corrida. Aguarda 1 minuto.'
+            : 'Não foi possível criar a corrida.';
+        return { data: null, error: { code: error.code, message } };
       }
 
       console.log('[rideService.createRide] Corrida criada:', (data as DbRide).id);
@@ -654,13 +664,17 @@ class RideService {
       const updatedRide = data as DbRide;
 
       if (status === RideStatus.IN_PROGRESS && updatedRide.driver_id) {
-        await supabase.from('driver_locations')
-          .update({
-            status: 'busy',
-            online_minutes_idle: 0,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('driver_id', updatedRide.driver_id);
+        try {
+          await supabase.from('driver_locations')
+            .update({
+              status: 'busy',
+              online_minutes_idle: 0,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('driver_id', updatedRide.driver_id);
+        } catch (locErr) {
+          console.warn('[rideService.updateRideStatus] Falha ao marcar driver como busy:', locErr);
+        }
 
         if (updatedRide.passenger_id === actorId) {
           try {
@@ -686,9 +700,13 @@ class RideService {
       if (status === RideStatus.COMPLETED || status === RideStatus.CANCELLED) {
         const updated = updatedRide ?? null;
         if (updated?.driver_id) {
-          await supabase.from('driver_locations')
-            .update({ status: 'available', online_minutes_idle: 0, updated_at: new Date().toISOString() })
-            .eq('driver_id', updated.driver_id);
+          try {
+            await supabase.from('driver_locations')
+              .update({ status: 'available', online_minutes_idle: 0, updated_at: new Date().toISOString() })
+              .eq('driver_id', updated.driver_id);
+          } catch (locErr) {
+            console.warn('[rideService.updateRideStatus] Falha ao marcar driver como available:', locErr);
+          }
         }
         if (status === RideStatus.COMPLETED && updated?.passenger_id) {
           const distKm = (updated as unknown as { route_distance_km?: number }).route_distance_km ?? updated.distance_km ?? 0;
@@ -991,7 +1009,11 @@ class RideService {
         if (!coords && typeof row.lat === 'number' && typeof row.lng === 'number') {
           coords = { lat: row.lat as number, lng: row.lng as number };
         }
-        if (coords) onUpdate(coords);
+        if (coords) {
+          onUpdate(coords);
+        } else {
+          console.warn('[rideService.subscribeToDriverLocation] Sem coordenadas válidas para driver:', driverId, row);
+        }
       })
       .subscribe();
     return () => { if (this.locationChannel) { supabase.removeChannel(this.locationChannel); this.locationChannel = null; } };
@@ -1109,17 +1131,22 @@ class RideService {
   async getPriceEstimate(origin: LatLng, dest: LatLng): Promise<PriceEstimate | null> {
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        return this._localPriceEstimate(origin, dest);
+      }
+
       const res = await fetch(edgeFunctionUrl('calculate-price'), {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
-          'Authorization': `Bearer ${session?.access_token ?? ''}`,
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({ origin, dest }),
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) return this._localPriceEstimate(origin, dest);
-      return res.json();
+      if (!hasJsonContentType(res)) return this._localPriceEstimate(origin, dest);
+      return res.json() as Promise<PriceEstimate>;
     } catch {
       return this._localPriceEstimate(origin, dest);
     }
@@ -1161,17 +1188,50 @@ class RideService {
   async initiateTopUp(amountKz: number, phone: string): Promise<{ success: boolean; message: string; reference?: string }> {
     try {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.access_token) {
+        return { success: false, message: 'Sessão expirada. Faz login novamente.' };
+      }
+
       const res = await fetch(edgeFunctionUrl('multicaixa-pay'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token ?? ''}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
         body: JSON.stringify({ action: 'initiate_payment', amount_kz: amountKz, phone_number: phone }),
       });
-      return res.json();
+      if (!hasJsonContentType(res)) {
+        return { success: false, message: 'Resposta inválida do servidor.' };
+      }
+
+      const payload = await res.json().catch(() => null) as {
+        success?: boolean;
+        message?: string;
+        reference?: string;
+      } | null;
+
+      if (!res.ok) {
+        return {
+          success: false,
+          message: payload?.message ?? 'Falha ao iniciar carregamento.',
+        };
+      }
+
+      if (!payload) {
+        return { success: false, message: 'Resposta vazia do servidor.' };
+      }
+
+      return {
+        success: Boolean(payload.success),
+        message: payload.message ?? 'Pedido enviado.',
+        reference: payload.reference,
+      };
     } catch { return { success: false, message: 'Erro de rede.' }; }
   }
 }
 
 export const rideService = new RideService();
+
+function hasJsonContentType(response: Response): boolean {
+  return response.headers.get('content-type')?.toLowerCase().includes('application/json') ?? false;
+}
 
 // ── Route deviation detection (mantida) ───────────────────────────────────────
 export async function checkRouteDeviation(

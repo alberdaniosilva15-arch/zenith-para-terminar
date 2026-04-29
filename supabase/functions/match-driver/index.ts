@@ -10,11 +10,19 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { latLngToCell, gridDisk } from 'https://esm.sh/h3-js@4';
+import {
+  applyCors,
+  corsForbidden,
+  resolveCorsHeaders,
+} from '../_shared/cors.ts';
 
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
+const CORS_OPTIONS = {
+  methods: 'POST, OPTIONS',
+  headers: 'authorization, content-type',
+};
 
 // Resoluções H3 (devem ser idênticas às do frontend)
 const H3_RES_DRIVER = 9; // ~150m
@@ -25,15 +33,34 @@ const LUANDA_SPEED_M_PER_MIN = 250;  // 15 km/h em Luanda
 const DRIVER_COOLDOWN_S = 30;         // Cooldown entre notificações
 
 Deno.serve(async (req: Request) => {
+  const corsHeaders = resolveCorsHeaders(req, CORS_OPTIONS);
+  if (req.headers.get('Origin') && !corsHeaders) {
+    return corsForbidden();
+  }
+
+  const jsonOk = (data: unknown) =>
+    applyCors(
+      new Response(JSON.stringify(data), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }),
+      corsHeaders,
+    );
+  const jsonError = (message: string, status: number) =>
+    applyCors(
+      new Response(JSON.stringify({ error: true, message }), {
+        status,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }),
+      corsHeaders,
+    );
+
   if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      headers: {
-        'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
-        'Access-Control-Allow-Headers': 'authorization, content-type',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Vary': 'Origin',
-      },
-    });
+    return applyCors(new Response(null, { status: 204 }), corsHeaders);
   }
 
   try {
@@ -265,24 +292,3 @@ interface MatchedDriver {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function jsonOk(data: unknown): Response {
-  return new Response(JSON.stringify(data), {
-    status: 200,
-    headers: {
-      'Content-Type':               'application/json',
-      'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-      'Vary': 'Origin',
-    },
-  });
-}
-
-function jsonError(message: string, status: number): Response {
-  return new Response(JSON.stringify({ error: true, message }), {
-    status,
-    headers: {
-      'Content-Type':               'application/json',
-      'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
-      'Vary': 'Origin',
-    },
-  });
-}

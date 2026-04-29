@@ -402,6 +402,22 @@ export interface ZonePrice {
   distance_km: number;
 }
 
+export interface ScoreDiscount {
+  final_price: number;
+  original_price: number;
+  discount_pct: number;
+  discount_label: string | null;
+}
+
+export interface FareEstimate {
+  fare_kz: number;
+  badges: string[];
+  surge_factor: number;
+  zone_multiplier: number;
+  traffic_multiplier: number;
+  score_discount?: ScoreDiscount | null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // KAZE PREDITIVO
 // ─────────────────────────────────────────────────────────────────────────────
@@ -422,6 +438,47 @@ export interface RidePrediction {
   zone_price_kz:   number | null;
   origin_zone:     string | null;
   dest_zone:       string | null;
+  proactive?:      boolean | null;
+  last_notified_at?: string | null;
+  dismissals?:     number | null;
+  impressions?:    number | null;
+}
+
+export interface ProactiveSuggestion {
+  prediction: RidePrediction;
+  score: number;
+  zone_price: ZonePrice | null;
+  kaze_message: string;
+  can_schedule: boolean;
+}
+
+export interface DriverScheduleEntry {
+  id: string;
+  driver_id: string;
+  day_of_week: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  start_hour: number;
+  end_hour: number;
+  zone_preference: string | null;
+  active: boolean;
+  created_at: string;
+}
+
+export interface HourlyForecast {
+  hour: number;
+  zone: string;
+  estimated_kz: number;
+  confidence: 'low' | 'medium' | 'high';
+  demand_ratio: number;
+}
+
+export interface PassengerScore {
+  user_id: string;
+  score: number;
+  rides_component: number;
+  payment_component: number;
+  behavior_component: number;
+  cancel_rate_pct: number;
+  last_calculated: string;
 }
 
 export type FleetAgreementType = 'weekly' | 'transparent' | 'minimal';

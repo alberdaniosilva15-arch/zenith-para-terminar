@@ -16,6 +16,11 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { GoogleGenAI, Type } from 'https://esm.sh/@google/genai@1';
+import {
+  applyCors,
+  corsForbidden,
+  resolveCorsHeaders,
+} from '../_shared/cors.ts';
 
 const GEMINI_API_KEY    = Deno.env.get('GEMINI_API_KEY')!;
 const OPENAI_API_KEY    = Deno.env.get('OPENAI_API_KEY') ?? '';
@@ -23,7 +28,9 @@ const GROQ_API_KEY      = Deno.env.get('GROQ_API_KEY') ?? '';
 const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const ALLOWED_ORIGIN    = Deno.env.get('ALLOWED_ORIGIN') ?? '*';
+const CORS_OPTIONS = {
+  methods: 'POST, OPTIONS',
+};
 
 // Rate limits por acção (requests por hora)
 const RATE_LIMITS: Record<string, number> = {
@@ -190,6 +197,29 @@ function cleanupIpCounters() {
 
 // =============================================================================
 Deno.serve(async (req: Request) => {
+  const corsHeaders = resolveCorsHeaders(req, CORS_OPTIONS);
+  if (req.headers.get('Origin') && !corsHeaders) {
+    return corsForbidden();
+  }
+
+  const cors = () => applyCors(new Response(null, { status: 204 }), corsHeaders);
+  const ok = (data: unknown) =>
+    applyCors(
+      new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      corsHeaders,
+    );
+  const err = (message: string, status: number) =>
+    applyCors(
+      new Response(JSON.stringify({ error: true, message }), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+      corsHeaders,
+    );
+
   if (req.method === 'OPTIONS') return cors();
 
   if (req.method !== 'POST') return err('Método não suportado.', 405);
@@ -527,14 +557,3 @@ JSON: { text: string }`,
   }
 });
 
-// =============================================================================
-const cors = () => new Response(null, {
-  headers: {
-    'Access-Control-Allow-Origin':  ALLOWED_ORIGIN,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Vary': 'Origin',
-  },
-});
-const ok  = (d: unknown) => new Response(JSON.stringify(d), { status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });
-const err = (m: string, s: number) => new Response(JSON.stringify({ error: true, message: m }), { status: s, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': ALLOWED_ORIGIN, 'Vary': 'Origin' } });

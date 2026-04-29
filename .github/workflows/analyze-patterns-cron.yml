@@ -1,0 +1,30 @@
+name: Analyze Ride Patterns
+
+on:
+  schedule:
+    - cron: '15 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  analyze-patterns:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Invoke Supabase analyze-patterns function
+        env:
+          SUPABASE_FUNCTIONS_BASE_URL: ${{ secrets.SUPABASE_FUNCTIONS_BASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_CRON_SECRET: ${{ secrets.SUPABASE_CRON_SECRET }}
+        run: |
+          if [ -z "$SUPABASE_FUNCTIONS_BASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ] || [ -z "$SUPABASE_CRON_SECRET" ]; then
+            echo "Missing required secrets: SUPABASE_FUNCTIONS_BASE_URL, SUPABASE_ANON_KEY, SUPABASE_CRON_SECRET"
+            exit 1
+          fi
+
+          curl --fail-with-body --request POST \
+            --url "${SUPABASE_FUNCTIONS_BASE_URL%/}/analyze-patterns" \
+            --header "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            --header "Content-Type: application/json" \
+            --header "x-cron-secret: $SUPABASE_CRON_SECRET" \
+            --data '{}'

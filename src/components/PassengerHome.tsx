@@ -22,18 +22,32 @@ import PrivateDriverModal from './passenger/PrivateDriverModal';
 import CharterModal from './passenger/CharterModal';
 import CargoModal from './passenger/CargoModal';
 import { ReferralModal } from './ReferralModal';
+import { usePassengerGPS } from '../hooks/usePassengerGPS';
+import { useNearbyDrivers } from '../hooks/useNearbyDrivers';
+import AuctionScreen from './passenger/AuctionScreen';
 const ZonePriceMap = React.lazy(() => import('./ZonePriceMap'));
 import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
-import { zonePriceService } from '../services/zonePrice';
+import { applyScoreDiscount, zonePriceService } from '../services/zonePrice';
 import { rideService } from '../services/rideService';
-import { routeService, RouteResult } from '../services/routeService';
+import { routeService } from '../services/routeService';
+import type { RouteResult } from '../services/routeService';
 import { supabase } from '../lib/supabase';
 import { useIdleMount } from '../hooks/useIdleMount';
 import { useSilentTripleTap } from '../hooks/useSilentTripleTap';
 import { MapSingleton } from '../lib/mapInstance';
 import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
-import type { RideState, AuctionState, AuctionDriver, LocationResult, LatLng, ServiceType } from '../types';
-import { RideStatus, UserRole } from '../types';
+import type {
+  RideState,
+  AuctionState,
+  AuctionDriver,
+  FareEstimate,
+  LocationResult,
+  LatLng,
+  PassengerScore,
+  RidePrediction,
+  ServiceType,
+} from '../types';
+import { RideStatus } from '../types';
 
 const ScheduleRide = React.lazy(() => import('./passenger/ScheduleRide'));
 const Map3D = React.lazy(() => import('./Map3D'));
@@ -91,21 +105,14 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [routeInfo,    setRouteInfo]    = useState<RouteInfo | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [loadingRide,  setLoadingRide]  = useState(false);
-  const [nearbyCount,  setNearbyCount]  = useState<number | null>(null);
-  // Posição GPS real do utilizador — passada ao Map3D para centrar correctamente
-  const [userLocation, setUserLocation] = useState<LatLng | null>(null);
   // Engine Pro: rota real + preço calculado no servidor
   const [routeData,    setRouteData]    = useState<RouteResult | null>(null);
-  const [fareData, setFareData] = useState<{
-    fare_kz: number;
-    badges: string[];
-    surge_factor: number;
-    zone_multiplier: number;
-    traffic_multiplier: number;
-  } | null>(null);
+  const [fareData, setFareData] = useState<FareEstimate | null>(null);
+  const [passengerScore, setPassengerScore] = useState<PassengerScore | null>(null);
   const [calculating,  setCalculating]  = useState(false);
   const [fareExpiresAt, setFareExpiresAt] = useState<number | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduleDefaults, setScheduleDefaults] = useState<{ date?: string; time?: string } | null>(null);
   const [showReferral, setShowReferral] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<StandardVehicleType>('standard');
   const [openPremiumService, setOpenPremiumService] = useState<PremiumServiceType | null>(null);
@@ -115,31 +122,15 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeDrawnRef     = useRef(false); // evita redesenhar a mesma rota
 
-  // ── GPS AUTOMÁTICO ao montar — o mapa centra no utilizador sem clicar nada ──
-  useEffect(() => {
-    if (!isVisible) return; // Suspender GPS quando em background
-    let cancelled = false;
-    mapService.getCurrentPosition()
-      .then(async (coords) => {
-        if (cancelled) return;
-        setUserLocation(coords);
-        // Se não há pickup definido, usar a posição GPS como pickup
-        if (!pickupCoords) {
-          const address = await mapService.reverseGeocode(coords);
-          if (!cancelled) {
-            setPickupName(address);
-            setPickupCoords(coords);
-          }
-        }
-      })
-      .catch(() => {
-        // GPS indisponível — usar fallback silencioso Luanda Centro
-        if (!cancelled) {
-          setUserLocation({ lat: -8.8390, lng: 13.2343 });
-        }
-      });
-    return () => { cancelled = true; };
-  }, [isVisible]); // executa quando visível pela primeira vez
+  // ── GPS AUTOMÁTICO (hook extraído) ──
+  const { userLocation, setUserLocation } = usePassengerGPS({
+    isVisible: isVisible ?? true,
+    existingPickupCoords: pickupCoords,
+    onPickupDetected: (coords, address) => {
+      setPickupName(address);
+      setPickupCoords(coords);
+    },
+  });
 
   // ── Quando destino muda: calcular ROTA REAL via Mapbox Directions ──────────
   useEffect(() => {
@@ -212,15 +203,47 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     routeDrawnRef.current = false;
   }, [pickupCoords?.lat, pickupCoords?.lng, destCoords?.lat, destCoords?.lng]);
 
-  // ── Buscar motoristas próximos para mostrar contador ─────────────────────────
+  // ── Motoristas próximos (hook extraído) ──
+  const { nearbyCount } = useNearbyDrivers(pickupCoords, isVisible ?? true);
+
+  // ── Carregar Passenger Score do Utilizador ─────────────────────────────────
   useEffect(() => {
-    if (!isVisible || !pickupCoords) { setNearbyCount(null); return; }
     let cancelled = false;
-    rideService.findNearbyDrivers(pickupCoords, 8).then(drivers => {
-      if (!cancelled) setNearbyCount(drivers.length);
-    });
+
+    const loadPassengerScore = async () => {
+      try {
+        await supabase.rpc('calculate_passenger_score', { p_user_id: userId });
+      } catch (err) {
+        // A migração pode ainda não estar aplicada; seguimos sem desconto.
+        // Registamos silenciosamente para facilitar debug sem assustar o utilizador.
+        console.warn('[PassengerHome] calculate_passenger_score indisponível:', err);
+      }
+
+      try {
+        const { data, error } = await supabase
+          .from('passenger_scores')
+          .select('user_id, score, rides_component, payment_component, behavior_component, cancel_rate_pct, last_calculated')
+          .eq('user_id', userId)
+          .maybeSingle();
+
+        if (cancelled) return;
+        if (error || !data) {
+          setPassengerScore(null);
+          return;
+        }
+
+        setPassengerScore(data as PassengerScore);
+      } catch {
+        if (!cancelled) {
+          setPassengerScore(null);
+        }
+      }
+    };
+
+    void loadPassengerScore();
+
     return () => { cancelled = true; };
-  }, [pickupCoords]);
+  }, [userId]);
 
   // ── Pesquisa com debounce — agora passa posição do utilizador ────────────────
   const handleSearch = useCallback((query: string) => {
@@ -338,8 +361,11 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       );
 
       if (fareError) throw new Error('Erro ao calcular preço. O servidor não respondeu.');
-      if (fare && fare.error) throw new Error(fare.error);
-      setFareData(fare);
+      const fareQuote = fare as (FareEstimate & { error?: string }) | null;
+      if (fareQuote?.error) throw new Error(fareQuote.error);
+      if (!fareQuote) throw new Error('O servidor nao devolveu um preco valido.');
+      const scoreDiscount = applyScoreDiscount(fareQuote.fare_kz, passengerScore?.score);
+      setFareData({ ...fareQuote, score_discount: scoreDiscount });
       setFareExpiresAt(Date.now() + 120 * 1000); // 2 minutos de lock
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao calcular rota. Verifica a tua ligação.';
@@ -388,34 +414,46 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const handleConfirmDriver = async () => {
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
-    await onRequestRide(
-      pickupName,
-      pickupCoords,
-      destName,
-      destCoords,
-      undefined,
-      routeData?.distanceKm,
-      routeData?.durationMin,
-      selectedVehicle,
-    );
-    setLoadingRide(false);
+    try {
+      await onRequestRide(
+        pickupName,
+        pickupCoords,
+        destName,
+        destCoords,
+        undefined,
+        routeData?.distanceKm,
+        routeData?.durationMin,
+        selectedVehicle,
+      );
+    } catch (err) {
+      console.error('[PassengerHome] handleConfirmDriver falhou:', err);
+      alert('❌ Erro ao confirmar motorista. Verifica a tua ligação e tenta de novo.');
+    } finally {
+      setLoadingRide(false);
+    }
   };
 
   // ── Solicitar Corrida (Preço base / normal) ─────────────────────────────────
   const handleRequestNormalRide = async (finalPriceKz: number) => {
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
-    await onRequestRide(
-      pickupName,
-      pickupCoords,
-      destName,
-      destCoords,
-      finalPriceKz,
-      routeData?.distanceKm,
-      routeData?.durationMin,
-      selectedVehicle,
-    );
-    setLoadingRide(false);
+    try {
+      await onRequestRide(
+        pickupName,
+        pickupCoords,
+        destName,
+        destCoords,
+        finalPriceKz,
+        routeData?.distanceKm,
+        routeData?.durationMin,
+        selectedVehicle,
+      );
+    } catch (err) {
+      console.error('[PassengerHome] handleRequestNormalRide falhou:', err);
+      alert('❌ Erro ao pedir corrida. Verifica a tua ligação e tenta de novo.');
+    } finally {
+      setLoadingRide(false);
+    }
   };
 
   // ── Negociar preço (estilo InDriver) ────────────────────────────────────────
@@ -444,84 +482,64 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     setOpenPremiumService(service);
   }, []);
 
+  const prepareRouteFromPrediction = useCallback((prediction: RidePrediction) => {
+    setPickupName(prediction.origin_address);
+    setPickupCoords({ lat: prediction.origin_lat, lng: prediction.origin_lng });
+    setDestName(prediction.dest_address);
+    setDestCoords({ lat: prediction.dest_lat, lng: prediction.dest_lng });
+    setFareData(null);
+    setRouteData(null);
+    setFareExpiresAt(null);
+
+    void zonePriceService.getZonePrice(prediction.origin_address, prediction.dest_address)
+      .then((zp) => {
+        if (zp) {
+          setZonePrice(zp.price_kz);
+          setZoneNames({ origin: zp.origin_zone, dest: zp.dest_zone });
+          return;
+        }
+
+        setZonePrice(null);
+        setZoneNames(null);
+      })
+      .catch(() => {
+        setZonePrice(null);
+        setZoneNames(null);
+      });
+  }, []);
+
+  const handleSchedulePrediction = useCallback((prediction: RidePrediction) => {
+    prepareRouteFromPrediction(prediction);
+
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const date = tomorrow.toISOString().split('T')[0] ?? '';
+    const time = prediction.best_hour != null
+      ? `${String(prediction.best_hour).padStart(2, '0')}:00`
+      : '08:00';
+
+    setScheduleDefaults({ date, time });
+    setShowSchedule(true);
+  }, [prepareRouteFromPrediction]);
+
   const isReady     = !!pickupName && !!destName;
   const showAuction = ride.status === RideStatus.BROWSING;
 
-  // ==================================================================
-  // ECRÃ DO LEILÃO — passageiro escolhe motorista
-  // ==================================================================
   if (showAuction) {
     return (
-      <div className="flex flex-col bg-[#F8FAFC] min-h-screen pb-28">
-        <div className="bg-[#0A0A0A] px-6 pt-8 pb-6 flex items-center gap-4">
-          <button
-            onClick={onCancelAuction}
-            className="w-10 h-10 bg-surface-container-low/10 rounded-full flex items-center justify-center text-white font-black hover:bg-surface-container-low/20 transition-all"
-          >
-            ←
-          </button>
-          <div>
-            <p className="text-white font-black text-sm">Escolhe o teu motorista</p>
-            <p className="text-white/40 text-[9px] font-bold uppercase tracking-widest">
-              {auction.loading ? 'A procurar...' : `${auction.drivers.length} disponíveis na tua zona`}
-            </p>
-          </div>
-        </div>
-
-        {/* Rota + distância */}
-        <div className="mx-4 mt-4 bg-surface-container-low rounded-[2rem] p-4 border border-outline-variant/20 shadow-sm space-y-2">
-          <RouteRow dot="bg-primary"  value={pickupName || 'Partida'} />
-          <div className="my-1 pl-3 border-l-2 border-dashed border-outline-variant/30">
-            {routeInfo && (
-              <p className="text-[9px] font-bold text-on-surface-variant/70 py-1">
-                {routeInfo.isReal ? '🛣️' : '📏'} {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
-                {routeInfo.isReal && <span className="text-primary ml-1">(por estrada)</span>}
-              </p>
-            )}
-          </div>
-          <RouteRow dot="bg-red-600"  value={destName || 'Destino'} />
-          {(zonePrice || ride.priceKz) && (
-            <div className="pt-2 border-t border-outline-variant/20 flex items-center justify-between">
-              {zonePrice && zoneNames ? (
-                <span className="text-[8px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-black">✓ PREÇO FIXO</span>
-              ) : (
-                <span className="text-[8px] text-on-surface-variant/60 font-bold">Estimativa</span>
-              )}
-              <p className="text-right text-sm font-black text-primary">
-                {Math.round(zonePrice ?? ride.priceKz ?? 0).toLocaleString('pt-AO')} Kz
-              </p>
-            </div>
-          )}
-        </div>
-
-        <AuctionList
-          auction={auction}
-          onSelectDriver={onSelectDriver}
-          onCancelAuction={onCancelAuction}
-          zonePrice={zonePrice}
-          priceKz={ride.priceKz ?? null}
-        />
-
-        {/* Botão confirmar */}
-        {auction.selectedDriver && (
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-surface-container-low/95 backdrop-blur-sm border-t border-outline-variant/20">
-            <button
-              onClick={handleConfirmDriver}
-              disabled={loadingRide}
-              className="w-full py-6 bg-primary text-white rounded-[2.5rem] font-black text-sm uppercase tracking-[0.2em] shadow-[0_20px_40px_rgba(37,99,235,0.4)] active:scale-98 transition-all disabled:opacity-60"
-            >
-              {loadingRide ? (
-                <span className="flex items-center justify-center gap-3">
-                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  A confirmar...
-                </span>
-              ) : (
-                `CONFIRMAR ${auction.selectedDriver.driver_name.split(' ')[0].toUpperCase()}`
-              )}
-            </button>
-          </div>
-        )}
-      </div>
+      <AuctionScreen
+        pickupName={pickupName}
+        destName={destName}
+        routeInfo={routeInfo}
+        zonePrice={zonePrice}
+        zoneNames={zoneNames}
+        ride={ride}
+        auction={auction}
+        loadingRide={loadingRide}
+        onCancelAuction={onCancelAuction}
+        onSelectDriver={onSelectDriver}
+        onConfirmDriver={handleConfirmDriver}
+      />
     );
   }
 
@@ -587,16 +605,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               <>
                 <KazePreditivo
                   userId={userId}
-                  onAccept={(pred) => {
-                    setPickupName(pred.origin_address);
-                    setPickupCoords({ lat: pred.origin_lat, lng: pred.origin_lng });
-                    setDestName(pred.dest_address);
-                    setDestCoords({ lat: pred.dest_lat, lng: pred.dest_lng });
-                    zonePriceService.getZonePrice(pred.origin_address, pred.dest_address)
-                      .then(zp => {
-                        if (zp) { setZonePrice(zp.price_kz); setZoneNames({ origin: zp.origin_zone, dest: zp.dest_zone }); }
-                      });
-                  }}
+                  onAccept={prepareRouteFromPrediction}
+                  onSchedule={handleSchedulePrediction}
                 />
                 <FreePerkBanner userId={userId} />
 
@@ -626,7 +636,10 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                 {/* Botão Agendar Corrida */}
                 {isReady && (
                   <button
-                    onClick={() => setShowSchedule(true)}
+                    onClick={() => {
+                      setScheduleDefaults(null);
+                      setShowSchedule(true);
+                    }}
                     className="w-full py-3 bg-surface-container-low border border-outline-variant/30 text-on-surface-variant rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:border-primary/50 active:scale-98 transition-all"
                   >
                     📅 Agendar para depois
@@ -676,8 +689,16 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               destName={destName}
               pickupCoords={pickupCoords}
               destCoords={destCoords}
-              onClose={() => setShowSchedule(false)}
-              onScheduled={() => setShowSchedule(false)}
+              defaultDate={scheduleDefaults?.date}
+              defaultTime={scheduleDefaults?.time}
+              onClose={() => {
+                setScheduleDefaults(null);
+                setShowSchedule(false);
+              }}
+              onScheduled={() => {
+                setScheduleDefaults(null);
+                setShowSchedule(false);
+              }}
             />
           </Suspense>
         )}
@@ -728,14 +749,6 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     </div>
   );
 };
-
-// ── Sub-componentes ────────────────────────────────────────────────────────────
-const RouteRow: React.FC<{ dot: string; value: string }> = ({ dot, value }) => (
-  <div className="flex items-center gap-3">
-    <div className={`w-2 h-2 rounded-full ${dot} shrink-0`} />
-    <p className="text-xs font-black text-on-surface-variant truncate">{value}</p>
-  </div>
-);
 
 // ── Helper: calcular bounding box de coordenadas ────────────────────────────
 function calculateBBox(coords: [number, number][]): [number, number, number, number] {

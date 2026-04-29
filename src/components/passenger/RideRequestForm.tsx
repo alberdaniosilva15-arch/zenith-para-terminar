@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import type { ServiceType } from '../../types';
+import type { RouteResult } from '../../services/routeService';
+import type { FareEstimate, ServiceType } from '../../types';
 import { RideStatus } from '../../types';
 import ServiceCarousel from './ServiceCarousel';
 
@@ -8,8 +9,8 @@ type PremiumServiceType = Extract<ServiceType, 'private_driver' | 'charter' | 'c
 
 interface RideRequestFormProps {
   rideStatus: RideStatus;
-  fareData: any;
-  routeData: any;
+  fareData: FareEstimate | null;
+  routeData: RouteResult | null;
   fareExpiresAt: number | null;
   onFareExpire: () => void;
   isReady: boolean;
@@ -87,7 +88,13 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
   }, [fareExpiresAt, onFareExpire]);
 
   const baseFare = fareData ? Number(fareData.fare_kz) : 0;
-  const finalFare = baseFare + (hasInsurance ? MOTO_INSURANCE_PRICE : 0);
+  const scoreDiscount = fareData?.score_discount ?? null;
+  const discountedBaseFare = scoreDiscount?.final_price ?? baseFare;
+  const originalBaseFare = scoreDiscount?.original_price ?? baseFare;
+  const hasScoreDiscount = (scoreDiscount?.discount_pct ?? 0) > 0;
+  const insurancePrice = hasInsurance ? MOTO_INSURANCE_PRICE : 0;
+  const originalTotal = originalBaseFare + insurancePrice;
+  const finalFare = discountedBaseFare + insurancePrice;
 
   const commitVehicleChange = (vehicle: VehicleType) => {
     setLocalVehicle(vehicle);
@@ -157,9 +164,16 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
               <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'rgba(230,195,100,0.5)' }}>
                 Preco estimado
               </p>
-              <p className="mt-1 text-3xl font-black" style={{ color: '#E6C364' }}>
-                {finalFare.toLocaleString('pt-AO')} Kz
-              </p>
+              <div className="mt-1 flex flex-wrap items-end gap-2">
+                <p className="text-3xl font-black" style={{ color: '#E6C364' }}>
+                  {finalFare.toLocaleString('pt-AO')} Kz
+                </p>
+                {hasScoreDiscount && (
+                  <p className="pb-1 text-sm font-black text-white/35 line-through">
+                    {originalTotal.toLocaleString('pt-AO')} Kz
+                  </p>
+                )}
+              </div>
             </div>
             {timeLeft > 0 && (
               <div className="text-right">
@@ -173,9 +187,22 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
             )}
           </div>
 
-          {fareData.badges && (fareData.badges as string[]).length > 0 && (
+          {hasScoreDiscount && scoreDiscount?.discount_label && (
+            <div
+              className="inline-flex w-fit rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wide"
+              style={{
+                background: 'rgba(230,195,100,0.12)',
+                border: '1px solid rgba(230,195,100,0.35)',
+                color: '#E6C364',
+              }}
+            >
+              -{scoreDiscount.discount_pct}% {scoreDiscount.discount_label}
+            </div>
+          )}
+
+          {fareData.badges.length > 0 && (
             <div className="flex flex-wrap gap-2">
-              {(fareData.badges as string[]).map((badge: string, index: number) => (
+              {fareData.badges.map((badge, index) => (
                 <span
                   key={`${badge}-${index}`}
                   className="rounded-full px-2 py-1 text-[9px] font-black uppercase tracking-wider"
@@ -264,7 +291,7 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
             <button
               onClick={() => {
                 setShowNegotiate(true);
-                setProposedPrice(String(Math.round(baseFare * 0.85) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0)));
+                setProposedPrice(String(Math.round(discountedBaseFare * 0.85) + insurancePrice));
               }}
               className="w-full rounded-2xl border-2 border-dashed py-4 text-[11px] font-black uppercase tracking-widest transition-all active:scale-98"
               style={{
@@ -303,7 +330,7 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
               </div>
               <div className="flex gap-2">
                 {[0.8, 0.85, 0.9, 0.95].map((pct) => {
-                  const value = Math.round(baseFare * pct) + (hasInsurance ? MOTO_INSURANCE_PRICE : 0);
+                  const value = Math.round(discountedBaseFare * pct) + insurancePrice;
                   return (
                     <button
                       key={pct}

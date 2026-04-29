@@ -55,6 +55,10 @@ const DriverCopilot: React.FC<DriverCopilotProps> = ({
     }
 
     const best = ranked[0];
+    if (!best) {
+      return null;
+    }
+
     const distanceKm = Math.max(best.distanceMeters / 1000, 0.1);
     const chanceLift = Math.min(85, Math.max(18, Math.round((best.demandRatio - 1) * 28)));
     const angle = bearing(driverCoords, best.target);
@@ -78,8 +82,9 @@ const DriverCopilot: React.FC<DriverCopilotProps> = ({
 
     mapService.reverseGeocode(suggestion.target)
       .then((address) => {
-        if (!cancelled && address) {
-          setZoneLabel(address.split(',')[0]);
+        const label = address.split(',')[0]?.trim() || 'zona quente';
+        if (!cancelled) {
+          setZoneLabel(label);
         }
       })
       .catch(() => {

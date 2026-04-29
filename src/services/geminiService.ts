@@ -96,8 +96,7 @@ function getLocalKazeResponse(userText: string): string {
   for (const entry of KAZE_LOCAL_RESPONSES) {
     for (const pattern of entry.patterns) {
       if (pattern.test(text)) {
-        const responses = entry.responses;
-        return responses[Math.floor(Math.random() * responses.length)];
+        return pickRandom(entry.responses) ?? 'Estou aqui para ajudar.';
       }
     }
   }
@@ -108,7 +107,7 @@ function getLocalKazeResponse(userText: string): string {
     `Mano, estou a funcionar em modo offline agora. Mas posso ajudar com informações sobre corridas, preços, zonas de Luanda e segurança. Pergunta algo específico! 💡`,
     `O Kaze está em modo local — a ligação ao servidor de IA não está disponível agora. Mas ainda posso ajudar! Tenta perguntar sobre preços, zonas, segurança ou como usar o app. 🚗`,
   ];
-  return genericResponses[Math.floor(Math.random() * genericResponses.length)];
+  return pickRandom(genericResponses) ?? 'Estou aqui para ajudar.';
 }
 
 // =============================================================================
@@ -124,6 +123,11 @@ interface ChatMessage {
 interface GeminiHistoryEntry {
   role:  'user' | 'model';
   parts: Array<{ text: string }>;
+}
+
+function pickRandom<T>(items: T[]): T | undefined {
+  if (items.length === 0) return undefined;
+  return items[Math.floor(Math.random() * items.length)];
 }
 
 function toGeminiHistory(history: ChatMessage[]): GeminiHistoryEntry[] {
