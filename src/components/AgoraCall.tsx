@@ -18,6 +18,7 @@ import AgoraRTC, {
   IMicrophoneAudioTrack,
 } from 'agora-rtc-sdk-ng';
 import { supabase } from '../lib/supabase';
+import { useAppStore } from '../store/useAppStore';
 
 interface AgoraCallProps {
   corridaId: string;
@@ -37,6 +38,7 @@ async function deriveEncryptionKey(channel: string, hint: string): Promise<strin
 }
 
 const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, peerName }) => {
+  const showToast = useAppStore((s) => s.showToast);
   const [callState,   setCallState]   = useState<CallState>('idle');
   const [isMuted,     setIsMuted]     = useState(false);
   const [isSpeaker,   setIsSpeaker]   = useState(true);
@@ -63,7 +65,7 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         await clientRef.current.leave();
         clientRef.current = null;
       }
-    } catch { /* já desconectado */ }
+    } catch (err) { console.warn('[AgoraCall] já desconectado:', err); }
 
     setCallState('ended');
     setDuration(0);
@@ -168,7 +170,7 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
 
   const toggleSpeaker = async () => {
     if (!audioRef.current) {
-      alert('Não há áudio activo.');
+      showToast('Não há áudio activo.', 'info');
       return;
     }
     const playDev = isSpeaker ? 'earpiece' : 'speaker';
@@ -179,10 +181,10 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         setIsSpeaker(s => !s);
       } catch (e) {
         console.warn('[AgoraCall] setPlaybackDevice falhou', e);
-        alert('Não foi possível alternar o dispositivo de reprodução.');
+        showToast('Não foi possível alternar o dispositivo de reprodução.', 'error');
       }
     } else {
-      alert('Usa os botões do teu dispositivo para controlar áudio.');
+      showToast('Usa os botões do teu dispositivo para controlar áudio.', 'info');
     }
   };
 

@@ -191,159 +191,173 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
 
   if (loading) {
     return (
-      <div className="min-h-full flex items-center justify-center text-white/60 text-sm">
-        A preparar o painel da frota...
+      <div className="zr-app" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh' }}>
+        <div className="zr-loading-dots"><span></span><span></span><span></span></div>
       </div>
     );
   }
 
   if (!fleet) {
     return (
-      <div className="min-h-full bg-[#050912] p-4 text-white">
-        <div className="rounded-[2.5rem] border border-white/10 bg-white/5 p-6">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-primary/70 font-black">Modo Dono de Frota</p>
-          <h2 className="text-2xl font-black mt-2">Criar a tua primeira frota</h2>
-          <p className="text-sm text-white/60 mt-3">
+      <div className="zr-app" style={{ minHeight: '100vh', padding: '20px' }}>
+        <section className="zr-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+          <p className="zr-kicker">Modo Dono de Frota</p>
+          <h2 className="zr-section-title">Criar a tua primeira frota</h2>
+          <p className="zr-copy" style={{ marginBottom: '24px' }}>
             Vamos começar com um nome operacional para o teu painel. Podes mudar isto mais tarde.
           </p>
           <input
             value={newFleetName}
             onChange={(event) => setNewFleetName(event.target.value)}
-            className="w-full mt-5 rounded-2xl bg-black/20 border border-white/10 px-4 py-3 text-sm outline-none"
+            className="zr-input"
+            style={{ width: '100%', marginBottom: '20px' }}
+            placeholder="Nome da Frota"
           />
           <button
             onClick={() => void handleCreateFleet()}
-            className="mt-4 w-full py-3 rounded-2xl bg-primary text-white font-black text-[10px] uppercase tracking-widest"
+            className="zr-button zr-button--block"
           >
             Criar frota
           </button>
-        </div>
+        </section>
       </div>
     );
   }
 
   return (
-    <div className="min-h-full bg-[#050912] p-4 text-white space-y-4">
-      <div className="rounded-[2.5rem] border border-white/10 bg-white/5 p-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="zr-app" style={{ minHeight: '100vh', paddingBottom: '120px' }}>
+      <header className="zr-header">
+        <div className="zr-inline zr-inline--between">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.22em] text-primary/70 font-black">Zenith Fleet</p>
-            <h1 className="text-2xl font-black mt-2">{fleet.name}</h1>
-            <p className="text-sm text-white/60 mt-2">
-              Privacidade com acordo mutuo, blackout configuravel e controlo operacional.
-            </p>
+            <p className="zr-kicker">Zenith Fleet</p>
+            <h1 className="zr-section-title">{fleet.name}</h1>
           </div>
-          <div className="flex gap-2">
-            <button
-              onClick={() => setShowAddCar(true)}
-              className="px-4 py-3 rounded-2xl bg-primary text-white font-black text-[10px] uppercase tracking-widest"
-            >
+          <div className="zr-inline">
+            <button onClick={() => setShowAddCar(true)} className="zr-button zr-button--sm">
               + Carro
             </button>
-            <button
-              onClick={() => setShowUpgrade(true)}
-              className="px-4 py-3 rounded-2xl bg-white/5 border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest"
-            >
+            <button onClick={() => setShowUpgrade(true)} className="zr-button zr-button--sm zr-button--ghost">
               Plano {subscriptionPlan}
             </button>
           </div>
         </div>
-      </div>
+        <p className="zr-copy" style={{ marginTop: '12px', fontSize: '12px' }}>
+          Privacidade com acordo mútuo e controlo operacional avançado.
+        </p>
+      </header>
 
-      <div className="grid grid-cols-3 gap-3">
-        <Metric label="Carros" value={String(filteredCars.length)} />
-        <Metric label="Activos" value={String(activeCars)} />
-        <Metric label="Parados" value={String(idleCars)} />
-      </div>
-
-      <div className="flex gap-2 overflow-x-auto no-scrollbar">
-        {[
-          { id: 'overview', label: 'Operação', icon: '🗺️' },
-          { id: 'billing', label: 'Faturação', icon: '💳' },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id as 'overview' | 'billing')}
-            className={`shrink-0 rounded-full px-4 py-2 text-[10px] font-black uppercase tracking-widest transition-all ${
-              activeTab === tab.id
-                ? 'bg-primary text-white'
-                : 'border border-white/10 bg-white/5 text-white/70'
-            }`}
-          >
-            {tab.icon} {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {activeTab === 'overview' && (
-        <>
-      <div className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-          <div>
-            <p className="text-[9px] uppercase tracking-widest text-white/40 font-black">Mapa operacional</p>
-            <h3 className="text-white font-black text-sm mt-1">Carros visiveis agora</h3>
+      <div style={{ padding: '14px' }}>
+        {/* KPI Grid */}
+        <div className="zr-kpi-grid" style={{ marginBottom: '24px' }}>
+          <div className="zr-kpi-card">
+            <p className="zr-meta">Carros</p>
+            <h3 className="zr-section-title">{filteredCars.length}</h3>
           </div>
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Pesquisar motorista ou matricula"
-            className="rounded-2xl bg-black/20 border border-white/10 px-4 py-2.5 text-sm outline-none"
-          />
+          <div className="zr-kpi-card">
+            <p className="zr-meta">Activos</p>
+            <h3 className="zr-section-title" style={{ color: 'var(--success)' }}>{activeCars}</h3>
+          </div>
+          <div className="zr-kpi-card">
+            <p className="zr-meta">Parados</p>
+            <h3 className="zr-section-title" style={{ color: 'var(--danger)' }}>{idleCars}</h3>
+          </div>
         </div>
 
-        <div className="mb-4 h-[250px] w-full overflow-hidden rounded-[1.5rem] border border-white/10 relative">
-          <Map3D
-            center={[13.2344, -8.8383]} // Luanda padrão
-            zoom={11}
-            mode="admin"
-            onMapReady={(map) => setMapObj(map)}
-          />
+        {/* Tabs */}
+        <div className="zr-scroll-x" style={{ marginBottom: '24px', marginInline: '-14px', paddingInline: '14px' }}>
+          <button
+            onClick={() => setActiveTab('overview')}
+            className={`zr-tab ${activeTab === 'overview' ? 'is-active' : ''}`}
+          >
+            Operação
+          </button>
+          <button
+            onClick={() => setActiveTab('billing')}
+            className={`zr-tab ${activeTab === 'billing' ? 'is-active' : ''}`}
+          >
+            Faturação
+          </button>
         </div>
 
-        <div className="space-y-3">
-          {filteredCars.map((car) => {
-            const locInfo = car.driver_id ? driverLocations[car.driver_id] : null;
-            const label = locInfo?.label ?? 'Sem localizacao';
-            return (
-              <div key={car.id} className="rounded-2xl bg-black/20 border border-white/10 px-4 py-3 flex items-center justify-between gap-4">
+        {activeTab === 'overview' && (
+          <div className="animate-in fade-in">
+            {/* Mapa Operacional */}
+            <section className="zr-card" style={{ padding: 0, overflow: 'hidden', marginBottom: '24px' }}>
+              <div style={{ padding: '16px', borderBottom: '1px solid var(--line)' }} className="zr-inline zr-inline--between">
                 <div>
-                  <p className="text-sm font-black">{car.plate}</p>
-                  <p className="text-[11px] text-white/55">
-                    {car.driver_id ? driverNames[car.driver_id] ?? 'Motorista associado' : 'Sem motorista'} · {car.active ? 'activo' : 'inactivo'}
-                  </p>
+                  <p className="zr-kicker">Real-time</p>
+                  <h3 className="zr-section-title" style={{ fontSize: '14px' }}>Localização da Frota</h3>
                 </div>
-                <p className="text-[11px] text-white/75 text-right">
-                  {label}
-                </p>
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="Procurar matrícula..."
+                  className="zr-input"
+                  style={{ width: '150px', fontSize: '12px', padding: '6px 12px' }}
+                />
               </div>
-            );
-          })}
-          {filteredCars.length === 0 && (
-            <p className="text-sm text-white/55">Nenhum carro corresponde a esta pesquisa.</p>
-          )}
-        </div>
+              <div style={{ height: '300px', position: 'relative' }}>
+                <Map3D
+                  center={[13.2344, -8.8383]}
+                  zoom={11}
+                  mode="admin"
+                  onMapReady={(map) => setMapObj(map)}
+                />
+              </div>
+            </section>
+
+            {/* Listagem Rápida / Monitorização */}
+            <section className="zr-card" style={{ marginBottom: '24px' }}>
+              <p className="zr-kicker">Monitorização</p>
+              <h3 className="zr-section-title" style={{ marginBottom: '16px' }}>Estado dos Veículos</h3>
+              <div className="zr-list">
+                {filteredCars.map((car) => {
+                  const locInfo = car.driver_id ? driverLocations[car.driver_id] : null;
+                  const label = locInfo?.label ?? 'Sem localização';
+                  return (
+                    <div key={car.id} className="zr-list-item">
+                      <div>
+                        <strong style={{ display: 'block' }}>{car.plate}</strong>
+                        <span className="zr-meta">
+                          {car.driver_id ? driverNames[car.driver_id] ?? 'Motorista associado' : 'Sem motorista'}
+                        </span>
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <span className={`zr-chip ${car.active ? 'zr-chip--success' : 'zr-chip--muted'}`} style={{ marginBottom: '4px' }}>
+                          {car.active ? 'Activo' : 'Inactivo'}
+                        </span>
+                        <p className="zr-meta" style={{ fontSize: '10px' }}>{label}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+
+            <FleetCarList
+              cars={filteredCars}
+              driverNames={driverNames}
+              agreementByCarId={agreementByCarId}
+              onTrackCar={(carId) => setTrackingCarId(carId)}
+            />
+
+            <FleetAI
+              totalCars={filteredCars.length}
+              activeCars={activeCars}
+              idleCars={idleCars}
+              driverNames={Object.values(driverNames)}
+            />
+          </div>
+        )}
+
+        {activeTab === 'billing' && (
+          <div className="animate-in fade-in">
+            <FleetBilling fleetId={fleet.id} />
+          </div>
+        )}
       </div>
 
-      <FleetCarList
-        cars={filteredCars}
-        driverNames={driverNames}
-        agreementByCarId={agreementByCarId}
-        onTrackCar={(carId) => setTrackingCarId(carId)}
-      />
-
-      <FleetAI
-        totalCars={filteredCars.length}
-        activeCars={activeCars}
-        idleCars={idleCars}
-        driverNames={Object.values(driverNames)}
-      />
-        </>
-      )}
-
-      {activeTab === 'billing' && (
-        <FleetBilling fleetId={fleet.id} />
-      )}
-
+      {/* Modais Overlay */}
       {showAddCar && (
         <FleetAddCar
           fleetId={fleet.id}
@@ -371,15 +385,6 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
     </div>
   );
 };
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-[1.75rem] border border-white/10 bg-white/5 p-4">
-      <p className="text-[9px] uppercase tracking-widest text-white/40 font-black">{label}</p>
-      <p className="text-2xl font-black text-white mt-2">{value}</p>
-    </div>
-  );
-}
 
 function isInBlackoutWindow(start: string, end: string) {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Africa/Luanda' }));

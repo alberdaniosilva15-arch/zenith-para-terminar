@@ -111,10 +111,22 @@ export const useAppStore = create<AppStore>()(
   })
 );
 
+import { shallow } from 'zustand/shallow';
+
 // ─── Selectors tipados ────────────────────────────────────────────────────────
-export const useAuthStore      = () => useAppStore((s) => ({ dbUser: s.dbUser, profile: s.profile, role: s.role }));
+export const useAuthStore = () => useAppStore((s) => ({
+  dbUser: s.dbUser,
+  profile: s.profile,
+  role: s.role
+}), shallow);
+
 export const useRideStore      = () => useAppStore((s) => s.ride);
 export const useAuctionStore   = () => useAppStore((s) => s.auction);
 export const usePostRideStore  = () => useAppStore((s) => s.postRide);
 export const useDriverLocStore = () => useAppStore((s) => s.driverCoords);
-export const useToastStore     = () => useAppStore((s) => ({ toast: s.toast, showToast: s.showToast, clearToast: s.clearToast }));
+
+export const useToastStore = () => useAppStore((s) => ({
+  toast: s.toast,
+  showToast: s.showToast,
+  clearToast: s.clearToast
+}), shallow);

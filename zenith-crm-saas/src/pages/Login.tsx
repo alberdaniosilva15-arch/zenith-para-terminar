@@ -71,7 +71,7 @@ const Login: React.FC = () => {
             <label className="input-label">Email de Administrador</label>
             <div style={{ position: 'relative' }}>
               <Mail size={16} style={{ position: 'absolute', left: '12px', top: '14px', color: 'var(--text3)' }} />
-              <input type="email" className="input" placeholder="admin@zenithride.ao" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email" style={{ paddingLeft: '40px' }} />
+              <input type="email" className="input" placeholder="admin@zenithride.ao" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="off" style={{ paddingLeft: '40px' }} />
             </div>
           </div>
 
@@ -81,7 +81,7 @@ const Login: React.FC = () => {
               <label className="input-label">Senha Única</label>
               <div style={{ position: 'relative' }}>
                 <KeyRound size={16} style={{ position: 'absolute', left: '12px', top: '14px', color: 'var(--text3)' }} />
-                <input type="password" className="input" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" style={{ paddingLeft: '40px' }} />
+                <input type="password" className="input" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="off" style={{ paddingLeft: '40px' }} />
               </div>
             </div>
           )}

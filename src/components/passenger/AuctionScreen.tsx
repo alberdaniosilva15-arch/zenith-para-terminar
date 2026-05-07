@@ -40,73 +40,93 @@ const AuctionScreen: React.FC<AuctionScreenProps> = ({
   onCancelAuction, onSelectDriver, onConfirmDriver,
 }) => {
   return (
-    <div className="flex flex-col bg-[#F8FAFC] min-h-screen pb-28">
-      <div className="bg-[#0A0A0A] px-6 pt-8 pb-6 flex items-center gap-4">
-        <button
-          onClick={onCancelAuction}
-          className="w-10 h-10 bg-surface-container-low/10 rounded-full flex items-center justify-center text-white font-black hover:bg-surface-container-low/20 transition-all"
-        >
-          ←
-        </button>
-        <div>
-          <p className="text-white font-black text-sm">Escolhe o teu motorista</p>
-          <p className="text-white/40 text-[9px] font-bold uppercase tracking-widest">
-            {auction.loading ? 'A procurar...' : `${auction.drivers.length} disponíveis na tua zona`}
-          </p>
+    <div className="zr-app" style={{ minHeight: '100vh', paddingBottom: '120px' }}>
+      <header className="zr-header">
+        <div className="zr-inline zr-inline--between">
+          <div>
+            <p className="zr-kicker">Escolher motorista</p>
+            <h2 className="zr-section-title">Escolha o teu motorista</h2>
+          </div>
+          <span className="zr-chip zr-chip--info">
+            {auction.loading ? 'A procurar...' : `${auction.drivers.length} respostas`}
+          </span>
         </div>
-      </div>
+      </header>
 
       {/* Rota + distância */}
-      <div className="mx-4 mt-4 bg-surface-container-low rounded-[2rem] p-4 border border-outline-variant/20 shadow-sm space-y-2">
-        <RouteRow dot="bg-primary" value={pickupName || 'Partida'} />
-        <div className="my-1 pl-3 border-l-2 border-dashed border-outline-variant/30">
-          {routeInfo && (
-            <p className="text-[9px] font-bold text-on-surface-variant/70 py-1">
-              {routeInfo.isReal ? '🛣️' : '📏'} {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
-              {routeInfo.isReal && <span className="text-primary ml-1">(por estrada)</span>}
-            </p>
-          )}
-        </div>
-        <RouteRow dot="bg-red-600" value={destName || 'Destino'} />
-        {(zonePrice || ride.priceKz) && (
-          <div className="pt-2 border-t border-outline-variant/20 flex items-center justify-between">
-            {zonePrice && zoneNames ? (
-              <span className="text-[8px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-black">✓ PREÇO FIXO</span>
-            ) : (
-              <span className="text-[8px] text-on-surface-variant/60 font-bold">Estimativa</span>
-            )}
-            <p className="text-right text-sm font-black text-primary">
-              {Math.round(zonePrice ?? ride.priceKz ?? 0).toLocaleString('pt-AO')} Kz
-            </p>
+      <section className="zr-card" style={{ marginTop: '14px', marginInline: '14px' }}>
+        <div className="zr-list">
+          <div className="zr-list-item">
+            <div className="zr-route-dots">
+              <span className="dot dot--start"></span>
+            </div>
+            <div style={{ flex: 1 }}>
+              <strong style={{ display: 'block' }}>{pickupName || 'Partida'}</strong>
+              <span className="zr-copy">Localização de partida</span>
+            </div>
           </div>
-        )}
-      </div>
+          
+          {routeInfo && (
+            <div className="zr-list-item">
+              <div style={{ width: '34px' }}></div>
+              <div style={{ flex: 1 }}>
+                <span className="zr-chip zr-chip--muted">
+                  {routeInfo.isReal ? '🛣️' : '📏'} {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
+                </span>
+              </div>
+            </div>
+          )}
 
-      <AuctionList
-        auction={auction}
-        onSelectDriver={onSelectDriver}
-        onCancelAuction={onCancelAuction}
-        zonePrice={zonePrice}
-        priceKz={ride.priceKz ?? null}
-      />
+          <div className="zr-list-item">
+            <div className="zr-route-dots">
+              <span className="dot dot--end"></span>
+            </div>
+            <div style={{ flex: 1 }}>
+              <strong style={{ display: 'block' }}>{destName || 'Destino'}</strong>
+              {(zonePrice || ride.priceKz) && (
+                <span className="zr-copy">
+                  {zonePrice && zoneNames ? 'Preço Fixo' : 'Estimativa'}
+                </span>
+              )}
+            </div>
+            {(zonePrice || ride.priceKz) && (
+              <strong style={{ fontSize: '16px', color: 'var(--gold)' }}>
+                {Math.round(zonePrice ?? ride.priceKz ?? 0).toLocaleString('pt-AO')} Kz
+              </strong>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <div style={{ marginInline: '14px', marginTop: '14px' }}>
+        <AuctionList
+          auction={auction}
+          onSelectDriver={onSelectDriver}
+          onCancelAuction={onCancelAuction}
+          zonePrice={zonePrice}
+          priceKz={ride.priceKz ?? null}
+        />
+      </div>
 
       {/* Botão confirmar */}
       {auction.selectedDriver && (
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-surface-container-low/95 backdrop-blur-sm border-t border-outline-variant/20">
-          <button
-            onClick={onConfirmDriver}
-            disabled={loadingRide}
-            className="w-full py-6 bg-primary text-white rounded-[2.5rem] font-black text-sm uppercase tracking-[0.2em] shadow-[0_20px_40px_rgba(37,99,235,0.4)] active:scale-98 transition-all disabled:opacity-60"
-          >
-            {loadingRide ? (
-              <span className="flex items-center justify-center gap-3">
-                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                A confirmar...
-              </span>
-            ) : (
-              `CONFIRMAR ${(auction.selectedDriver.driver_name.split(' ')[0] ?? auction.selectedDriver.driver_name).toUpperCase()}`
-            )}
-          </button>
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '14px', background: 'var(--bg)', borderTop: '1px solid var(--line)', zIndex: 50 }}>
+          <div className="zr-inline" style={{ gap: '8px' }}>
+            <button
+              onClick={onCancelAuction}
+              className="zr-button zr-button--secondary"
+            >
+              Cancelar
+            </button>
+            <button
+              onClick={onConfirmDriver}
+              disabled={loadingRide}
+              className="zr-button zr-button--block"
+              style={{ flex: 1 }}
+            >
+              {loadingRide ? 'A confirmar...' : `CONFIRMAR ${(auction.selectedDriver.driver_name.split(' ')[0] ?? auction.selectedDriver.driver_name).toUpperCase()}`}
+            </button>
+          </div>
         </div>
       )}
     </div>

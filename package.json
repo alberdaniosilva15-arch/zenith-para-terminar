@@ -9,7 +9,10 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "kaze": "node kaze-agent/start.js",
+    "kaze:voice": "python kaze_voice_server.py",
+    "dev:all": "npx -y concurrently -n vite,kaze,voice -c green,cyan,magenta \"npm run dev\" \"npm run kaze\" \"python kaze_voice_server.py\""
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",

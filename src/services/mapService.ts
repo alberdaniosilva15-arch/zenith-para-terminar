@@ -12,7 +12,7 @@ import type { LatLng, LocationResult } from '../types';
 import { haversineKm as _haversineKm, haversineMeters as _haversineMeters } from '../lib/geo';
 
 const MAPBOX_TOKEN   = import.meta.env.VITE_MAPBOX_TOKEN   as string | undefined;
-const LOCATION_NAME_SEPARATOR = 'â€”';
+const LOCATION_NAME_SEPARATOR = '—';
 
 // Coordenadas reais: Luanda + Bengo + Ícolo e Bengo (cache estática para offline / sugestões rápidas)
 export const LUANDA_STATIC_LOCATIONS: LocationResult[] = [
@@ -234,7 +234,8 @@ async function mapboxReverseGeocode(coords: LatLng): Promise<string | null> {
     }
 
     return label;
-  } catch {
+  } catch (err) {
+    console.warn('[mapService] reverse geocode:', err);
     return null;
   }
 }
@@ -275,7 +276,7 @@ export const mapService = {
           geocodeCache.set(cacheKey, firstResult.coords);
           return firstResult.coords;
         }
-      } catch { /* fallthrough to static */ }
+      } catch (err) { console.warn('[mapService] static fallback:', err); }
     }
 
     // 2. Lista estática (fallback offline)

@@ -202,6 +202,11 @@ class PremiumService {
       estimatedDistanceKm: input.estimatedDistanceKm,
     });
 
+    if (!quote) {
+      console.warn('[premiumService.createPrivateDriverBooking] Preço não disponível');
+      return null;
+    }
+
     const { data, error } = await supabase
       .from('premium_bookings')
       .insert({
@@ -220,11 +225,11 @@ class PremiumService {
         favorite_driver_id: input.favoriteDriverId ?? null,
         notify_me: input.notifyMe ?? false,
         route_stops: input.routeStops ?? null,
-        price_kz: quote?.totalKz ?? 0,
-        pricing_snapshot: quote ? {
+        price_kz: quote.totalKz,
+        pricing_snapshot: {
           pricingId: quote.pricing.id,
           breakdown: quote.breakdown,
-        } : null,
+        },
       })
       .select('*')
       .single();
@@ -245,6 +250,11 @@ class PremiumService {
       returnTrip: input.returnTrip,
     });
 
+    if (!quote) {
+      console.warn('[premiumService.createCharterBooking] Preço não disponível');
+      return null;
+    }
+
     const { data: booking, error: bookingError } = await supabase
       .from('premium_bookings')
       .insert({
@@ -260,11 +270,11 @@ class PremiumService {
         notes: input.notes ?? null,
         notify_me: input.notifyMe ?? false,
         route_stops: input.routeStops ?? null,
-        price_kz: quote?.totalKz ?? 0,
-        pricing_snapshot: quote ? {
+        price_kz: quote.totalKz,
+        pricing_snapshot: {
           pricingId: quote.pricing.id,
           breakdown: quote.breakdown,
-        } : null,
+        },
       })
       .select('*')
       .single();
@@ -300,6 +310,11 @@ class PremiumService {
       urgency: input.urgency,
     });
 
+    if (!quote) {
+      console.warn('[premiumService.createCargoBooking] Preço não disponível');
+      return null;
+    }
+
     const { data: booking, error: bookingError } = await supabase
       .from('premium_bookings')
       .insert({
@@ -315,11 +330,11 @@ class PremiumService {
         notes: input.notes ?? null,
         notify_me: input.notifyMe ?? false,
         route_stops: input.routeStops ?? null,
-        price_kz: quote?.totalKz ?? 0,
-        pricing_snapshot: quote ? {
+        price_kz: quote.totalKz,
+        pricing_snapshot: {
           pricingId: quote.pricing.id,
           breakdown: quote.breakdown,
-        } : null,
+        },
       })
       .select('*')
       .single();

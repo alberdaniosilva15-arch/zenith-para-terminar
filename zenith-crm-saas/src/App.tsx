@@ -1,5 +1,5 @@
 import React, { Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom';
 import { useAdminAuth } from './hooks/useAdminAuth';
 import Sidebar from './components/layout/Sidebar';
 import TopBar  from './components/layout/TopBar';
@@ -7,6 +7,7 @@ import Login   from './pages/Login';
 
 // Lazy imports — cada módulo carrega só quando necessário (code splitting real)
 const Dashboard     = React.lazy(() => import('./pages/Dashboard'));
+const KazeAgentPage = React.lazy(() => import('./pages/KazeAgent'));
 const PricingPage   = React.lazy(() => import('./pages/Pricing'));
 const DriversPage   = React.lazy(() => import('./pages/Drivers'));
 const PassengersPage = React.lazy(() => import('./pages/Passengers'));
@@ -28,6 +29,7 @@ const PageLoader: React.FC = () => (
 // ── Layout protegido ──────────────────────────────────────────────────────────
 const ProtectedLayout: React.FC = () => {
   const { isAdmin, isLoading } = useAdminAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return (
@@ -55,7 +57,7 @@ const ProtectedLayout: React.FC = () => {
     <div className="crm-layout">
       <Sidebar />
       <TopBar />
-      <main className="crm-main">
+      <main className={`crm-main ${location.pathname.startsWith('/kaze') ? 'kaze-mode' : ''}`}>
         <Suspense fallback={<PageLoader />}>
           <Outlet />
         </Suspense>
@@ -73,6 +75,7 @@ const App: React.FC = () => (
       <Route element={<ProtectedLayout />}>
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard"  element={<Dashboard />} />
+        <Route path="/kaze/*"     element={<KazeAgentPage />} />
         <Route path="/pricing/*"  element={<PricingPage />} />
         <Route path="/drivers/*"  element={<DriversPage />} />
         <Route path="/passengers/*" element={<PassengersPage />} />

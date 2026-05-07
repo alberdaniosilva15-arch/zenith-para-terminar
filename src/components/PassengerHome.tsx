@@ -18,6 +18,8 @@ import RideRequestForm from './passenger/RideRequestForm';
 import ActiveRideCard from './passenger/ActiveRideCard';
 import KazePreditivo  from './KazePreditivo';
 import FreePerkBanner from './FreePerkBanner';
+import NightSafetyBanner from './NightSafetyBanner';
+import MultiStopInput from './passenger/MultiStopInput';
 import PrivateDriverModal from './passenger/PrivateDriverModal';
 import CharterModal from './passenger/CharterModal';
 import CargoModal from './passenger/CargoModal';
@@ -26,6 +28,7 @@ import { usePassengerGPS } from '../hooks/usePassengerGPS';
 import { useNearbyDrivers } from '../hooks/useNearbyDrivers';
 import AuctionScreen from './passenger/AuctionScreen';
 const ZonePriceMap = React.lazy(() => import('./ZonePriceMap'));
+import PanicButton from './PanicButton';
 import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
 import { applyScoreDiscount, zonePriceService } from '../services/zonePrice';
 import { rideService } from '../services/rideService';
@@ -33,6 +36,7 @@ import { routeService } from '../services/routeService';
 import type { RouteResult } from '../services/routeService';
 import { supabase } from '../lib/supabase';
 import { useIdleMount } from '../hooks/useIdleMount';
+import { useAppStore } from '../store/useAppStore';
 import { useSilentTripleTap } from '../hooks/useSilentTripleTap';
 import { MapSingleton } from '../lib/mapInstance';
 import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
@@ -92,6 +96,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   isVisible = true,
 }) => {
   const navigate = useNavigate();
+  const showToast = useAppStore((s) => s.showToast);
   const [selecting,    setSelecting]    = useState<'pickup' | 'dest' | null>(null);
   const [searchQuery,  setSearchQuery]  = useState('');
   const [results,      setResults]      = useState<LocationResult[]>([]);
@@ -117,7 +122,21 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [selectedVehicle, setSelectedVehicle] = useState<StandardVehicleType>('standard');
   const [openPremiumService, setOpenPremiumService] = useState<PremiumServiceType | null>(null);
   const [silentPanicSignal, setSilentPanicSignal] = useState(0);
+  const [extraDropAddress, setExtraDropAddress] = useState<string | null>(null);
+  const [extraDropCoords, setExtraDropCoords] = useState<LatLng | null>(null);
   const shouldMountMap = useIdleMount(isVisible);
+  const hasActiveRideSafety =
+    ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.IN_PROGRESS;
+
+  const ensureEmergencyContact = useCallback((message = 'Define um contacto de emergência antes de continuar.') => {
+    if (emergencyPhone) {
+      return true;
+    }
+
+    showToast(message, 'error');
+    navigate('/profile');
+    return false;
+  }, [emergencyPhone, navigate, showToast]);
 
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeDrawnRef     = useRef(false); // evita redesenhar a mesma rota
@@ -226,14 +245,11 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           .eq('user_id', userId)
           .maybeSingle();
 
-        if (cancelled) return;
-        if (error || !data) {
-          setPassengerScore(null);
-          return;
+        if (!cancelled) {
+          setPassengerScore(data as PassengerScore);
         }
-
-        setPassengerScore(data as PassengerScore);
-      } catch {
+      } catch (err) {
+        console.warn('[PassengerHome] loadPassengerScore fail:', err);
         if (!cancelled) {
           setPassengerScore(null);
         }
@@ -315,7 +331,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       setSelecting(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Não foi possível obter a localização.';
-      alert(`📍 ${msg}`);
+      showToast(`📍 ${msg}`, 'error');
     } finally {
       setSearching(false);
     }
@@ -369,7 +385,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       setFareExpiresAt(Date.now() + 120 * 1000); // 2 minutos de lock
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao calcular rota. Verifica a tua ligação.';
-      alert(`❌ ${msg}`);
+      showToast(`❌ ${msg}`, 'error');
       setRouteData(null);
       setFareData(null);
     } finally {
@@ -379,25 +395,32 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   // ── "VER MOTORISTAS" — pesquisa real de motoristas ────────────────────────────
   const handleShowDrivers = async () => {
+    if (!ensureEmergencyContact('Define um contacto de emergência antes de pedir a tua primeira corrida.')) return;
     if (!pickupCoords || !destName) return;
     await onStartAuction(pickupCoords);
   };
 
-  // ── "CHAMAR TÁXI" (fallback sem destino definido) ───────────────────────────
   const handleCallTaxi = async () => {
     if (!pickupCoords) {
       setSearching(true);
+      let success = false;
       try {
         const coords  = await mapService.getCurrentPosition();
         const address = await mapService.reverseGeocode(coords);
         setPickupName(address);
         setPickupCoords(coords);
         setUserLocation(coords);
-      } catch { /* usar fallback se GPS falhar */ } finally {
+        success = true;
+      } catch (err) {
+        showToast('❌ Não foi possível obter a tua localização. Activa o GPS.', 'error');
+      } finally {
         setSearching(false);
       }
-      setSelecting('dest');
-      handleSearch('');
+      
+      if (success) {
+        setSelecting('dest');
+        handleSearch('');
+      }
       return;
     }
     if (!destName) {
@@ -412,6 +435,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   // ── Confirmar motorista escolhido ───────────────────────────────────────────
   const handleConfirmDriver = async () => {
+    if (!ensureEmergencyContact()) return;
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
     try {
@@ -427,7 +451,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       );
     } catch (err) {
       console.error('[PassengerHome] handleConfirmDriver falhou:', err);
-      alert('❌ Erro ao confirmar motorista. Verifica a tua ligação e tenta de novo.');
+      showToast('❌ Erro ao confirmar motorista. Verifica a tua ligação e tenta de novo.', 'error');
     } finally {
       setLoadingRide(false);
     }
@@ -435,6 +459,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   // ── Solicitar Corrida (Preço base / normal) ─────────────────────────────────
   const handleRequestNormalRide = async (finalPriceKz: number) => {
+    if (!ensureEmergencyContact('Define um contacto de emergência antes de pedir a tua primeira corrida.')) return;
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
     try {
@@ -450,7 +475,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       );
     } catch (err) {
       console.error('[PassengerHome] handleRequestNormalRide falhou:', err);
-      alert('❌ Erro ao pedir corrida. Verifica a tua ligação e tenta de novo.');
+      showToast('❌ Erro ao pedir corrida. Verifica a tua ligação e tenta de novo.', 'error');
     } finally {
       setLoadingRide(false);
     }
@@ -458,6 +483,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   // ── Negociar preço (estilo InDriver) ────────────────────────────────────────
   const handleNegotiate = async (proposedPrice: number) => {
+    if (!ensureEmergencyContact('Define um contacto de emergência antes de negociar a corrida.')) return;
     if (!pickupCoords || !destName || !destCoords || !pickupName) return;
     setLoadingRide(true);
     try {
@@ -479,8 +505,9 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   };
 
   const handleOpenService = useCallback((service: PremiumServiceType) => {
+    if (!ensureEmergencyContact('Define um contacto de emergência antes de abrir este serviço.')) return;
     setOpenPremiumService(service);
-  }, []);
+  }, [ensureEmergencyContact]);
 
   const prepareRouteFromPrediction = useCallback((prediction: RidePrediction) => {
     setPickupName(prediction.origin_address);
@@ -509,6 +536,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   }, []);
 
   const handleSchedulePrediction = useCallback((prediction: RidePrediction) => {
+    if (!ensureEmergencyContact('Define um contacto de emergência antes de agendar corridas.')) return;
     prepareRouteFromPrediction(prediction);
 
     const tomorrow = new Date();
@@ -520,13 +548,14 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
     setScheduleDefaults({ date, time });
     setShowSchedule(true);
-  }, [prepareRouteFromPrediction]);
+  }, [ensureEmergencyContact, prepareRouteFromPrediction]);
 
   const isReady     = !!pickupName && !!destName;
   const showAuction = ride.status === RideStatus.BROWSING;
 
   if (showAuction) {
     return (
+      <>
       <AuctionScreen
         pickupName={pickupName}
         destName={destName}
@@ -540,6 +569,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
         onSelectDriver={onSelectDriver}
         onConfirmDriver={handleConfirmDriver}
       />
+      </>
     );
   }
 
@@ -547,23 +577,37 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   // ECRÃ NORMAL
   // ==================================================================
   return (
-    <div className="relative min-h-full flex flex-col bg-[#050912]">
-      <div className="absolute inset-0 z-0">
+    <>
+      <header className="zr-header">
+        <div className="zr-inline zr-inline--between">
+          <div>
+            <p className="zr-kicker">Passageiro</p>
+            <h1 className="zr-title zr-title--sm">Luanda pronta para sair</h1>
+          </div>
+          <div className="zr-inline">
+            <span className="zr-chip zr-chip--gold">
+              <span className="material-symbols-outlined" style={{fontSize:'16px'}}>stars</span> 5.0 Exclusive
+            </span>
+            <div className="zr-avatar">A</div>
+          </div>
+        </div>
+      </header>
+
+      <section className="zr-map">
+        <div className="zr-curve"></div>
         {shouldMountMap ? (
-          <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-[#050912] text-white/50 text-xs">A carregar mapa...</div>}>
+          <Suspense fallback={<div className="zr-empty">A carregar mapa...</div>}>
             <Map3D
               mode="passenger"
               center={userLocation ? [userLocation.lng, userLocation.lat] : undefined}
             />
           </Suspense>
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-[#050912] text-white/50 text-xs">
-            A preparar mapa...
-          </div>
+          <div className="zr-empty">A preparar mapa...</div>
         )}
-      </div>
+      </section>
 
-      <div className="relative z-10 p-4 space-y-4 flex-1 flex flex-col">
+      <div className="zr-stack" style={{ marginTop: '16px', padding: '0 14px' }}>
 
         {/* Card de rota (oculto quando já estamos no check-out para dar destaque ao Mapa) */}
         {!fareData && !calculating && (
@@ -580,6 +624,53 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
             onSelectDest={() => { setSelecting('dest'); handleSearch(''); }}
           />
         )}
+
+        {!emergencyPhone && ride.status === RideStatus.IDLE && (
+          <div className="zr-alert-box zr-alert-box--warning">
+            <div className="zr-alert-content">
+              <strong>Contacto de emergência obrigatório</strong>
+              <p>Antes da primeira corrida, adiciona um número SOS em Perfil para activar partilha, alertas e chamadas rápidas.</p>
+            </div>
+            <button
+              className="zr-button zr-button--secondary"
+              style={{ marginTop: '10px' }}
+              onClick={() => navigate('/profile')}
+            >
+              Abrir Perfil
+            </button>
+          </div>
+        )}
+
+        {/* Multi-Stop: segundo destino para amigo */}
+        {!fareData && !calculating && destCoords && (
+          <MultiStopInput
+            destCoords={destCoords}
+            onExtraDropSet={(addr, coords) => {
+              setExtraDropAddress(addr);
+              setExtraDropCoords(coords);
+            }}
+            onExtraDropClear={() => {
+              setExtraDropAddress(null);
+              setExtraDropCoords(null);
+            }}
+          />
+        )}
+
+        {/* NightSafetyBanner */}
+        <NightSafetyBanner
+          hasEmergencyContact={!!emergencyPhone}
+          hasActiveRide={hasActiveRideSafety}
+          safetyContextKey={ride.rideId ?? null}
+          onActivateSafety={() => {
+            if (ride.rideId && emergencyPhone) {
+              rideService.autoShareLiveTrackingOnRideStart({
+                rideId: ride.rideId,
+                ownerUserId: userId,
+                emergencyPhone,
+              });
+            }
+          }}
+        />
 
         {/* Overlay de pesquisa */}
         {selecting && (
@@ -611,40 +702,36 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                 <FreePerkBanner userId={userId} />
 
                 {/* ── ZONA DE CONTRATOS E SERVIÇOS ── */}
-                <div className="mx-4 mb-4 grid grid-cols-2 gap-3">
-                  <button
-                    onClick={() => navigate('/contrato')}
-                    className="bg-[#0A0A0A] border border-primary/20 rounded-[2rem] p-5 text-left relative overflow-hidden group active:scale-95 transition-all"
-                  >
-                    <div className="absolute top-0 right-0 w-16 h-16 bg-primary/5 rounded-full blur-2xl group-hover:bg-primary/10 transition-all" />
-                    <span className="material-symbols-outlined text-primary mb-2 block">description</span>
-                    <p className="text-[10px] font-black text-primary uppercase tracking-widest">Contratos</p>
-                    <p className="text-[9px] text-white/40 font-bold leading-tight mt-1">Escolar, Familiar e Empresas</p>
-                  </button>
-
-                  <button
-                    onClick={() => setShowReferral(true)}
-                    className="bg-[#0A0A0A] border border-white/5 rounded-[2rem] p-5 text-left relative overflow-hidden group active:scale-95 transition-all"
-                  >
-                    <div className="absolute top-0 right-0 w-16 h-16 bg-white/5 rounded-full blur-2xl group-hover:bg-white/10 transition-all" />
-                    <span className="material-symbols-outlined text-white/60 mb-2 block">handshake</span>
-                    <p className="text-[10px] font-black text-white/80 uppercase tracking-widest">Traz o Mano</p>
-                    <p className="text-[9px] text-white/40 font-bold leading-tight mt-1">Ganha 500 Kz por convite</p>
-                  </button>
-                </div>
-
-                {/* Botão Agendar Corrida */}
-                {isReady && (
-                  <button
-                    onClick={() => {
-                      setScheduleDefaults(null);
-                      setShowSchedule(true);
-                    }}
-                    className="w-full py-3 bg-surface-container-low border border-outline-variant/30 text-on-surface-variant rounded-2xl font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 hover:border-primary/50 active:scale-98 transition-all"
-                  >
-                    📅 Agendar para depois
-                  </button>
-                )}
+                <section className="zr-card">
+                  <div className="zr-inline zr-inline--between">
+                    <div>
+                      <p className="zr-kicker">Acesso rapido</p>
+                      <h2 className="zr-section-title">Overlays e modais do passageiro</h2>
+                    </div>
+                    <span className="material-symbols-outlined" style={{color:'var(--gold)'}}>widgets</span>
+                  </div>
+                  <div className="zr-scroll-x" style={{ marginTop: '14px' }}>
+                    <button className="zr-option" onClick={() => navigate('/contrato')}>
+                      <strong>Contratos</strong><span>Escolar, Familiar e Empresas</span>
+                    </button>
+                    <button className="zr-option" onClick={() => setShowReferral(true)}>
+                      <strong>Traz o Mano</strong><span>Ganha 500 Kz por convite</span>
+                    </button>
+                    <button
+                      className="zr-option"
+                      onClick={() => {
+                        if (!ensureEmergencyContact('Define um contacto de emergência antes de agendar corridas.')) return;
+                        setScheduleDefaults(null);
+                        setShowSchedule(true);
+                      }}
+                    >
+                      <strong>Agendar</strong><span>Data, hora e recorrencia</span>
+                    </button>
+                    <button className="zr-option" onClick={() => navigate('/pos_viagem_review')}>
+                      <strong>Pos-viagem</strong><span>Avaliacao e recibo</span>
+                    </button>
+                  </div>
+                </section>
               </>
             )}
 
@@ -672,8 +759,19 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               routeInfo={routeInfo}
               onCancelRide={onCancelRide}
               emergencyPhone={emergencyPhone}
-              silentPanicSignal={silentPanicSignal}
             />
+            {hasActiveRideSafety && (
+              <div style={{ position: 'fixed', top: '100px', right: '14px', zIndex: 1001, width: '220px' }}>
+                <PanicButton
+                  userId={userId}
+                  rideId={ride.rideId}
+                  emergencyPhone={emergencyPhone}
+                  driverName={ride.driverName}
+                  silentSignal={silentPanicSignal}
+                  enableScreamDetection={true}
+                />
+              </div>
+            )}
 
             {/* Adicionado espaço livre para quando a doca inferior com o Kaze está presente */}
             <div className="h-10" />
@@ -746,7 +844,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
         {/* Kaze substituiu o FAB anterior e é injectado pelo App no topo */}
       </div>
-    </div>
+    </>
   );
 };
 

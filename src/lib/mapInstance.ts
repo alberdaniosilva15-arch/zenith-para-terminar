@@ -130,7 +130,7 @@ export const MapSingleton = {
                     ['get', 'name_pt'],
                     ['get', 'name'],
                   ]);
-                } catch { /* layer pode não suportar expression */ }
+                } catch (err) { console.warn('[mapInstance] layer expression:', err); }
               }
 
               // Tornar TODOS os POIs visíveis: restaurantes, hotéis, escolas, hospitais
@@ -151,7 +151,7 @@ export const MapSingleton = {
                   map.setPaintProperty(layer.id, 'text-opacity', 1);
                   map.setPaintProperty(layer.id, 'icon-opacity', 1);
                   map.setLayoutProperty(layer.id, 'visibility', 'visible');
-                } catch { /* ignorar layers sem estes props */ }
+                } catch (err) { console.warn('[mapInstance] layer props:', err); }
               }
 
               // Tornar labels de neighborhoods/localités/ruas sempre visíveis
@@ -167,7 +167,7 @@ export const MapSingleton = {
                 try {
                   map.setPaintProperty(layer.id, 'text-opacity', 1);
                   map.setLayoutProperty(layer.id, 'visibility', 'visible');
-                } catch { /* ignorar */ }
+                } catch (err) { console.warn('[mapInstance] cleanup:', err); }
               }
             }
           }

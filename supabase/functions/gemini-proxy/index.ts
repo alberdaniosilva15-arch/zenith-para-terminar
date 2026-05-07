@@ -21,6 +21,7 @@ import {
   corsForbidden,
   resolveCorsHeaders,
 } from '../_shared/cors.ts';
+import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.21.0';
 
 const GEMINI_API_KEY    = Deno.env.get('GEMINI_API_KEY')!;
 const OPENAI_API_KEY    = Deno.env.get('OPENAI_API_KEY') ?? '';
@@ -111,12 +112,12 @@ Centro/Mutamba, Maianga, Ingombota, Ilha do Cabo, Miramar, Alvalade, Talatona, K
 • Após completar uma corrida, os créditos são recarregados automaticamente
 
 ═══ REGRAS DE RESPOSTA ═══
-1. Responde SEMPRE em português claro e correcto
-2. Sê conciso mas completo (máximo 3-4 parágrafos)
-3. Se perguntarem preços, usa a fórmula e dá exemplos concretos
-4. Se perguntarem sobre segurança, menciona os números de emergência
-5. Nunca inventes funcionalidades que não existem
-6. Se não souberes algo específico, diz honestamente e sugere contactar o suporte`;
+1. Responde SEMPRE em português claro e correcto, mas de forma EXTREMAMENTE curta (máximo 50 palavras/tokens).
+2. Sê direto ao ponto. Evita introduções longas. Não fales muito se não te perguntarem com detalhes.
+3. Se perguntarem preços, dá apenas o valor estimado de forma rápida.
+4. Se perguntarem sobre segurança, menciona os números de emergência de forma curta.
+5. Nunca inventes funcionalidades que não existem.
+6. Se não souberes algo, responde de forma curta e sugere o suporte`;
 
 // =============================================================================
 // IP RATE LIMITING (camada adicional ao rate limit por user_id)
@@ -132,6 +133,17 @@ const IP_MAX_REQS  = 40;     // max 40 requests/minuto por IP (todas as acções
 
 interface IpEntry { count: number; windowStart: number; }
 const ipCounters = new Map<string, IpEntry>();
+
+const USER_WINDOW_MS = 60_000;
+const USER_MAX_REQS = 5;
+const userCounters = new Map<string, IpEntry>();
+
+function cleanupUserCounters() {
+  const now = Date.now();
+  for (const [userId, entry] of userCounters.entries()) {
+    if (now - entry.windowStart > USER_WINDOW_MS) userCounters.delete(userId);
+  }
+}
 
 // Persistência imediata: usar tabela `ip_rate_limits` para contagem por janela.
 // Se a operação DB falhar, cair para o fallback em memória.
@@ -312,7 +324,7 @@ Deno.serve(async (req: Request) => {
       case 'search_locations': {
         const { query } = payload as { query: string };
         const res = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
+          model: 'gemini-flash-latest',
           contents: `Localize pontos de interesse em Luanda, Angola: "${query}".
 Retorna APENAS JSON (sem markdown), com campo "locations": array de objectos com:
 name (string), type (bairro|restaurante|rua|monumento|servico|hospital|escola),
@@ -350,7 +362,7 @@ Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
       case 'explore_luanda': {
         const { query } = payload as { query: string };
         const res = await ai.models.generateContent({
-          model: 'gemini-2.0-flash',
+          model: 'gemini-flash-latest',
           contents: `Informações actualizadas sobre: "${query}" em Luanda, Angola.`,
           config: { tools: [{ googleSearch: {} }], systemInstruction: KAZE_SYSTEM_PROMPT },
         });
@@ -366,7 +378,7 @@ Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
           role: string; status: string; name?: string; extraText?: string;
         }};
         const res = await ai.models.generateContent({
-          model: 'gemini-2.0-flash-lite',
+          model: 'gemini-flash-latest',
           contents: `Insight curto (máx 2 frases) para ${context.name ?? 'utilizador'}
 (role: ${context.role}, status: ${context.status}${context.extraText ? `, contexto: ${context.extraText}` : ''}) da MotoGo Luanda.
 JSON: { text: string, type: "info"|"motivation"|"safety" }`,
@@ -404,7 +416,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
         }
 
         const activeProvider = (provider || 'google').toLowerCase();
-        const activeModel    = modelOverride || (activeProvider === 'groq' ? 'llama-3.1-8b-instant' : activeProvider === 'openai' ? 'gpt-4o' : 'gemini-2.0-flash');
+        const activeModel    = modelOverride || (activeProvider === 'groq' ? 'llama-3.1-8b-instant' : activeProvider === 'openai' ? 'gpt-4o' : 'gemini-flash-latest');
         
         // 3. Roteamento Universal: GROQ ou OPENAI
         if (activeProvider === 'groq' || activeProvider === 'openai') {
@@ -448,28 +460,65 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
            return ok({ text: proxyData.choices?.[0]?.message?.content ?? '' });
         }
 
-        // 4. Roteamento Clássico: GOOGLE GEMINI
-        const normalizedHistory = (Array.isArray(history) ? history : [])
-          .map((entry) => {
-            const role = entry?.role === 'model' ? 'model' : 'user';
-            const textFromContent = typeof entry?.content === 'string' ? entry.content.trim() : '';
-            const textFromParts = Array.isArray(entry?.parts) ? entry.parts.map((p:any) => (typeof p?.text === 'string' ? p.text.trim() : '')).filter(Boolean).join('\n') : '';
-            const text = textFromContent || textFromParts;
-            if (!text) return null;
-            return { role, parts: [{ text }] };
-          }).filter(Boolean) as Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
+        // 4. Roteamento Clássico: GOOGLE GEMINI (com fallback para Groq)
+        try {
+          const normalizedHistory = (Array.isArray(history) ? history : [])
+            .map((entry) => {
+              const role = entry?.role === 'model' ? 'model' : 'user';
+              const textFromContent = typeof entry?.content === 'string' ? entry.content.trim() : '';
+              const textFromParts = Array.isArray(entry?.parts) ? entry.parts.map((p:any) => (typeof p?.text === 'string' ? p.text.trim() : '')).filter(Boolean).join('\n') : '';
+              const text = textFromContent || textFromParts;
+              if (!text) return null;
+              return { role, parts: [{ text }] };
+            }).filter(Boolean) as Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
 
-        const gKey = GEMINI_API_KEY?.trim();
-        if (!gKey) return err('Gateway sem chave do Gemini. Contacta o suporte.', 500);
+          const gKey = GEMINI_API_KEY?.trim();
+          if (!gKey) return err('Gateway sem chave do Gemini. Contacta o suporte.', 500);
 
-        const activeGenAI = new GoogleGenAI({ apiKey: gKey });
-        const chat = activeGenAI.chats.create({
-          model:  activeModel,
-          config: { systemInstruction: finalPreamble },
-          history: normalizedHistory,
-        });
-        const res = await chat.sendMessage({ message });
-        return ok({ text: res.text });
+          const aiClient = new GoogleGenerativeAI(gKey);
+          const modelInstance = aiClient.getGenerativeModel({ 
+            model: activeModel,
+            systemInstruction: finalPreamble
+          });
+
+          // O SDK antigo usa history como Array<{ role: 'user'|'model', parts: [{text: string}] }>
+          // Mas para startChat, history é passado separadamente
+          const chatSession = modelInstance.startChat({
+            history: normalizedHistory
+          });
+
+          const res = await chatSession.sendMessage(message);
+          return ok({ text: res.response.text() });
+        } catch (geminiErr: any) {
+          console.warn('[gemini-proxy] Gemini falhou, fallback para Groq:', geminiErr);
+          
+          if (!GROQ_API_KEY) {
+            return err(`IA temporariamente indisponível. Erro: ${geminiErr?.message || 'Desconhecido'}`, 503);
+          }
+          
+          const mappedHistory = (Array.isArray(history) ? history : []).map(entry => {
+            const r = entry?.role === 'model' ? 'assistant' : 'user';
+            const text = typeof entry?.content === 'string' ? entry.content : (entry?.parts?.[0]?.text ?? '');
+            return { role: r, content: text };
+          }).filter((v: any) => v.content);
+          
+          const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'llama-3.1-8b-instant',
+              messages: [
+                { role: 'system', content: finalPreamble },
+                ...mappedHistory,
+                { role: 'user', content: message },
+              ],
+            }),
+          });
+          
+          if (!groqRes.ok) return err('IA indisponível (fallback também falhou).', 503);
+          const groqData = await groqRes.json();
+          return ok({ text: groqData.choices?.[0]?.message?.content ?? '', provider: 'groq_fallback' });
+        }
       }
 
       // ----------------------------------------------------------------
@@ -478,7 +527,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           driverProfile: { rating: number; totalRides: number; level: string };
         };
         const res = await ai.models.generateContent({
-          model: 'gemini-2.0-flash-lite',
+          model: 'gemini-flash-latest',
           contents: `Ganhos realistas para mototaxista em Luanda:
 Rating: ${driverProfile.rating}/5 | Corridas: ${driverProfile.totalRides} | Nível: ${driverProfile.level}.
 JSON: { dailyEstimateKz: number, weeklyEstimateKz: number, bestZones: string[], tips: string }`,
@@ -491,7 +540,7 @@ JSON: { dailyEstimateKz: number, weeklyEstimateKz: number, bestZones: string[], 
       case 'autonomous_decisions': {
         const { context } = payload;
         const res = await ai.models.generateContent({
-          model: 'gemini-2.0-pro-exp-02-05',
+          model: 'gemini-flash-latest',
           contents: `SISTEMA VIGILANTE MOTOGO LUANDA. Contexto: ${JSON.stringify(context)}.
 JSON: { commands: Array<{ id, type: REALLOCATE|SURGE_PRICE|SECURITY_DISPATCH|ROUTE_OPTIMIZE,
 target, reason, intensity, timestamp, status: EXECUTED|LOGGED }> }`,
@@ -528,7 +577,7 @@ JSON: { text: string }`,
         };
 
         const res = await ai.models.generateContent({
-          model: 'gemini-2.0-flash-lite',
+          model: 'gemini-flash-latest',
           contents: prompts[step] ?? prompts.opening,
           config: { responseMimeType: 'application/json', systemInstruction: KAZE_SYSTEM_PROMPT },
         });
@@ -556,4 +605,6 @@ JSON: { text: string }`,
     return err('Erro interno. Tenta de novo.', 500);
   }
 });
+
+
 

@@ -117,14 +117,23 @@ export function useMetrics() {
   useEffect(() => {
     fetchAll();
 
+    let debounceTimer: ReturnType<typeof setTimeout>;
+    const debouncedFetchAll = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchAll();
+      }, 2000);
+    };
+
     // Realtime — rides e driver_locations
     channelRef.current = supabase
       .channel('crm-metrics-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, fetchAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_locations' }, fetchAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, debouncedFetchAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_locations' }, debouncedFetchAll)
       .subscribe();
 
     return () => {
+      clearTimeout(debounceTimer);
       if (channelRef.current) supabase.removeChannel(channelRef.current);
     };
   }, []);

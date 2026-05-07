@@ -7,7 +7,7 @@
 // =============================================================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { rideService } from '../services/rideService';
+import { rideService, checkRouteDeviation } from '../services/rideService';
 import { mapService } from '../services/mapService';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -60,13 +60,14 @@ export function useRide(): UseRideReturn {
   const driverLocUnsub = useRef<(() => void) | null>(null);
   const prevStatusRef  = useRef<RideStatus>(RideStatus.IDLE);
   const autoSharedRideRef = useRef<string | null>(null);
+  const lastDeviationAlertRef = useRef<number>(0);
   // Ref para guardar distância e duração da corrida activa (para PostRideReview)
   const rideDetailsRef = useRef<{ distanceKm: number | null; durationMin: number | null }>({
     distanceKm:  null,
     durationMin: null,
   });
-  let applyDbRide: (ride: DbRide & { driver_name?: string; passenger_name?: string }) => void = () => {};
-  let subscribeToRide: (rideId: string, driverId?: string) => void = () => {};
+  const applyDbRideRef = useRef<(ride: DbRide & { driver_name?: string; passenger_name?: string }) => void>(() => {});
+  const subscribeToRideRef = useRef<(rideId: string, driverId?: string) => void>(() => {});
   const clearRideDetails = useCallback(() => {
     rideDetailsRef.current = { distanceKm: null, durationMin: null };
   }, []);
@@ -77,8 +78,8 @@ export function useRide(): UseRideReturn {
     (async () => {
       const active = await rideService.getActiveRide(dbUser.id);
       if (active) {
-        applyDbRide(active);
-        subscribeToRide(active.id, active.driver_id ?? undefined);
+        applyDbRideRef.current(active);
+        subscribeToRideRef.current(active.id, active.driver_id ?? undefined);
       } else {
         clearRideDetails();
         resetRide();
@@ -179,8 +180,26 @@ export function useRide(): UseRideReturn {
     ride.status,
   ]);
 
+  // ── M1: Detecção de Desvio de Rota ───────────────────────────────────────
+  useEffect(() => {
+    if (ride.status === RideStatus.IN_PROGRESS && ride.rideId && ride.carLocation && ride.destCoords) {
+      const now = Date.now();
+      // Throttle de 2 minutos para evitar spam de alertas
+      if (now - lastDeviationAlertRef.current > 120_000) {
+        checkRouteDeviation(ride.rideId, ride.carLocation, ride.destCoords)
+          .then(({ deviated }) => {
+            if (deviated) {
+              lastDeviationAlertRef.current = Date.now();
+              showToast('Alerta Kaze: O motorista desviou-se significativamente da rota original.', 'info');
+            }
+          })
+          .catch(err => console.warn('[useRide] Erro em checkRouteDeviation:', err));
+      }
+    }
+  }, [ride.status, ride.rideId, ride.carLocation, ride.destCoords, showToast]);
+
   // ── applyDbRide ──────────────────────────────────────────────────────────
-  applyDbRide = useCallback((r: DbRide & { driver_name?: string; passenger_name?: string }) => {
+  applyDbRideRef.current = useCallback((r: DbRide & { driver_name?: string; passenger_name?: string }) => {
     rideDetailsRef.current = {
       distanceKm:  r.distance_km  ?? null,
       durationMin: r.duration_min ?? null,
@@ -203,7 +222,7 @@ export function useRide(): UseRideReturn {
   }, [setRide]);
 
   // ── subscribeToRide ──────────────────────────────────────────────────────
-  subscribeToRide = useCallback((rideId: string, driverId?: string) => {
+  subscribeToRideRef.current = useCallback((rideId: string, driverId?: string) => {
     unsubRef.current?.();
     driverLocUnsub.current?.();
     driverLocUnsub.current = null;
@@ -219,7 +238,7 @@ export function useRide(): UseRideReturn {
             .eq('user_id', updated.driver_id)
             .single();
           resolvedDriverName = dp?.name ?? undefined;
-        } catch { /* não crítico */ }
+        } catch (err) { console.warn('[useRide] não crítico:', err); }
       } else {
         resolvedDriverName = (updated as any).driver_name ?? undefined;
       }
@@ -348,13 +367,13 @@ export function useRide(): UseRideReturn {
       }
 
       resetAuction();
-      applyDbRide(data);
-      subscribeToRide(data.id, data.driver_id ?? undefined);
+      applyDbRideRef.current(data);
+      subscribeToRideRef.current(data.id, data.driver_id ?? undefined);
       showToast('Corrida criada com sucesso!', 'success');
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, auction.selectedDriver, subscribeToRide, applyDbRide, resetAuction, showToast, clearRideDetails]);
+  }, [dbUser?.id, auction.selectedDriver, resetAuction, showToast, clearRideDetails]);
 
   // ── cancelRide ────────────────────────────────────────────────────────────
   const cancelRide = useCallback(async (reason?: string) => {
@@ -386,12 +405,12 @@ export function useRide(): UseRideReturn {
         showToast(msg, 'error');
         return;
       }
-      applyDbRide(data);
-      subscribeToRide(data.id, data.driver_id ?? undefined);
+      applyDbRideRef.current(data);
+      subscribeToRideRef.current(data.id, data.driver_id ?? undefined);
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, subscribeToRide, applyDbRide, showToast]);
+  }, [dbUser?.id, showToast]);
 
   // ── confirmRide ───────────────────────────────────────────────────────────
   const confirmRide = useCallback(async (rideId: string) => {
@@ -403,12 +422,12 @@ export function useRide(): UseRideReturn {
         showToast(e?.message ?? 'Erro ao confirmar.', 'error');
         return;
       }
-      applyDbRide(data);
-      subscribeToRide(data.id, data.driver_id ?? undefined);
+      applyDbRideRef.current(data);
+      subscribeToRideRef.current(data.id, data.driver_id ?? undefined);
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, subscribeToRide, applyDbRide, showToast]);
+  }, [dbUser?.id, showToast]);
 
   // ── declineRide ───────────────────────────────────────────────────────────
   const declineRide = useCallback(async (rideId: string) => {
@@ -420,7 +439,8 @@ export function useRide(): UseRideReturn {
       unsubRef.current?.(); unsubRef.current = null;
       clearRideDetails();
       resetRide();
-    } catch {
+    } catch (err) {
+      console.warn('[useRide] operação:', err);
       showToast('Erro ao recusar corrida.', 'error');
     }
   }, [dbUser?.id, resetRide, showToast, clearRideDetails]);
@@ -435,11 +455,11 @@ export function useRide(): UseRideReturn {
         showToast(e?.message ?? 'Erro ao avançar estado.', 'error');
         return;
       }
-      applyDbRide(data);
+      applyDbRideRef.current(data);
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, ride.rideId, applyDbRide, showToast]);
+  }, [dbUser?.id, showToast]);
 
   // ── submitReview ──────────────────────────────────────────────────────────
   const submitReview = useCallback(async (score: number, comment?: string) => {
@@ -453,7 +473,8 @@ export function useRide(): UseRideReturn {
       clearRideDetails();
       resetRide();
       showToast('Avaliação enviada. Obrigado!', 'success');
-    } catch {
+    } catch (err) {
+      console.warn('[useRide] cleanup:', err);
       showToast('Erro ao enviar avaliação.', 'error');
     }
   }, [dbUser?.id, postRide, resetPostRide, resetRide, showToast, clearRideDetails]);

@@ -129,7 +129,15 @@ export function useAdminAuth(): UseAdminAuthReturn {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      (event, session) => {
+        // TOKEN_REFRESHED e INITIAL_SESSION são eventos silenciosos —
+        // NÃO reprocessar a sessão para evitar re-renders que apagam o chat
+        if (event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+          console.log(`[useAdminAuth] Evento ignorado: ${event}`);
+          return;
+        }
+        // Só processar eventos que realmente importam
+        console.log(`[useAdminAuth] Evento processado: ${event}`);
         processSession(session);
       }
     );

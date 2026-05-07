@@ -52,75 +52,65 @@ const LocationSearch: React.FC<LocationSearchProps> = ({
   onSelectLocation,
 }) => {
   return (
-    <div className="absolute inset-x-4 top-4 z-[100] animate-in slide-in-from-top duration-300 flex flex-col max-h-[85vh]">
-      <div className="bg-surface-container-low rounded-[2.5rem] overflow-hidden border border-outline-variant/20 flex flex-col shadow-2xl">
-        <div className="p-5 border-b border-outline-variant/10 flex items-center gap-4 sticky top-0 bg-surface-container-low z-10">
-          <button
-            onClick={onClose}
-            className="w-10 h-10 flex items-center justify-center bg-surface-container-lowest rounded-full text-outline font-black"
-          >✕</button>
-          <input
-            autoFocus
-            type="text"
-            placeholder={selecting === 'pickup' ? 'De onde partes?' : 'Para onde vais?'}
-            className="flex-1 bg-surface-container-lowest p-4 rounded-2xl outline-none font-black text-sm text-on-surface"
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-          />
+    <div className="zr-app" style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'var(--bg)' }}>
+      <header className="zr-header">
+        <div className="zr-inline zr-inline--between">
+          <div>
+            <p className="zr-kicker">Localização</p>
+            <h2 className="zr-section-title">{selecting === 'pickup' ? 'De onde partes?' : 'Para onde vais?'}</h2>
+          </div>
+          <button className="zr-button zr-button--sm zr-button--ghost" onClick={onClose}>Cancelar</button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+      </header>
+
+      <div style={{ padding: '14px' }}>
+        <input 
+          autoFocus
+          className="zr-input" 
+          value={searchQuery}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder={selecting === 'pickup' ? 'Nome do local de partida' : 'Nome do destino'} 
+          style={{ width: '100%', marginBottom: '14px' }}
+        />
+
+        <p className="zr-copy" style={{ marginBottom: '14px' }}>
+          {searching
+            ? 'A pesquisar...'
+            : results.length > 0
+              ? `${results.length} locais encontrados`
+              : searchQuery.length >= 2
+                ? 'Nenhum resultado — tenta outro nome'
+                : 'Escreve o nome do bairro, rua ou local'}
+        </p>
+
+        <div className="zr-list">
           {selecting === 'pickup' && (
-            <button onClick={onUseGPS} disabled={searching}
-              className="w-full flex items-center gap-4 p-4 bg-primary/10 rounded-2xl border border-primary/20 mb-2 text-left disabled:opacity-60">
-              <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center text-white text-lg">
-                {searching ? <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : '📍'}
-              </div>
-              <div>
-                <p className="font-black text-on-surface text-sm">Usar a minha localização</p>
-                <p className="text-[9px] text-primary font-bold uppercase">GPS automático · Nome do bairro</p>
+            <button className="zr-list-item zr-list-item--interactive" onClick={onUseGPS} disabled={searching} style={{ textAlign: 'left', width: '100%' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: '24px', color: 'var(--primary)' }}>my_location</span>
+              <div style={{ flex: 1 }}>
+                <strong style={{ display: 'block' }}>Usar localização actual</strong>
+                <span className="zr-copy">GPS do dispositivo</span>
               </div>
             </button>
           )}
 
-          {/* Indicador de pesquisa */}
-          <p className="px-4 text-[8px] font-black text-on-surface-variant/70 uppercase tracking-widest mb-2">
-            {searching
-              ? '🔍 A pesquisar no Mapbox...'
-              : results.length > 0
-                ? `${results.length} locais encontrados`
-                : searchQuery.length >= 2
-                  ? 'Nenhum resultado — tenta outro nome'
-                  : 'Escreve o nome do bairro, rua ou local'}
-          </p>
-
           {results.map((res, i) => {
-            // Calcular distância do utilizador a este resultado
-            const distKm = userLocation
-              ? quickDistanceKm(userLocation.lat, userLocation.lng, res.coords.lat, res.coords.lng)
-              : null;
-
+            const distKm = userLocation ? quickDistanceKm(userLocation.lat, userLocation.lng, res.coords.lat, res.coords.lng) : null;
             return (
-              <button key={`location-${res.name}-${i}`} onClick={() => onSelectLocation(res)}
-                className="w-full flex items-center gap-4 p-4 hover:bg-surface-container-lowest rounded-2xl transition-colors text-left border border-transparent hover:border-outline-variant/20">
-                <div className="w-10 h-10 bg-surface-container-low rounded-xl flex items-center justify-center text-xl shrink-0">
-                  {getTypeIcon(res.type)}
+              <button key={`location-${res.name}-${i}`} onClick={() => onSelectLocation(res)} className="zr-list-item zr-list-item--interactive" style={{ textAlign: 'left', width: '100%' }}>
+                <span style={{ fontSize: '24px' }}>{getTypeIcon(res.type)}</span>
+                <div style={{ flex: 1 }}>
+                  <strong style={{ display: 'block' }}>{res.name}</strong>
+                  <span className="zr-copy">{res.description}</span>
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-black text-on-surface text-sm truncate">{res.name}</p>
-                  <p className="text-[9px] font-bold text-on-surface-variant/70 uppercase truncate">{res.description}</p>
-                </div>
-                <div className="flex flex-col items-end gap-1 shrink-0">
-                  {distKm !== null && (
-                    <span className="text-[10px] font-black text-primary/70">
-                      {distKm < 1 ? `${Math.round(distKm * 1000)}m` : `${distKm.toFixed(1)} km`}
-                    </span>
-                  )}
-                  {res.isPopular && (
-                    <span className="text-[8px] bg-primary/15 text-primary px-2 py-0.5 rounded-full font-black">Popular</span>
-                  )}
-                </div>
+                {distKm !== null && (
+                  <span className="zr-chip zr-chip--muted">{distKm < 1 ? `${Math.round(distKm * 1000)}m` : `${distKm.toFixed(1)} km`}</span>
+                )}
+                {res.isPopular && (
+                  <span className="zr-chip zr-chip--gold" style={{ marginLeft: '8px' }}>Popular</span>
+                )}
               </button>
-            );
+            )
           })}
         </div>
       </div>

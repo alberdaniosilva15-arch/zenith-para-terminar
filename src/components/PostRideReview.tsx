@@ -1,10 +1,3 @@
-// =============================================================================
-// ZENITH RIDE v3.0 — PostRideReview.tsx (NOVO)
-// Activado AUTOMATICAMENTE após corrida concluída
-// Kaze guia a avaliação: pergunta, colecta nota 1-5, guarda no Supabase
-// IA SÓ ACTIVA AQUI — não consome tokens em idle
-// =============================================================================
-
 import React, { useState, useEffect } from 'react';
 import { geminiService } from '../services/geminiService';
 import { supabase } from '../lib/supabase';
@@ -21,10 +14,10 @@ type ReviewStep = 'loading' | 'opening' | 'rating' | 'comment' | 'price_feedback
 
 type PriceRating = 'too_cheap' | 'fair' | 'expensive' | 'too_expensive';
 const PRICE_OPTIONS: { value: PriceRating; label: string; emoji: string; color: string }[] = [
-  { value: 'too_cheap',     label: 'Muito barato',  emoji: '😊', color: 'bg-green-500/15 text-green-400 border-green-500/30' },
-  { value: 'fair',           label: 'Preço justo',   emoji: '👍', color: 'bg-primary/15 text-primary border-primary/30' },
-  { value: 'expensive',      label: 'Um pouco caro', emoji: '😐', color: 'bg-orange-500/15 text-orange-400 border-orange-500/30' },
-  { value: 'too_expensive',  label: 'Muito caro',    emoji: '😤', color: 'bg-red-500/15 text-red-400 border-red-500/30' },
+  { value: 'too_cheap',     label: 'Muito barato',  emoji: '😊', color: 'rgba(34,197,94,0.1)' },
+  { value: 'fair',           label: 'Preço justo',   emoji: '👍', color: 'rgba(230,195,100,0.1)' },
+  { value: 'expensive',      label: 'Um pouco caro', emoji: '😐', color: 'rgba(245,158,11,0.1)' },
+  { value: 'too_expensive',  label: 'Muito caro',    emoji: '😤', color: 'rgba(239,68,68,0.1)' },
 ];
 
 const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onDismiss }) => {
@@ -46,7 +39,6 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
   // ------------------------------------------------------------------
   useEffect(() => {
     if (!postRide.active) return;
-    // Reset de estado local a cada nova avaliação
     setStep('loading');
     setScore(0);
     setComment('');
@@ -63,16 +55,14 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
         });
         setKazeText(res.text);
         setStep('opening');
-      } catch {
+      } catch (err) {
+        console.warn('[PostRideReview] Falha no Kaze review (opening):', err);
         setKazeText(`Como foi a corrida com ${postRide.driverName ?? 'o motorista'}?`);
         setStep('opening');
       }
     })();
   }, [postRide.active, postRide.rideId]);
 
-  // ------------------------------------------------------------------
-  // Step 2: Kaze pede a classificação
-  // ------------------------------------------------------------------
   const handleOpeningContinue = async () => {
     setStep('loading');
     try {
@@ -82,15 +72,13 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
         step: 'collect_rating',
       });
       setKazeText(res.text);
-    } catch {
+    } catch (err) {
+      console.warn('[PostRideReview] Falha no Kaze review (rating):', err);
       setKazeText(`Dá uma classificação de 1 a 5 estrelas a ${driverName}.`);
     }
     setStep('rating');
   };
 
-  // ------------------------------------------------------------------
-  // Step 3: Confirmar rating, pedir comentário opcional
-  // ------------------------------------------------------------------
   const handleRatingSelected = async (s: number) => {
     setScore(s);
     setStep('loading');
@@ -101,15 +89,13 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
         step: 'collect_comment',
       });
       setKazeText(res.text);
-    } catch {
+    } catch (err) {
+      console.warn('[PostRideReview] Falha no Kaze review (comment):', err);
       setKazeText('Queres deixar um comentário?');
     }
     setStep('comment');
   };
 
-  // ------------------------------------------------------------------
-  // Step 4: Submeter
-  // ------------------------------------------------------------------
   const handleSubmit = async () => {
     if (score === 0) return;
     setSubmitting(true);
@@ -118,9 +104,6 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
     setSubmitting(false);
   };
 
-  // ------------------------------------------------------------------
-  // Step 5: Feedback de preço da rota
-  // ------------------------------------------------------------------
   const handlePriceFeedback = async () => {
     if (priceRating && rideId) {
       try {
@@ -133,7 +116,7 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
           rating: priceRating,
           comment: priceComment.trim() || null,
         });
-      } catch { /* não bloquear o fluxo */ }
+      } catch (err) { console.warn('[PostRideReview] Falha ao enviar price feedback:', err); }
     }
     setStep('done');
   };
@@ -182,7 +165,6 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
       await generateAndShareReceipt(receiptData, mode);
     } catch (e) {
       setPdfError('Erro ao gerar recibo. Tenta novamente.');
-      console.error('[PostRideReview] PDF error:', e);
     } finally {
       setGeneratingPdf(false);
     }
@@ -191,91 +173,74 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
   if (!postRide.active) return null;
 
   return (
-    <div className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-end justify-center p-4">
-      <div className="w-full max-w-sm rounded-[2rem] border border-primary/20 overflow-hidden shadow-[0_40px_100px_rgba(0,0,0,0.4)] animate-in slide-in-from-bottom-10 duration-400">
-
-        {/* Header Kaze */}
-        <div className="bg-[#0A0A0A] px-8 pt-8 pb-6">
-          <div className="flex items-center gap-4 mb-5">
-            <div className="w-14 h-14 rounded-2xl bg-primary/15 border border-primary/30 flex items-center justify-center">
-              <img
-                src="https://img.icons8.com/3d-fluency/64/robot-3.png"
-                alt="Kaze"
-                className="w-10 h-10"
-              />
-            </div>
+    <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-end justify-center">
+      <div className="zr-app" style={{ minHeight: 'auto', width: '100%', maxWidth: '400px', backgroundColor: 'var(--bg)', borderRadius: 'var(--radius-xl) var(--radius-xl) 0 0', overflow: 'hidden' }}>
+        
+        {/* Kaze Area */}
+        <div style={{ padding: '24px 20px 20px', backgroundColor: 'var(--surface-2)', borderBottom: '1px solid var(--line)' }}>
+          <div className="zr-inline" style={{ gap: '14px', marginBottom: '16px' }}>
+            <div className="zr-avatar zr-avatar--lg" style={{ backgroundColor: 'rgba(230,195,100,0.1)', color: 'var(--gold)', border: '1px solid var(--line)' }}>K</div>
             <div>
-              <p className="text-[9px] font-black text-primary uppercase tracking-widest">Kaze</p>
-              <p className="text-[8px] text-white/40 font-bold">Avaliação da corrida</p>
+              <p className="zr-kicker" style={{ color: 'var(--gold)' }}>Kaze IA</p>
+              <p className="zr-copy">Avaliação da corrida</p>
             </div>
           </div>
-
-          {/* Balão de fala do Kaze */}
-          <div className="bg-primary/5 rounded-2xl p-4 min-h-[60px] flex items-center">
+          
+          <div style={{ backgroundColor: 'rgba(230,195,100,0.05)', padding: '16px', borderRadius: '16px' }}>
             {step === 'loading' ? (
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+              <div className="zr-loading-dots">
+                <span></span><span></span><span></span>
               </div>
             ) : (
-              <p className="text-sm text-white font-bold leading-relaxed">{kazeText}</p>
+              <p style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text)', lineHeight: 1.5 }}>
+                {kazeText}
+              </p>
             )}
           </div>
         </div>
 
-        {/* Conteúdo dinâmico por step */}
-        <div className="p-6 space-y-5">
-
+        <div style={{ padding: '24px 20px', backgroundColor: 'var(--bg)' }}>
           {/* STEP: opening */}
           {step === 'opening' && (
-            <div className="space-y-3">
-              <div className="bg-surface-container-lowest rounded-2xl p-4 flex justify-between items-center">
-                <span className="text-xs font-black text-on-surface-variant">Motorista</span>
-                <span className="text-sm font-black text-on-surface">{driverName}</span>
-              </div>
-              {priceKz && (
-                <div className="bg-surface-container-lowest rounded-2xl p-4 flex justify-between items-center">
-                  <span className="text-xs font-black text-on-surface-variant">Total pago</span>
-                  <span className="text-sm font-black text-on-surface">
-                    {priceKz.toLocaleString('pt-AO')} Kz
-                  </span>
+            <div>
+              <div className="zr-list" style={{ marginBottom: '24px' }}>
+                <div className="zr-list-item">
+                  <div style={{ flex: 1 }}>
+                    <span className="zr-meta">Motorista</span>
+                    <strong style={{ display: 'block', fontSize: '16px' }}>{driverName}</strong>
+                  </div>
                 </div>
-              )}
-              <button
-                onClick={handleOpeningContinue}
-                className="w-full py-5 bg-[#0A0A0A] text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-surface-container-highest transition-all active:scale-95"
-              >
-                AVALIAR CORRIDA
-              </button>
-              <button
-                onClick={onDismiss}
-                className="w-full py-3 text-on-surface-variant/70 font-black text-[9px] uppercase tracking-widest hover:text-on-surface-variant transition-colors"
-              >
-                Saltar avaliação
-              </button>
+                {priceKz && (
+                  <div className="zr-list-item">
+                    <div style={{ flex: 1 }}>
+                      <span className="zr-meta">Total pago</span>
+                      <strong style={{ display: 'block', fontSize: '16px', color: 'var(--gold)' }}>{priceKz.toLocaleString('pt-AO')} Kz</strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <button className="zr-button zr-button--block" onClick={handleOpeningContinue}>AVALIAR CORRIDA</button>
+              <button className="zr-button zr-button--block zr-button--ghost" onClick={onDismiss} style={{ marginTop: '12px' }}>Saltar avaliação</button>
             </div>
           )}
 
-          {/* STEP: rating — estrelas */}
+          {/* STEP: rating */}
           {step === 'rating' && (
-            <div className="space-y-4">
-              <div className="flex justify-center gap-3">
+            <div style={{ textAlign: 'center' }}>
+              <div className="zr-stars" style={{ display: 'flex', justifyContent: 'center', gap: '12px', marginBottom: '16px' }}>
                 {[1, 2, 3, 4, 5].map(s => (
                   <button
                     key={s}
                     onMouseEnter={() => setHovered(s)}
                     onMouseLeave={() => setHovered(0)}
                     onClick={() => handleRatingSelected(s)}
-                    className="transition-transform hover:scale-125 active:scale-95"
+                    style={{ background: 'none', border: 'none', fontSize: '42px', cursor: 'pointer', transition: 'transform 0.2s', opacity: s <= (hovered || score) ? 1 : 0.2 }}
                   >
-                    <span className={`text-4xl ${s <= (hovered || score) ? 'opacity-100' : 'opacity-20'}`}>
-                      ⭐
-                    </span>
+                    ⭐
                   </button>
                 ))}
               </div>
-              <p className="text-center text-[9px] font-bold text-on-surface-variant/70 uppercase tracking-widest">
+              <p className="zr-kicker">
                 {hovered === 1 ? 'Muito mau' : hovered === 2 ? 'Mau' : hovered === 3 ? 'OK' : hovered === 4 ? 'Bom' : hovered === 5 ? 'Excelente!' : 'Toca numa estrela'}
               </p>
             </div>
@@ -283,59 +248,51 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
 
           {/* STEP: comment */}
           {step === 'comment' && (
-            <div className="space-y-4">
-              <div className="flex justify-center gap-2 mb-2">
+            <div>
+              <div className="zr-stars" style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '20px' }}>
                 {[1, 2, 3, 4, 5].map(s => (
-                  <span key={s} className={`text-2xl ${s <= score ? 'opacity-100' : 'opacity-20'}`}>⭐</span>
+                  <span key={s} style={{ fontSize: '24px', opacity: s <= score ? 1 : 0.2 }}>⭐</span>
                 ))}
               </div>
               <textarea
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
-                placeholder="Comentário opcional (ex: motorista pontual, boa condução...)"
-                maxLength={200}
+                placeholder="Comentário opcional..."
+                className="zr-textarea"
                 rows={3}
-                className="w-full bg-surface-container-lowest border border-outline-variant/20 p-4 rounded-2xl outline-none text-sm font-bold text-on-surface resize-none focus:ring-2 focus:ring-primary"
+                style={{ width: '100%', marginBottom: '20px' }}
               />
-              <button
-                onClick={handleSubmit}
-                disabled={submitting}
-                className="w-full py-5 bg-primary text-white rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-primary transition-all active:scale-95 disabled:opacity-60"
-              >
-                {submitting ? 'A guardar...' : 'SUBMETER AVALIAÇÃO'}
+              <button onClick={handleSubmit} disabled={submitting} className="zr-button zr-button--block">
+                {submitting ? 'A guardar...' : 'SUBMETER'}
               </button>
-              <button
-                onClick={() => handleSubmit()}
-                className="w-full py-3 text-on-surface-variant/70 font-black text-[9px] uppercase tracking-widest"
-              >
-                Submeter sem comentário
+              <button onClick={() => handleSubmit()} className="zr-button zr-button--block zr-button--ghost" style={{ marginTop: '12px' }}>
+                Saltar comentário
               </button>
             </div>
           )}
 
-          {/* STEP: price_feedback — Opinião sobre o preço */}
+          {/* STEP: price_feedback */}
           {step === 'price_feedback' && (
-            <div className="space-y-4 animate-in fade-in duration-300">
-              <div className="text-center mb-2">
-                <p className="text-lg font-black text-on-surface">💰 O que achas do preço?</p>
-                <p className="text-[10px] text-on-surface-variant/70 font-bold mt-1">
-                  {priceKz ? `${priceKz.toLocaleString('pt-AO')} Kz` : ''} — A tua opinião ajuda-nos a melhorar
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
+            <div>
+              <h3 className="zr-section-title" style={{ textAlign: 'center', marginBottom: '8px' }}>O que achas do preço?</h3>
+              <p className="zr-meta" style={{ textAlign: 'center', marginBottom: '20px' }}>{priceKz ? `${priceKz.toLocaleString('pt-AO')} Kz` : ''} — A tua opinião ajuda</p>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                 {PRICE_OPTIONS.map(opt => (
                   <button
                     key={opt.value}
                     onClick={() => setPriceRating(opt.value)}
-                    className={`p-3 rounded-2xl border transition-all active:scale-95 text-center ${
-                      priceRating === opt.value
-                        ? `${opt.color} border-2 shadow-sm`
-                        : 'bg-surface-container-lowest border-outline-variant/20 text-on-surface-variant/70'
-                    }`}
+                    style={{
+                      padding: '16px',
+                      borderRadius: '16px',
+                      border: priceRating === opt.value ? '1px solid var(--gold)' : '1px solid var(--line)',
+                      background: priceRating === opt.value ? opt.color : 'transparent',
+                      textAlign: 'center',
+                      cursor: 'pointer'
+                    }}
                   >
-                    <span className="text-2xl block mb-1">{opt.emoji}</span>
-                    <span className="text-[9px] font-black uppercase tracking-widest">{opt.label}</span>
+                    <span style={{ fontSize: '28px', display: 'block', marginBottom: '8px' }}>{opt.emoji}</span>
+                    <span className="zr-kicker" style={{ color: 'var(--text)' }}>{opt.label}</span>
                   </button>
                 ))}
               </div>
@@ -344,17 +301,14 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
                 <textarea
                   value={priceComment}
                   onChange={e => setPriceComment(e.target.value)}
-                  placeholder="Comentário opcional sobre o preço..."
-                  maxLength={150}
+                  placeholder="Comentário sobre o preço..."
+                  className="zr-textarea"
                   rows={2}
-                  className="w-full bg-surface-container-lowest border border-outline-variant/20 p-3 rounded-xl outline-none text-xs font-bold text-on-surface resize-none focus:ring-2 focus:ring-primary"
+                  style={{ width: '100%', marginBottom: '20px' }}
                 />
               )}
 
-              <button
-                onClick={handlePriceFeedback}
-                className="w-full py-4 bg-primary text-white rounded-2xl font-black text-[10px] uppercase tracking-widest active:scale-95 transition-all"
-              >
+              <button onClick={handlePriceFeedback} className="zr-button zr-button--block">
                 {priceRating ? 'ENVIAR OPINIÃO' : 'SALTAR'}
               </button>
             </div>
@@ -362,53 +316,34 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
 
           {/* STEP: done */}
           {step === 'done' && (
-            <div className="text-center space-y-4 py-2">
-              <div className="text-5xl">✅</div>
-              <p className="font-black text-on-surface text-lg">Obrigado pelo feedback!</p>
-              <p className="text-xs text-on-surface-variant/70 font-bold">A tua avaliação ajuda a melhorar a experiência.</p>
-          
-              {/* Divisória */}
-              <div className="border-t border-white/10 pt-4">
-                <p className="text-[10px] font-bold text-on-surface-variant/50 uppercase tracking-widest mb-3">
-                  Recibo da corrida
-                </p>
-          
-                {pdfError && (
-                  <p className="text-xs text-red-400 mb-3">{pdfError}</p>
-                )}
-          
-                {/* Botão: Partilhar (WhatsApp etc.) */}
-                <button
-                  onClick={() => handleReceipt('share')}
-                  disabled={generatingPdf}
-                  className="w-full py-4 bg-[#25D366] text-white rounded-2xl font-black text-[11px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50 mb-3"
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '56px', marginBottom: '16px' }}>✅</div>
+              <h3 className="zr-section-title" style={{ marginBottom: '8px' }}>Obrigado!</h3>
+              <p className="zr-copy" style={{ marginBottom: '24px' }}>A tua avaliação ajuda a melhorar a Zenith.</p>
+
+              <div style={{ borderTop: '1px solid var(--line)', paddingTop: '24px' }}>
+                <p className="zr-kicker" style={{ marginBottom: '16px' }}>Recibo da corrida</p>
+                {pdfError && <p className="zr-copy" style={{ color: 'var(--danger)', marginBottom: '16px' }}>{pdfError}</p>}
+                
+                <button 
+                  onClick={() => handleReceipt('share')} 
+                  disabled={generatingPdf} 
+                  className="zr-button zr-button--block" 
+                  style={{ backgroundColor: '#25D366', color: 'white', marginBottom: '12px' }}
                 >
-                  {generatingPdf ? (
-                    <>
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      A gerar recibo...
-                    </>
-                  ) : (
-                    '📤 Partilhar via WhatsApp'
-                  )}
+                  {generatingPdf ? 'A gerar recibo...' : 'Partilhar via WhatsApp'}
                 </button>
-          
-                {/* Botão: Guardar no telemóvel */}
-                <button
-                  onClick={() => handleReceipt('save')}
-                  disabled={generatingPdf}
-                  className="w-full py-4 bg-white/8 border border-white/15 text-white/80 rounded-2xl font-black text-[11px] uppercase tracking-widest active:scale-95 disabled:opacity-50 mb-3"
+                <button 
+                  onClick={() => handleReceipt('save')} 
+                  disabled={generatingPdf} 
+                  className="zr-button zr-button--block zr-button--secondary"
+                  style={{ marginBottom: '24px' }}
                 >
-                  💾 Guardar no Telemóvel
+                  Guardar no Telemóvel
                 </button>
               </div>
-          
-              <button
-                onClick={onDismiss}
-                className="w-full py-3 text-on-surface-variant/50 font-black text-[9px] uppercase tracking-widest"
-              >
-                Fechar
-              </button>
+
+              <button onClick={onDismiss} className="zr-button zr-button--block zr-button--ghost">Fechar</button>
             </div>
           )}
         </div>

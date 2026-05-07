@@ -17,7 +17,8 @@ interface DriverDocument {
   car_color: string;
   bi_image_url: string | null;
   bi_storage_path?: string | null;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'pending_human';
+  ai_feedback?: string | null;
   created_at: string;
   profiles?: {
     name: string | null;
@@ -109,6 +110,37 @@ export const DriversDocs: React.FC = () => {
     }
   };
 
+  const handleSentinelAnalysis = async (docId: string) => {
+    try {
+      setLoading(true);
+      const { data: session } = await supabase.auth.getSession();
+      
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/sentinel-vision`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.session?.access_token}`
+        },
+        body: JSON.stringify({ documentId: docId })
+      });
+      
+      if (!res.ok) throw new Error('Falha na resposta do Sentinel');
+      
+      const result = await res.json();
+      alert(
+        result.status === 'approved' ? '✅ Motorista Aprovado pela IA!' : 
+        result.status === 'rejected' ? '❌ Motorista Recusado pela IA.' : 
+        '⚠️ A IA solicitou revisão humana.'
+      );
+      fetchDocs();
+    } catch (err) {
+      console.error(err);
+      alert('Erro ao contactar Sentinel IA');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getBiUrl = async (doc: DriverDocument): Promise<string | null> => {
     if (doc.bi_storage_path) {
       const { data, error } = await supabase.storage
@@ -194,14 +226,19 @@ export const DriversDocs: React.FC = () => {
                   )}
                 </td>
                 <td>
-                  <span className={`status status-${d.status === 'approved' ? 'online' : d.status === 'rejected' ? 'banned' : 'busy'}`}>
+                  <span className={`status status-${d.status === 'approved' ? 'online' : d.status === 'rejected' ? 'banned' : d.status === 'pending_human' ? 'busy' : 'busy'}`}>
                     <span className="status-dot" />
-                    {d.status === 'approved' ? 'Aprovado' : d.status === 'rejected' ? 'Rejeitado' : 'Pendente'}
+                    {d.status === 'approved' ? 'Aprovado' : d.status === 'rejected' ? 'Rejeitado' : d.status === 'pending_human' ? 'Revisão Humana' : 'Pendente'}
                   </span>
                 </td>
                 <td>
-                  {d.status === 'pending' && (
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                  {(d.status === 'pending' || d.status === 'pending_human') && (
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      {d.status === 'pending' && (
+                        <button className="btn btn-sm" style={{ background: 'linear-gradient(135deg, #d4af37, #b8860b)', color: '#000', border: 'none', fontWeight: 900 }} onClick={() => handleSentinelAnalysis(d.id)} title="Delegar IA">
+                          🛡️ Sentinel IA
+                        </button>
+                      )}
                       <button className="btn btn-sm btn-primary" onClick={() => handleUpdateStatus(d.id, 'approved')} title="Aprovar">
                         <CheckCircle size={14} /> Aprovar
                       </button>

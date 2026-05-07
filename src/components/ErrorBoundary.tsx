@@ -4,6 +4,7 @@
 // =============================================================================
 
 import React from 'react';
+import { logError } from '../lib/logger';
 
 interface Props { children: React.ReactNode; }
 interface State { hasError: boolean; error: Error | null; }
@@ -20,6 +21,7 @@ class ErrorBoundary extends React.Component<Props, State> {
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('[ErrorBoundary] Erro capturado:', error, info.componentStack);
+    logError('ErrorBoundary', error, { componentStack: info.componentStack });
   }
 
   render() {

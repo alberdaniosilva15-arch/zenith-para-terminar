@@ -39,58 +39,34 @@ export default function ServiceCarousel({
   onOpenService,
 }: ServiceCarouselProps) {
   return (
-    <div className="relative">
-      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-8 bg-gradient-to-r from-[#050912] to-transparent" />
-      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-8 bg-gradient-to-l from-[#050912] to-transparent" />
-
-      <div className="flex gap-2 overflow-x-auto px-1 pb-1 pt-1 no-scrollbar snap-x snap-mandatory scroll-smooth">
-        {STANDARD_SERVICES.map((service) => {
-          const isActive = selectedVehicle === service.id;
-          return (
-            <button
-              key={service.id}
-              onClick={() => onSelectVehicle(service.id)}
-              className={`min-w-[118px] shrink-0 snap-start rounded-[1.75rem] border px-4 py-4 text-left transition-all ${
-                isActive
-                  ? 'border-primary bg-primary/12 shadow-[0_12px_30px_rgba(37,99,235,0.2)]'
-                  : 'border-white/10 bg-white/5'
-              }`}
-            >
-              <div className="text-2xl font-black">{service.icon}</div>
-              <p className="mt-3 text-[11px] font-black text-white">{service.title}</p>
-              <p className="mt-1 text-[10px] font-bold text-white/50">{service.subtitle}</p>
-            </button>
-          );
-        })}
-
-        {PREMIUM_SERVICES.map((service) => (
+    <div className="zr-scroll-x" style={{ marginTop: '14px' }}>
+      {STANDARD_SERVICES.map((service) => {
+        const isActive = selectedVehicle === service.id;
+        return (
           <button
             key={service.id}
-            onClick={() => onOpenService(service.id)}
-            className="relative min-w-[122px] shrink-0 snap-start overflow-hidden rounded-[1.9rem] border px-4 py-4 text-left transition-all"
-            style={{
-              border: '1px solid rgba(230, 195, 100, 0.3)',
-              background: 'linear-gradient(180deg, rgba(230,195,100,0.12), rgba(10,10,10,0.82))',
-              boxShadow: '0 0 20px rgba(230, 195, 100, 0.08)',
-            }}
+            onClick={() => onSelectVehicle(service.id)}
+            className={`zr-option ${isActive ? 'is-active' : ''}`}
+            data-service-card
           >
-            <div className="absolute right-3 top-3 rounded-full bg-black/35 px-2 py-1 text-[8px] font-black uppercase tracking-widest text-[#E6C364]">
-              Premium
-            </div>
-            <div className="text-2xl font-black">{service.icon}</div>
-            <p className="mt-3 text-[11px] font-black text-white">{service.title}</p>
-            <p className="mt-1 text-[10px] font-bold text-white/55">{service.subtitle}</p>
-            <p className="mt-3 text-[9px] font-black uppercase tracking-widest text-[#E6C364]/80">
-              Toca para reservar
-            </p>
+            <strong>{service.title}</strong>
+            <span>{service.subtitle}</span>
           </button>
-        ))}
-      </div>
+        );
+      })}
 
-      <div className="mt-2 flex items-center justify-between px-2 text-[9px] font-black uppercase tracking-widest text-white/35">
-        <span>Desliza para mais servicos</span>
-        <span>Servico agendado / sob demanda</span>
-      </div>
+      {PREMIUM_SERVICES.map((service) => (
+        <button
+          key={service.id}
+          onClick={() => onOpenService(service.id)}
+          className="zr-option"
+          data-service-card
+          style={{ borderColor: 'rgba(230,195,100,0.3)', background: 'rgba(230,195,100,0.05)' }}
+        >
+          <strong style={{ color: 'var(--gold)' }}>{service.title}</strong>
+          <span style={{ opacity: 0.8 }}>{service.subtitle}</span>
+        </button>
+      ))}
     </div>
   );
 }

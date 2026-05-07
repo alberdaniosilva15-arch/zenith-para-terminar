@@ -1,3 +1,4 @@
+import { createPortal } from 'react-dom';
 import React, { useEffect, useMemo, useState } from 'react';
 import { premiumService } from '../../services/premiumService';
 
@@ -35,7 +36,7 @@ export default function PrivateDriverModal({
     rating: number;
     total_rides: number;
   }>>([]);
-  const [quote, setQuote] = useState<number>(0);
+  const [quote, setQuote] = useState<number | null>(null);
 
   const effectiveHours = reservationMode === 'full_day' ? 8 : Math.max(hours, 2);
   const estimatedDistanceKm = useMemo(() => {
@@ -53,7 +54,7 @@ export default function PrivateDriverModal({
     premiumService.estimatePrivateDriverPrice({
       hours: effectiveHours,
       estimatedDistanceKm,
-    }).then((result) => setQuote(result?.totalKz ?? 0));
+    }).then((result) => setQuote(result?.totalKz ?? null));
   }, [effectiveHours, estimatedDistanceKm, vehicleClass]);
 
   const handleSubmit = async () => {
@@ -81,7 +82,7 @@ export default function PrivateDriverModal({
     }
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[160] bg-black/85 p-4 backdrop-blur-md">
       <div
         className="mx-auto flex h-full w-full max-w-xl flex-col overflow-hidden rounded-[2.5rem] border"
@@ -185,7 +186,7 @@ export default function PrivateDriverModal({
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-widest text-white/40">Estimativa de preço</p>
                   <p className="text-3xl font-black text-[#E6C364]">
-                    {Math.round(quote).toLocaleString('pt-AO')} Kz
+                    {quote === null ? 'Indisponível' : `${Math.round(quote).toLocaleString('pt-AO')} Kz`}
                   </p>
                 </div>
                 <div className="rounded-full bg-[#E6C364]/15 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#E6C364]">
@@ -206,18 +207,19 @@ export default function PrivateDriverModal({
         <div className="border-t border-white/10 p-6">
           <button
             onClick={() => void handleSubmit()}
-            disabled={loading || !!success}
+            disabled={loading || !!success || quote === null}
             className="w-full rounded-[2rem] py-4 text-sm font-black uppercase tracking-[0.18em] text-black transition-all disabled:opacity-50"
             style={{
               background: 'linear-gradient(135deg, #E6C364, #C9A84C)',
               boxShadow: '0 20px 50px rgba(230,195,100,0.25)',
             }}
           >
-            {loading ? 'A registar interesse...' : success ? 'Interesse registado' : 'Notificar-me primeiro'}
+            {loading ? 'A registar interesse...' : success ? 'Interesse registado' : quote === null ? 'Serviço Indisponível' : 'Notificar-me primeiro'}
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

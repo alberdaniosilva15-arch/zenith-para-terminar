@@ -34,7 +34,11 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ userId, onClose })
     if (!code) return;
     const text = `🚀 Usa o meu código *${code}* na Zenith Ride e ganha 500 Kz de bónus na primeira corrida! Descarrega em https://zenithride.ao`;
     if (navigator.share) {
-      try { await navigator.share({ title: 'Zenith Ride — Bónus de 500 Kz', text }); } catch { /* utilizador cancelou */ }
+      try {
+        await navigator.share({ title: 'Zenith Ride — Bónus de 500 Kz', text });
+      } catch (err) {
+        console.warn('[ReferralModal] share:', err);
+      }
     } else {
       navigator.clipboard.writeText(text).catch(() => {});
       showToast('Link copiado para partilhar!', 'success');
@@ -55,70 +59,52 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ userId, onClose })
   };
 
   return (
-    <div className="fixed inset-0 z-[100] bg-black/60 flex items-center justify-center p-4 backdrop-blur-sm">
-      <div className="bg-surface-container-low rounded-[2rem] w-full max-w-sm overflow-hidden flex flex-col pt-8">
-        <h2 className="text-xl font-black text-center mb-2 px-6">Traz o Mano!</h2>
-        <p className="text-xs text-on-surface-variant/70 text-center px-6 mb-6">
-          Convida amigos e ganha 500 Kz de bónus por cada <br/> assinatura ou primeira corrida.
-        </p>
-
-        <div className="px-6 space-y-6 flex-1 mb-6">
-          <div className="bg-primary/10 rounded-2xl p-4 flex justify-between items-center border border-primary/20">
-            <div>
-              <p className="text-[10px] font-black uppercase text-primary mb-1">O TEU CÓDIGO</p>
-              {loading ? (
-                <div className="h-6 w-24 bg-surface-container-high rounded animate-pulse" />
-              ) : (
-                <div className="text-2xl font-black tracking-widest text-[#050912] dark:text-white drop-shadow-sm">{code}</div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button 
-                onClick={handleCopy}
-                disabled={loading || !code}
-                className="bg-primary text-white w-10 h-10 rounded-xl flex items-center justify-center font-black active:scale-90 transition-transform"
-                title="Copiar código"
-              >
-                📋
-              </button>
-              <button 
-                onClick={handleShare}
-                disabled={loading || !code}
-                className="bg-surface-container-high text-on-surface w-10 h-10 rounded-xl flex items-center justify-center font-black active:scale-90 transition-transform"
-                title="Partilhar"
-              >
-                📤
-              </button>
-            </div>
+    <div className="zr-modal is-open">
+      <div className="zr-modal-card zr-card--hero" style={{ padding: 0 }}>
+        <div style={{ padding: '24px', background: 'linear-gradient(135deg, var(--surface-1), transparent)' }}>
+          <div className="zr-inline zr-inline--between" style={{ alignItems: 'flex-start', marginBottom: '8px' }}>
+            <p className="zr-kicker" style={{ color: 'var(--gold)' }}>Ganhe na Zenith</p>
+            <button onClick={onClose} className="zr-icon-button" style={{ width: '32px', height: '32px', minHeight: '32px', marginTop: '-8px', marginRight: '-8px' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>close</span>
+            </button>
+          </div>
+          <h2 className="zr-balance" style={{ fontSize: '32px', margin: '4px 0 16px' }}>Traz o Mano</h2>
+          
+          <div className="zr-card" style={{ background: 'var(--surface-3)', border: '1px dashed var(--gold)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <span className="zr-meta">O TEU CÓDIGO PESSOAL</span>
+            <strong style={{ fontSize: '24px', color: 'var(--gold)', letterSpacing: '0.1em' }}>{loading ? '...' : code || 'N/A'}</strong>
           </div>
 
-          <div className="h-px bg-outline-variant/30 w-full" />
+          <p className="zr-copy" style={{ textAlign: 'center', marginBottom: '20px' }}>Ganha 500 Kz por cada amigo que completar a 1ª viagem.</p>
 
-          <div>
-            <p className="text-[10px] font-black uppercase text-on-surface-variant mb-2">Usar código de amigo</p>
-            <div className="flex gap-2">
+          <div className="zr-inline" style={{ gap: '12px', marginBottom: '24px' }}>
+            <button onClick={handleCopy} disabled={loading || !code} className="zr-button zr-button--secondary" style={{ flex: 1 }}>
+              <span className="material-symbols-outlined" style={{ marginRight: '8px' }}>content_copy</span> Copiar
+            </button>
+            <button onClick={handleShare} disabled={loading || !code} className="zr-button" style={{ flex: 1, backgroundColor: '#25D366', color: '#fff' }}>
+              WhatsApp
+            </button>
+          </div>
+
+          <div className="zr-card" style={{ backgroundColor: 'var(--surface-2)', padding: '16px' }}>
+            <p className="zr-kicker" style={{ marginBottom: '12px' }}>Usar código de amigo</p>
+            <div className="zr-inline" style={{ gap: '12px' }}>
               <input 
                 type="text" 
                 placeholder="Ex: TOMAS21" 
                 value={inputCode}
                 onChange={e => setInputCode(e.target.value.toUpperCase())}
-                className="flex-1 bg-surface-container-high rounded-xl px-4 text-sm font-bold uppercase tracking-widest border border-outline-variant/30 focus:border-primary focus:outline-none"
+                className="zr-input"
+                style={{ flex: 1, textTransform: 'uppercase' }}
               />
-              <button 
-                onClick={handleApply}
-                disabled={applying || inputCode.length < 5}
-                className="bg-on-surface text-surface px-4 rounded-xl font-black text-xs disabled:opacity-50"
-              >
-                {applying ? '...' : 'APLICAR'}
+              <button onClick={handleApply} disabled={applying || inputCode.length < 5} className="zr-button zr-button--secondary">
+                {applying ? '...' : 'Aplicar'}
               </button>
             </div>
           </div>
         </div>
 
-        <button 
-          onClick={onClose}
-          className="w-full py-5 border-t border-outline-variant/20 font-black text-xs uppercase tracking-widest active:bg-surface-container-high transition-colors"
-        >
+        <button onClick={onClose} className="zr-button zr-button--block zr-button--ghost" style={{ borderRadius: 0, padding: '16px', borderTop: '1px solid var(--surface-3)' }}>
           Fechar
         </button>
       </div>

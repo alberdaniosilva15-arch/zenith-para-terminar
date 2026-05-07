@@ -22,6 +22,7 @@ import type {
   PriceEstimate, AppError, LatLng,
 } from '../types';
 import { RideStatus } from '../types';
+import { logError } from '../lib/logger';
 
 // ─── Resoluções H3 ──────────────────────────────────────────────────────────
 // Res 9 ≈ 150 m  → matching de motoristas individuais
@@ -105,6 +106,16 @@ function checkRideRateLimit(userId: string): boolean {
   rideRateTracker.set(userId, [...timestamps, now]);
   return true;
 }
+
+// Cleanup periódico para evitar memory leak (M5)
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, tsList] of rideRateTracker.entries()) {
+    const valid = tsList.filter(ts => now - ts < 60_000);
+    if (valid.length === 0) rideRateTracker.delete(id);
+    else rideRateTracker.set(id, valid);
+  }
+}, 60_000);
 
 function isUuid(value: string): boolean {
   return UUID_REGEX.test(value);
@@ -206,7 +217,7 @@ class RideService {
 
     // H3 não encontrou nada → fallback PostGIS
     console.warn('[rideService.getDriversH3] Sem resultado H3, usando PostGIS fallback');
-    return this.getDriversForAuction(pickupCoords, 7);
+    return this.getDriversForAuction(pickupCoords, 5);
   }
 
   // ── getDriversForAuction — tenta H3 primeiro, depois PostGIS ─────────────
@@ -544,7 +555,8 @@ class RideService {
 
       if (error) return { data: null, error: { code: error.code, message: 'Erro ao confirmar corrida.' } };
       return { data: data as DbRide, error: null };
-    } catch {
+    } catch (err) {
+      console.warn('[rideService.driverConfirmRide] Falha:', err);
       return { data: null, error: { code: 'unknown', message: 'Erro ao confirmar.' } };
     }
   }
@@ -713,7 +725,7 @@ class RideService {
           if (distKm > 0) this._updateKmPerk(updated.passenger_id, distKm).catch(console.error);
           
           // Recarregar os 10 créditos do Kaze
-          try { await supabase.rpc('recharge_chat_quota', { p_user_id: updated.passenger_id, amount: 10 }); } catch (e) { console.error('[recharge_chat_quota]', e); }
+          try { await supabase.rpc('recharge_chat_quota', { p_user_id: updated.passenger_id, amount: 10 }); } catch (e) { console.error('[rideService.rechargeChatQuota]', e); logError('rideService.rechargeChatQuota', e); }
         }
       }
 
@@ -858,7 +870,10 @@ class RideService {
       const { error } = await supabase.from('ratings').insert(input);
       if (error) return { code: error.code, message: 'Erro ao submeter avaliação.' };
       return null;
-    } catch { return { code: 'unknown', message: 'Erro ao submeter avaliação.' }; }
+    } catch (err) { 
+      console.warn('[rideService.submitRating] Falha:', err);
+      return { code: 'unknown', message: 'Erro ao submeter avaliação.' }; 
+    }
   }
 
   // ── getActiveRide ──────────────────────────────────────────────────────────
@@ -882,7 +897,7 @@ class RideService {
         .order('created_at', { ascending: false });
       if (error) { console.error('[rideService.getAvailableRides]', error); return []; }
       return (data ?? []) as DbRide[];
-    } catch { return []; }
+    } catch (err) { console.error('[rideService.getAvailableRides] Falha silenciosa', err); return []; }
   }
 
   // ── getRideHistory ─────────────────────────────────────────────────────────
@@ -897,7 +912,7 @@ class RideService {
         .order('created_at', { ascending: false }).range(from, from + pageSize - 1);
       if (error) { console.error('[rideService.getRideHistory]', error); return { rides: [], total: 0 }; }
       return { rides: (data ?? []) as DbRide[], total: count ?? 0 };
-    } catch { return { rides: [], total: 0 }; }
+    } catch (err) { console.error('[rideService.getRideHistory] Falha silenciosa', err); return { rides: [], total: 0 }; }
   }
 
   // ── getDemandHeatmap ───────────────────────────────────────────────────────
@@ -1124,7 +1139,7 @@ class RideService {
       });
       if (error) { console.error('[rideService.findNearbyDrivers]', error); return []; }
       return (data ?? []) as NearbyDriver[];
-    } catch { return []; }
+    } catch (err) { console.warn('[rideService.findNearbyDrivers] Falha:', err); return []; }
   }
 
   // ── getPriceEstimate ───────────────────────────────────────────────────────
@@ -1147,7 +1162,8 @@ class RideService {
       if (!res.ok) return this._localPriceEstimate(origin, dest);
       if (!hasJsonContentType(res)) return this._localPriceEstimate(origin, dest);
       return res.json() as Promise<PriceEstimate>;
-    } catch {
+    } catch (err) {
+      console.warn('[rideService.getPriceEstimate] Falha:', err);
       return this._localPriceEstimate(origin, dest);
     }
   }
@@ -1173,7 +1189,7 @@ class RideService {
       if (!data) return null;
       supabase.rpc('increment_geocode_hit', { q: query.toLowerCase().trim() }).then(() => {});
       return { lat: data.lat, lng: data.lng };
-    } catch { return null; }
+    } catch (err) { console.warn('[rideService.getCachedGeocode] Falha:', err); return null; }
   }
 
   async cacheGeocode(query: string, coords: LatLng, fullAddress?: string): Promise<void> {
@@ -1182,7 +1198,7 @@ class RideService {
         query_text: query.toLowerCase().trim(), lat: coords.lat, lng: coords.lng,
         full_address: fullAddress ?? null, source: 'google',
       });
-    } catch { /* não crítico */ }
+    } catch (err) { console.warn('[rideService.cacheGeocode] Falha:', err); }
   }
 
   async initiateTopUp(amountKz: number, phone: string): Promise<{ success: boolean; message: string; reference?: string }> {
@@ -1223,7 +1239,7 @@ class RideService {
         message: payload.message ?? 'Pedido enviado.',
         reference: payload.reference,
       };
-    } catch { return { success: false, message: 'Erro de rede.' }; }
+    } catch (err) { console.warn('[rideService.initiateTopUp] Falha:', err); return { success: false, message: 'Erro de rede.' }; }
   }
 }
 
@@ -1245,7 +1261,7 @@ export async function checkRouteDeviation(
         lat: currentCoords.lat, lng: currentCoords.lng,
         alerted_at: new Date().toISOString(),
       });
-    } catch { /* não bloquear corrida */ }
+    } catch (err) { console.warn('[checkRouteDeviation] Alerta de desvio falhou:', err); }
   }
   return { deviated: deviationKm > maxDeviationKm, deviationKm };
 }

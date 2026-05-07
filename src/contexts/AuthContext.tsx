@@ -1,9 +1,9 @@
 // =============================================================================
-// ZENITH RIDE v3.1 â€” AuthContext
+// ZENITH RIDE v3.1 — AuthContext
 // FIXES v3.1:
-//   1. loadUserData: retries aumentados de 3 â†’ 5 (delay atÃ© 4.8s)
-//   2. CORREÃ‡ÃƒO BUG 11: loadUserData agora usa while loop para retry,
-//      garantindo que a Promise sÃ³ resolve APÃ“S todos os retries terminarem
+//   1. loadUserData: retries aumentados de 3 → 5 (delay até 4.8s)
+//   2. CORREÇÃO BUG 11: loadUserData agora usa while loop para retry,
+//      garantindo que a Promise só resolve APÓS todos os retries terminarem
 //      (elimina race condition com init())
 // =============================================================================
 
@@ -20,6 +20,7 @@ import { supabase } from '../lib/supabase';
 import type { DbUser, DbProfile, AppError } from '../types';
 import { UserRole } from '../types';
 import { useAppStore } from '../store/useAppStore';
+import { logError } from '../lib/logger';
 
 const CLIENT_ONLY_STORAGE_KEYS = [
   'zenith-ride-store-v3',
@@ -28,6 +29,10 @@ const CLIENT_ONLY_STORAGE_KEYS = [
   'zenith_ia_provider',
   'zenith_ia_model',
 ];
+
+// Global lock to prevent DOS on auto-repair during mass incidents
+let autoRepairInProgress = false;
+let autoRepairTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
 const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
@@ -194,7 +199,7 @@ interface AuthContextValue {
   signInWithGoogle: (role: UserRole) => Promise<AppError | null>;
   signUp:      (email: string, password: string, name: string, role: UserRole) => Promise<AppError | null>;
   signOut:     () => Promise<void>;
-  updateProfile: (data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone'>>) => Promise<AppError | null>;
+  updateProfile: (data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone' | 'emergency_contact_phone'>>) => Promise<AppError | null>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -253,9 +258,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ------------------------------------------------------------------
   // Carregar dados do utilizador a partir do ID do Supabase Auth
-  // Tem retry automÃ¡tico (5 tentativas, 600ms entre cada) para lidar com
+  // Tem retry automático (5 tentativas, 600ms entre cada) para lidar com
   // a race condition entre o trigger handle_new_user e o signIn/signUp.
-  // CORREÃ‡ÃƒO BUG 11: Promise encadeada correctamente â€” nÃ£o resolve antes dos retries
+  // CORREÇÃO BUG 11: Promise encadeada correctamente — não resolve antes dos retries
   // ------------------------------------------------------------------
   const loadUserData = useCallback(async (userId: string, attempt = 0): Promise<void> => {
     const MAX_ATTEMPTS = 4;
@@ -343,18 +348,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!finalUserRow) {
           // AUTO-REPAIR: Se o trigger handle_new_user falhou, criar os registos manualmente
           if (attempt < MAX_ATTEMPTS - 1) {
-            console.warn('[AuthContext] Utilizador não encontrado — a tentar auto-repair via ensure_user_exists');
+            logError('AuthContext.loadUserData', 'Utilizador não encontrado — a tentar auto-repair via ensure_user_exists', { attempt, userId });
             const { data: { user: authU } } = await supabase.auth.getUser();
-            if (authU) {
-              const metaName = (authU.user_metadata?.name as string) ?? '';
-              const metaRole = (authU.user_metadata?.role as string) ?? 'passenger';
-              const { error: ensureErr } = await supabase.rpc('ensure_user_exists', {
-                p_user_id: authU.id,
-                p_email: authU.email ?? '',
-                p_name: metaName,
-                p_role: metaRole,
-              });
-              if (ensureErr) console.warn('[AuthContext] ensure_user_exists falhou:', ensureErr);
+            
+            if (authU && !autoRepairInProgress) {
+              autoRepairInProgress = true;
+              autoRepairTimeout = setTimeout(() => {
+                autoRepairInProgress = false;
+                autoRepairTimeout = null;
+                console.warn('[AuthContext] Auto-repair safety timeout (30s)');
+              }, 30_000);
+              try {
+                const metaName = (authU.user_metadata?.name as string) ?? '';
+                const metaRole = (authU.user_metadata?.role as string) ?? 'passenger';
+                
+                const { error: ensureErr } = await timeoutAfter(
+                  supabase.rpc('ensure_user_exists', {
+                    p_user_id: authU.id,
+                    p_email: authU.email ?? '',
+                    p_name: metaName,
+                    p_role: metaRole,
+                  }) as unknown as Promise<{ error: any }>,
+                  10000,
+                  'ensure_user_exists RPC'
+                );
+                
+                if (ensureErr) {
+                   logError('AuthContext.autoRepair', ensureErr, { userId });
+                }
+              } finally {
+                autoRepairInProgress = false;
+                if (autoRepairTimeout) { clearTimeout(autoRepairTimeout); autoRepairTimeout = null; }
+              }
             }
             throw new Error('Auto-repair executado — a reententar carregamento...');
           }
@@ -378,8 +403,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
 
-        // âœ… BUG #6 CORRIGIDO: effectiveUser Ã© sempre o finalUserRow real
-        // O ?? foi removido porque era cÃ³digo morto e enganoso
+        // ✅ BUG #6 CORRIGIDO: effectiveUser é sempre o finalUserRow real
+        // O ?? foi removido porque era código morto e enganoso
         const effectiveUser: DbUser = {
           ...(finalUserRow as DbUser),
           role: rawRole,
@@ -479,7 +504,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } catch (e) {
         // Não bloquear; prosseguir para getSession normal
-        console.warn('[AuthContext] getSessionFromUrl falhou:', e);
+        logError('AuthContext.getSessionFromUrl', e);
       }
 
       // 2) Fallback: recuperar sessão existente (localStorage)
@@ -642,7 +667,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // UPDATE PROFILE
   // ------------------------------------------------------------------
   const updateProfile = useCallback(async (
-    data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone'>>
+    data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone' | 'emergency_contact_phone'>>
   ): Promise<AppError | null> => {
     if (!dbUser) return { code: 'not_authenticated', message: 'Utilizador não autenticado.' };
 
@@ -711,14 +736,13 @@ function translateAuthError(msg: string): string {
 }
 
 // ------------------------------------------------------------------
-// UtilitÃ¡rio â€” detectar erros de permissÃ£o Supabase/PostgREST
+// Utilitário — detectar erros de permissão Supabase/PostgREST
 // ------------------------------------------------------------------
 function isPermissionError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const code    = (err as any).code;
   const message = String((err as any).message ?? '');
   return (
-    code === '42501' ||                  // PostgreSQL permission denied
     code === 'PGRST301' ||               // PostgREST unauthorized
     message.toLowerCase().includes('permission denied') ||
     message.toLowerCase().includes('jwt')

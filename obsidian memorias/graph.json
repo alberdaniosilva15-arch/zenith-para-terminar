@@ -1,0 +1,31 @@
+{
+  "nodes": [
+    { "id": "Arquitetura", "type": "note" },
+    { "id": "BD", "type": "note" },
+    { "id": "Decisões", "type": "note" },
+    { "id": "Prompts", "type": "note" },
+    { "id": "Tools", "type": "note" },
+    { "id": "Mapa-Ficheiros", "type": "note" },
+    { "id": "Bugs-Resolvidos", "type": "note" },
+    { "id": "Skills", "type": "note" },
+    { "id": "Kaze-Core-Hermes-Protegido", "type": "note" }
+  ],
+  "links": [
+    { "source": "Arquitetura", "target": "BD" },
+    { "source": "Arquitetura", "target": "Mapa-Ficheiros" },
+    { "source": "Arquitetura", "target": "Tools" },
+    { "source": "Arquitetura", "target": "Prompts" },
+    { "source": "BD", "target": "Tools" },
+    { "source": "BD", "target": "Mapa-Ficheiros" },
+    { "source": "Decisões", "target": "Skills" },
+    { "source": "Decisões", "target": "Bugs-Resolvidos" },
+    { "source": "Decisões", "target": "Arquitetura" },
+    { "source": "Skills", "target": "Bugs-Resolvidos" },
+    { "source": "Skills", "target": "Mapa-Ficheiros" },
+    { "source": "Mapa-Ficheiros", "target": "Bugs-Resolvidos" },
+    { "source": "Kaze-Core-Hermes-Protegido", "target": "Arquitetura" },
+    { "source": "Kaze-Core-Hermes-Protegido", "target": "Tools" },
+    { "source": "Kaze-Core-Hermes-Protegido", "target": "Bugs-Resolvidos" },
+    { "source": "Kaze-Core-Hermes-Protegido", "target": "Decisões" }
+  ]
+}

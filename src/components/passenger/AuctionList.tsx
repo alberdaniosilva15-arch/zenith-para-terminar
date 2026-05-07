@@ -39,7 +39,7 @@ const AuctionList: React.FC<AuctionListProps> = ({
 
   if (auction.drivers.length > 0) {
     return (
-      <div className="p-4 space-y-3">
+      <div className="zr-list" style={{ marginInline: '14px', marginBottom: '14px' }}>
         {auction.drivers.map((driver) => (
           <DriverAuctionCard
             key={driver.driver_id}
@@ -61,54 +61,30 @@ const DriverAuctionCard: React.FC<{
 }> = ({ driver, selected, onSelect, priceKz }) => (
   <button
     onClick={onSelect}
-    className={`w-full text-left p-5 rounded-[2rem] border-2 transition-all active:scale-98 ${
-      selected
-        ? 'border-primary bg-primary/10 shadow-[0_10px_30px_rgba(37,99,235,0.2)]'
-        : 'border-outline-variant/20 bg-surface-container-low hover:border-outline-variant/40 shadow-sm'
-    }`}
+    className={`zr-list-item zr-list-item--interactive ${selected ? 'is-active' : ''}`}
+    data-driver-card
+    style={{ textAlign: 'left', width: '100%', alignItems: 'center' }}
   >
-    <div className="flex items-center gap-4">
-      <div className="w-14 h-14 rounded-2xl overflow-hidden bg-surface-container-low shrink-0">
+    <div className="zr-inline" style={{ flex: 1, gap: '12px' }}>
+      <div className="zr-avatar">
         <img
           src={driver.avatar_url ?? `https://api.dicebear.com/7.x/bottts/svg?seed=${driver.driver_id}`}
           alt={driver.driver_name}
-          className="w-full h-full object-cover"
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
         />
       </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
-          <p className="font-black text-on-surface text-sm truncate">{driver.driver_name}</p>
-          {selected && <span className="text-[8px] bg-primary text-white px-2 py-0.5 rounded-full font-black shrink-0">SELECCIONADO</span>}
-          {driver.is_elite && (
-            <span className="text-[8px] bg-yellow-400 text-[#0A0A0A] px-2 py-0.5 rounded-full font-black shrink-0">
-              ⚡ ELITE
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="text-[9px] font-bold text-primary/80">⭐ {driver.rating.toFixed(1)}</span>
-          <span className="text-[9px] font-bold text-on-surface-variant/70">{driver.total_rides} corridas</span>
-          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${
-            driver.level === 'Diamante' ? 'bg-primary text-white' :
-            driver.level === 'Ouro'     ? 'bg-yellow-100 text-yellow-800' :
-            driver.level === 'Prata'    ? 'bg-surface-container text-on-surface-variant' :
-            driver.level === 'Bronze'   ? 'bg-orange-100 text-orange-700' :
-                                          'bg-surface-container-low text-outline'
-          }`}>
-            {driver.level === 'Diamante' ? '💎' : driver.level === 'Ouro' ? '⭐' : driver.level === 'Prata' ? '🥈' : driver.level === 'Bronze' ? '🥉' : ''}
-            {' '}{driver.level}
-          </span>
-        </div>
-        {priceKz && (
-          <p className={`text-[10px] font-black mt-1 ${selected ? 'text-primary' : 'text-on-surface-variant'}`}>
-            ~{Math.round(priceKz).toLocaleString('pt-AO')} Kz
-          </p>
-        )}
+      <div>
+        <strong style={{ display: 'block' }}>
+          {driver.driver_name} {driver.is_elite && '⚡'}
+        </strong>
+        <span className="zr-copy">
+          ⭐ {driver.rating.toFixed(1)} - {driver.total_rides} corridas - {driver.level}
+        </span>
       </div>
-      <div className="text-right shrink-0">
-        <p className="font-black text-on-surface text-sm">{driver.eta_min} min</p>
-        <p className="text-[9px] text-on-surface-variant/70 font-bold">{(driver.distance_m / 1000).toFixed(1)} km</p>
-      </div>
+    </div>
+    <div style={{ textAlign: 'right' }}>
+      <strong style={{ display: 'block' }}>{driver.eta_min} min</strong>
+      <span className="zr-copy">~ {priceKz ? Math.round(priceKz).toLocaleString('pt-AO') : '--'} Kz</span>
     </div>
   </button>
 );

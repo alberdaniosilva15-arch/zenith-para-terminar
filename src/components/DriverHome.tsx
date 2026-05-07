@@ -11,6 +11,7 @@ import AvailableRidesList from './AvailableRidesList';
 import DriverActiveCard from './DriverActiveCard';
 import { DriverDocumentsForm } from './DriverDocumentsForm';
 import PanicButton from './PanicButton';
+import NightSafetyBanner from './NightSafetyBanner';
 import { geminiService } from '../services/geminiService';
 import { rideService } from '../services/rideService';
 import { mapService } from '../services/mapService';
@@ -124,6 +125,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const isOnlineRef = useRef(false);
   const shouldMountMap = useIdleMount(true);
   const onlineHours = onlineSince ? (clockTick - new Date(onlineSince).getTime()) / 3_600_000 : 0;
+  const hasActiveRide = Boolean(ride.rideId);
 
   useSilentTripleTap({
     enabled: isOnline && !!ride.rideId,
@@ -155,17 +157,14 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       if (!mapboxgl) return;
 
       const el = document.createElement('div');
-      el.innerHTML = `
-        <div style="
-          width: 40px; height: 40px; border-radius: 50%;
-          background: ${ratio > 3 ? 'rgba(239,68,68,0.3)' : 'rgba(249,115,22,0.3)'};
-          border: 1px solid ${ratio > 3 ? 'rgba(239,68,68,0.8)' : 'rgba(249,115,22,0.8)'};
-          display: flex; align-items: center; justify-content: center;
-          animation: pulse 2s infinite;
-        ">
-          <span style="font-size: 8px; font-weight: bold; color: white;">🔥</span>
-        </div>
-      `;
+      const dot = document.createElement('div');
+      const isHot = ratio > 3;
+      dot.style.cssText = `width:40px;height:40px;border-radius:50%;background:${isHot ? 'rgba(239,68,68,0.3)' : 'rgba(249,115,22,0.3)'};border:1px solid ${isHot ? 'rgba(239,68,68,0.8)' : 'rgba(249,115,22,0.8)'};display:flex;align-items:center;justify-content:center;animation:pulse 2s infinite;`;
+      const icon = document.createElement('span');
+      icon.style.cssText = 'font-size:8px;font-weight:bold;color:white;';
+      icon.textContent = '🔥';
+      dot.appendChild(icon);
+      el.appendChild(dot);
 
       const marker = new mapboxgl.Marker({ element: el })
         .setLngLat([lng, lat])
@@ -315,6 +314,11 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       return;
     }
 
+    if (!profile?.emergency_contact_phone) {
+      showToast('Define um contacto de emergência no Perfil antes de ficares online.', 'error');
+      return;
+    }
+
     setIsSwitchingOnline(true);
 
     // Tentar obter localização imediatamente para não falhar o UPSERT na base de dados
@@ -323,7 +327,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       const { getCurrentPosition } = await import('../services/gpsService');
       const pos = await getCurrentPosition();
       coords = { lat: pos.lat, lng: pos.lng };
-    } catch {
+    } catch (err) {
+      console.warn('[DriverHome] goOnline GPS:', err);
       coords = { lat: -8.8390, lng: 13.2343 }; // Fallback Luanda
     }
 
@@ -389,7 +394,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       try {
         const { data } = await supabase.from('rides').select('*').eq('id', rideId).single();
         if (data) realRide = data as DbRide;
-      } catch { /* usar fallback */ }
+      } catch (err) { console.warn('[DriverHome] Falha ao obter ETA/distância fallback:', err); }
 
       const fallbackRide: DbRide = realRide ?? ({
         id:               rideId,
@@ -463,7 +468,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
             .eq('id', rideId)
             .single();
           if (data) realRide = data as DbRide;
-        } catch { /* usar fallback */ }
+        } catch (err) { console.warn('[DriverHome] Falha na auto-aceitação:', err); }
 
         // Fallback mínimo se a BD não responder
         const np = notif.payload;
@@ -615,6 +620,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     initOnline();
   }, [isOnline, driverId, loadPendingNotifications, subscribeToNotifications]);
 
+
+
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleConfirmAuction = async () => {
     if (!incomingRide) return;
@@ -648,207 +655,219 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   };
 
   return (
-    <div className="p-4 space-y-5 bg-[#F8FAFC] min-h-screen pb-32">
-
-      <DocExpiryBanner
-        driverId={driverId}
-        onOpenDocuments={() => setShowDocsForm(true)}
-      />
-
-      {/* HUD ganhos + toggle online + rating */}
-      <div className="bg-surface-container-low border border-outline-variant/20 p-6 rounded-[2.5rem] shadow-sm space-y-4">
-        <div className="flex justify-between items-center">
+    <div className="zr-app" style={{ minHeight: '100vh', paddingBottom: '120px', backgroundColor: 'var(--bg)' }}>
+      <header className="zr-header">
+        <div className="zr-inline zr-inline--between">
           <div>
-            <div className="flex items-center gap-3 mb-2">
-              {/* Rating badge */}
-              {profile && (
-                <div className="flex items-center gap-1 bg-yellow-500/10 px-2.5 py-1 rounded-full">
-                  <span className="text-sm">⭐</span>
-                  <span className="text-xs font-black text-yellow-600">{(profile.rating ?? 5.0).toFixed(1)}</span>
-                </div>
-              )}
-              {profile?.total_rides != null && (
-                <span className="text-[8px] font-black text-on-surface-variant/50 uppercase">
-                  {profile.total_rides} corridas
-                </span>
-              )}
-            </div>
-            <p className="text-[10px] font-black text-on-surface-variant/70 uppercase tracking-widest flex items-center gap-2">
-              <span className="w-1 h-1 bg-primary rounded-full" /> PREVISÃO DIÁRIA
-            </p>
-            <div className="flex items-baseline gap-1 mt-1">
-              <span className="text-3xl font-black text-on-surface italic">
-                {simulation ? simulation.dailyEstimateKz.toLocaleString('pt-AO') : '—'}
-              </span>
-              <span className="text-[10px] font-black text-on-surface-variant/70 uppercase">Kz</span>
-            </div>
-            {simulation?.bestZones?.[0] && (
-              <p className="text-[8px] text-on-surface-variant/70 mt-1 font-bold">
-                Zona: {simulation.bestZones[0]}
-              </p>
-            )}
+            <p className="zr-kicker">Motorista</p>
+            <h2 className="zr-section-title">Cockpit Operacional</h2>
           </div>
-
-          <div className="flex flex-col items-end gap-2">
-            {/* Badge de notificações pendentes */}
-            {pendingNotifCount > 0 && !incomingRide && (
-              <span className="text-[8px] font-black bg-red-500 text-white px-2 py-0.5 rounded-full animate-pulse">
-                {pendingNotifCount} corrida{pendingNotifCount > 1 ? 's' : ''} pendente{pendingNotifCount > 1 ? 's' : ''}
+          <div className="zr-inline" style={{ gap: '10px' }}>
+            <button className="zr-button zr-button--sm zr-button--ghost" style={{ padding: '4px', minWidth: '40px' }}>
+              <span className="material-symbols-outlined" style={{ color: 'var(--gold)' }}>smart_toy</span>
+            </button>
+            <span className={`zr-chip ${isOnline ? 'zr-chip--success' : 'zr-chip--muted'}`}>
+              <span className="material-symbols-outlined" style={{ fontSize: '16px', marginRight: '4px' }}>
+                {isOnline ? 'toggle_on' : 'toggle_off'}
               </span>
-            )}
+              {isOnline ? 'Online' : 'Offline'}
+            </span>
+            <div className="zr-avatar">{(profile?.name || 'D').charAt(0).toUpperCase()}</div>
+          </div>
+        </div>
+      </header>
+
+      <div style={{ padding: '14px' }}>
+        {/* Banners e Alertas Operacionais */}
+        <DocExpiryBanner
+          driverId={driverId}
+          onOpenDocuments={() => setShowDocsForm(true)}
+        />
+        
+        <FatigueAlert
+          isOnline={isOnline}
+          onlineHours={onlineHours}
+        />
+
+        <MinIncomeGuard
+          isOnline={isOnline}
+          hasActiveRide={!!ride.rideId}
+          idleMinutes={idleMinutes}
+        />
+
+        <NightSafetyBanner
+          hasEmergencyContact={!!profile?.emergency_contact_phone}
+          hasActiveRide={hasActiveRide}
+          safetyContextKey={ride.rideId ?? null}
+          onActivateSafety={() => {
+            if (ride.rideId && profile?.emergency_contact_phone) {
+              rideService.autoShareLiveTrackingOnRideStart({
+                rideId: ride.rideId,
+                ownerUserId: driverId,
+                emergencyPhone: profile.emergency_contact_phone,
+              });
+            }
+          }}
+        />
+        {/* Card de Status e Ganhos */}
+        <section className="zr-card" style={{ marginBottom: '14px' }}>
+          <div className="zr-inline zr-inline--between" style={{ marginBottom: '14px' }}>
+            <div>
+              <p className="zr-kicker">Ganhos Estimados</p>
+              <h2 className="zr-section-title" style={{ color: 'var(--gold)', fontSize: '24px' }}>
+                {simulation ? simulation.dailyEstimateKz.toLocaleString('pt-AO') : '—'} <span style={{ fontSize: '14px' }}>Kz/dia</span>
+              </h2>
+            </div>
             <button
               onClick={isOnline ? goOffline : goOnline}
               disabled={isSwitchingOnline}
-              className={`px-8 py-4 rounded-3xl font-black text-[10px] uppercase flex items-center gap-3 active:scale-95 transition-all ${
-                isOnline
-                  ? 'bg-primary/100 text-white shadow-[0_15px_30px_rgba(34,197,94,0.3)]'
-                  : 'bg-[#0A0A0A] text-white shadow-xl'
-              } ${isSwitchingOnline ? 'opacity-50 cursor-wait' : ''}`}
+              className={`zr-button ${isOnline ? 'zr-button--secondary' : ''}`}
+              style={{ minWidth: '120px' }}
             >
-              <div className="relative">
-                {isSwitchingOnline ? (
-                  <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin block" />
-                ) : (
-                  <>
-                    <span className={`w-2.5 h-2.5 rounded-full bg-surface-container-low block ${isOnline ? 'animate-pulse' : ''}`} />
-                    {isOnline && <span className="absolute inset-0 bg-surface-container-low rounded-full animate-ping opacity-50" />}
-                  </>
-                )}
-              </div>
-              {isSwitchingOnline ? 'AGUARDA...' : isOnline ? 'ONLINE' : 'FICAR ONLINE'}
+              {isSwitchingOnline ? '...' : isOnline ? 'FICAR OFFLINE' : 'FICAR ONLINE'}
             </button>
           </div>
-        </div>
-
-        {/* Ganhos hoje */}
-        {todayEarnings > 0 && (
-          <div className="bg-green-500/8 border border-green-500/20 rounded-xl p-3 flex justify-between items-center">
-            <span className="text-[9px] font-black text-green-600 uppercase tracking-widest">💰 Ganhos Hoje</span>
-            <span className="text-sm font-black text-green-600">{todayEarnings.toLocaleString('pt-AO')} Kz</span>
-          </div>
-        )}
-      </div>
-
-      {/* Mapa */}
-      <div className="aspect-[4/3] w-full relative z-0 overflow-hidden rounded-[3rem] shadow-2xl border-4 border-white">
-        {shouldMountMap ? (
-          <Suspense fallback={<div className="w-full h-full flex items-center justify-center bg-surface-container-low text-on-surface-variant text-xs">A carregar mapa...</div>}>
-            <Map3D
-              mode="driver"
-              center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
-            />
-          </Suspense>
-        ) : (
-          <div className="w-full h-full flex items-center justify-center bg-surface-container-low text-on-surface-variant text-xs">
-            A preparar mapa...
-          </div>
-        )}
-        <div className="absolute top-6 right-6 bg-surface-container-low/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-outline-variant/20 flex items-center gap-3">
-          <div className="w-10 h-10 bg-primary/8 rounded-xl flex items-center justify-center text-xl">⛽</div>
-          <div>
-            <p className="text-[8px] font-black text-on-surface-variant/70 uppercase">Gasolina Luanda</p>
-            <p className="text-xs font-black text-on-surface">300-350 Kz/L</p>
-          </div>
-        </div>
-        <div className="absolute bottom-6 left-6 bg-[#0A0A0A]/90 backdrop-blur-xl border border-white/10 px-4 py-2 rounded-xl flex items-center gap-3">
-          <span className="text-xs">🛡️</span>
-          <div>
-            <p className="text-[8px] font-black text-primary uppercase">Vigilante</p>
-            <p className="text-[10px] font-black text-white uppercase">Zona Segura</p>
-          </div>
-        </div>
-      </div>
-
-      <DriverCopilot
-        isOnline={isOnline}
-        hasActiveRide={!!ride.rideId}
-        driverCoords={driverCoords}
-        heatmapData={heatmapData}
-      />
-
-      {!isOnline && !ride.rideId && (
-        <DriverTierCard driverId={driverId} />
-      )}
-
-      <MinIncomeGuard
-        isOnline={isOnline}
-        hasActiveRide={!!ride.rideId}
-        idleMinutes={idleMinutes}
-      />
-
-      <FatigueAlert
-        isOnline={isOnline}
-        onlineHours={onlineHours}
-      />
-
-      {isOnline && (
-        <div className="rounded-[2.5rem] border border-red-500/20 bg-red-500/5 p-5 space-y-4">
-          <div>
-            <p className="text-[9px] font-black uppercase tracking-[0.22em] text-red-300/70">Safety Driver</p>
-            <p className="text-sm font-black text-red-100 mt-2">
-              Triple-tap no ecra em 1.5s activa o SOS silencioso sem feedback visual.
-            </p>
-          </div>
-
-          {suspiciousPassenger && ride.rideId && (
-            <div className={`rounded-2xl border px-4 py-3 ${
-              suspiciousPassenger.severity === 'high'
-                ? 'border-yellow-400/30 bg-yellow-400/10 text-yellow-100'
-                : 'border-white/10 bg-white/5 text-white/80'
-            }`}>
-              <p className="text-[10px] font-black uppercase tracking-widest">Aviso discreto</p>
-              <p className="text-sm font-bold mt-1">{suspiciousPassenger.message}</p>
+          
+          {todayEarnings > 0 && (
+            <div className="zr-alert-box zr-alert-box--success" style={{ padding: '12px' }}>
+              <span className="material-symbols-outlined">payments</span>
+              <div className="zr-alert-content">
+                <strong>Ganhos Hoje: {todayEarnings.toLocaleString('pt-AO')} Kz</strong>
+              </div>
             </div>
           )}
-
-          <PanicButton
-            userId={driverId}
-            rideId={ride.rideId}
-            emergencyPhone={profile?.emergency_contact_phone ?? undefined}
-            counterpartyName={ride.passengerName}
-            counterpartyLabel="Passageiro"
-            silentSignal={silentPanicSignal}
-          />
-        </div>
-      )}
-
-      {/* POPUP: passageiro escolheu-te ou nova corrida */}
-      <AvailableRidesList 
-        isOnline={isOnline}
-        incomingRide={incomingRide}
-        isAuctionRide={isAuctionRide}
-        hasActiveRide={!!ride.rideId}
-        actionLoading={actionLoading}
-        pendingNotifCount={pendingNotifCount}
-        onDeclineAuction={handleDeclineAuction}
-        onConfirmAuction={handleConfirmAuction}
-        onAcceptSearching={handleAcceptSearching}
-        onIgnoreSearching={() => { setIncomingRide(null); setPendingNotifCount(0); }}
-      />
-
-      {/* Corrida activa — avançar estado + VoIP */}
-      <DriverActiveCard 
-        ride={ride}
-        driverId={driverId}
-        onAdvanceStatus={onAdvanceStatus}
-      />
-
-      {/* Offline */}
-      {!isOnline && !ride.rideId && (
-        <div className="bg-surface-container-low rounded-[2.5rem] p-8 text-center">
-          <p className="text-3xl mb-3">🏍️</p>
-          <p className="font-black text-on-surface-variant uppercase text-[10px] tracking-widest">Estás offline</p>
-          <p className="text-xs text-on-surface-variant/70 mt-2 font-bold">
-            Clica em FICAR ONLINE para receber corridas
-          </p>
-          {simulation?.tips && (
-            <p className="text-[10px] text-primary font-bold mt-4 italic">💡 {simulation.tips}</p>
+          
+          {pendingNotifCount > 0 && !incomingRide && (
+            <div className="zr-alert-box zr-alert-box--warning" style={{ marginTop: '12px', padding: '12px' }}>
+              <span className="material-symbols-outlined">notifications_active</span>
+              <div className="zr-alert-content">
+                <strong>{pendingNotifCount} corrida{pendingNotifCount > 1 ? 's' : ''} pendente{pendingNotifCount > 1 ? 's' : ''}</strong>
+              </div>
+            </div>
           )}
-        </div>
-      )}
+        </section>
 
-      {isOnline && <RideTalk zone="Motoristas" role={UserRole.DRIVER} />}
+        {/* Mapa Operacional */}
+        <section className="zr-card" style={{ padding: 0, overflow: 'hidden', height: '300px', marginBottom: '14px', position: 'relative', border: '1px solid var(--line)' }}>
+          {shouldMountMap ? (
+            <Suspense fallback={<div className="zr-empty">A carregar mapa...</div>}>
+              <Map3D
+                mode="driver"
+                center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
+              />
+            </Suspense>
+          ) : (
+            <div className="zr-empty">A preparar mapa...</div>
+          )}
+          
+          <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div className="zr-chip zr-chip--muted" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', border: '1px solid var(--line)' }}>
+              ⛽ 300-350 Kz/L
+            </div>
+          </div>
+          
+          <div style={{ position: 'absolute', bottom: '12px', left: '12px', zIndex: 1 }}>
+            <div className="zr-chip zr-chip--info" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', border: '1px solid var(--line)' }}>
+              <span className="material-symbols-outlined" style={{ fontSize: '14px', marginRight: '4px' }}>shield</span>
+              Zona Segura
+            </div>
+          </div>
+        </section>
 
+        {/* Copiloto e Gamificação */}
+        <DriverCopilot
+          isOnline={isOnline}
+          hasActiveRide={hasActiveRide}
+          driverCoords={driverCoords}
+          heatmapData={heatmapData}
+        />
+
+        {!isOnline && !ride.rideId && (
+          <div style={{ marginBottom: '14px' }}>
+            <DriverTierCard driverId={driverId} />
+          </div>
+        )}
+
+        {/* Segurança e SOS */}
+        {isOnline && (
+          <section className="zr-card zr-card--danger" style={{ marginBottom: '14px' }}>
+            <div className="zr-inline zr-inline--between" style={{ marginBottom: '12px' }}>
+              <div>
+                <p className="zr-kicker">Safety Driver</p>
+                <h3 className="zr-section-title" style={{ fontSize: '16px' }}>Protecção Activa</h3>
+              </div>
+              <span className="material-symbols-outlined" style={{ color: 'var(--danger)' }}>security</span>
+            </div>
+            
+            {suspiciousPassenger && ride.rideId && (
+              <div className="zr-alert-box zr-alert-box--warning" style={{ marginBottom: '14px' }}>
+                <span className="material-symbols-outlined">warning</span>
+                <div className="zr-alert-content">
+                  <strong>Aviso discreto</strong>
+                  <p>{suspiciousPassenger.message}</p>
+                </div>
+              </div>
+            )}
+
+            <PanicButton
+              userId={driverId}
+              rideId={ride.rideId}
+              emergencyPhone={profile?.emergency_contact_phone ?? undefined}
+              counterpartyName={ride.passengerName}
+              counterpartyLabel="Passageiro"
+              silentSignal={silentPanicSignal}
+              enableScreamDetection={Boolean(ride.rideId)}
+            />
+            <p className="zr-meta" style={{ marginTop: '12px', textAlign: 'center' }}>
+              Triple-tap no ecrã para SOS silencioso
+            </p>
+          </section>
+        )}
+
+        {/* Listagem de Corridas Disponíveis / Convites */}
+        <AvailableRidesList 
+          isOnline={isOnline}
+          incomingRide={incomingRide}
+          isAuctionRide={isAuctionRide}
+          hasActiveRide={!!ride.rideId}
+          actionLoading={actionLoading}
+          pendingNotifCount={pendingNotifCount}
+          onDeclineAuction={handleDeclineAuction}
+          onConfirmAuction={handleConfirmAuction}
+          onAcceptSearching={handleAcceptSearching}
+          onIgnoreSearching={() => { setIncomingRide(null); setPendingNotifCount(0); }}
+        />
+
+        {/* Card de Corrida Activa */}
+        <DriverActiveCard 
+          ride={ride}
+          driverId={driverId}
+          onAdvanceStatus={onAdvanceStatus}
+        />
+
+        {/* Estado Offline / Dicas */}
+        {!isOnline && !ride.rideId && (
+          <div className="zr-empty" style={{ padding: '40px 20px', background: 'var(--surface)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--line)' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '48px', color: 'var(--muted)', marginBottom: '12px' }}>no_accounts</span>
+            <h3 className="zr-section-title">Estás Offline</h3>
+            <p className="zr-copy">Fica online para começar a receber pedidos de Luanda.</p>
+            {simulation?.tips && (
+              <div style={{ marginTop: '20px', padding: '12px', borderTop: '1px solid var(--line)' }}>
+                <p className="zr-meta">💡 {simulation.tips}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Canal de Voz/Chat de Motoristas */}
+        {isOnline && (
+          <div style={{ marginTop: '14px' }}>
+            <RideTalk zone="Motoristas" role={UserRole.DRIVER} />
+          </div>
+        )}
+      </div>
+
+      {/* Camadas de Modais (Documentos, Acordos) */}
       {showDocsForm && (
         <DriverDocumentsForm 
           driverId={driverId} 
@@ -885,10 +904,6 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     </div>
   );
 };
-
-// =============================================================================
-// Hook genérico useAutoMarkNotificationsRead (reutilizável)
-// Marca notificações como lidas automaticamente após delay
 // Cancela todos os timers pendentes ao desmontar
 // =============================================================================
 export function useAutoMarkNotificationsRead(

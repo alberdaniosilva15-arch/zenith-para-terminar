@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAppStore } from '../store/useAppStore';
+import { logError } from '../lib/logger';
+import { ENV } from '../config/env';
 
 interface DriverProfileLite {
   name: string | null;
@@ -16,7 +18,8 @@ interface DriverDocument {
   car_color: string;
   bi_image_url: string | null;
   bi_storage_path?: string | null;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'pending_human';
+  ai_feedback?: string | null;
   created_at: string;
   profiles?: DriverProfileLite[] | null;
 }
@@ -40,7 +43,8 @@ export function AdminDriverDocs() {
 
       if (error) throw error;
       setDocs((data ?? []) as DriverDocument[]);
-    } catch {
+    } catch (err) {
+      console.warn('[AdminDriverDocs] fetch:', err);
       showToast('Falha ao carregar documentos', 'error');
     } finally {
       setLoading(false);
@@ -71,7 +75,8 @@ export function AdminDriverDocs() {
         return;
       }
       window.open(url, '_blank', 'noopener,noreferrer');
-    } catch {
+    } catch (err) {
+      logError('AdminDriverDocs.openBiDocument', err, { documentId: doc.id });
       showToast('Nao foi possivel gerar acesso ao BI.', 'error');
     } finally {
       setOpeningDocId(null);
@@ -90,8 +95,41 @@ export function AdminDriverDocs() {
       if (error) throw error;
       showToast(`Documento ${status === 'approved' ? 'Aprovado' : 'Rejeitado'} com sucesso`, 'success');
       fetchDocs();
-    } catch {
+    } catch (err) {
+      console.warn('[AdminDriverDocs] updateStatus:', err);
       showToast('Erro ao atualizar status', 'error');
+    }
+  };
+
+  const handleSentinelAnalysis = async (docId: string) => {
+    try {
+      setLoading(true);
+      const { data: session } = await supabase.auth.getSession();
+      
+      const res = await fetch(`${ENV.SUPABASE_URL}/functions/v1/sentinel-vision`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.session?.access_token}`
+        },
+        body: JSON.stringify({ documentId: docId })
+      });
+      
+      if (!res.ok) throw new Error('Falha na resposta do Sentinel');
+      
+      const result = await res.json();
+      showToast(
+        result.status === 'approved' ? 'Motorista Aprovado pela IA!' : 
+        result.status === 'rejected' ? 'Motorista Recusado pela IA.' : 
+        'A IA solicitou revisão humana.',
+        result.status === 'approved' ? 'success' : 'info'
+      );
+      fetchDocs();
+    } catch (err) {
+      logError('AdminDriverDocs.handleSentinelAnalysis', err, { documentId: docId });
+      showToast('Erro ao contactar Sentinel IA', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -123,9 +161,10 @@ export function AdminDriverDocs() {
                 <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase ${
                   d.status === 'approved' ? 'bg-green-500/20 text-green-400' :
                   d.status === 'rejected' ? 'bg-red-500/20 text-red-400' :
+                  d.status === 'pending_human' ? 'bg-orange-500/20 text-orange-400' :
                   'bg-yellow-500/20 text-yellow-400'
                 }`}>
-                  {d.status === 'approved' ? 'Aprovado' : d.status === 'rejected' ? 'Rejeitado' : 'Pendente'}
+                  {d.status === 'approved' ? 'Aprovado' : d.status === 'rejected' ? 'Rejeitado' : d.status === 'pending_human' ? 'Revisão Humana' : 'Pendente'}
                 </span>
               </div>
 
@@ -159,10 +198,17 @@ export function AdminDriverDocs() {
                 </div>
               </div>
 
-              {d.status === 'pending' && (
-                <div className="p-3 border-t border-outline-variant bg-surface-container/30 flex gap-2 justify-end">
-                  <button onClick={() => handleUpdateStatus(d.id, 'rejected')} className="px-6 py-2 text-[10px] font-black uppercase text-red-400 hover:bg-red-500/10 rounded-xl transition-colors">Rejeitar</button>
-                  <button onClick={() => handleUpdateStatus(d.id, 'approved')} className="px-6 py-2 text-[10px] font-black uppercase bg-primary text-[#0A0A0A] rounded-xl hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20">Autorizar Motorista</button>
+              {(d.status === 'pending' || d.status === 'pending_human') && (
+                <div className="p-3 border-t border-outline-variant bg-surface-container/30 flex flex-col gap-2">
+                  {d.status === 'pending' && (
+                    <button onClick={() => handleSentinelAnalysis(d.id)} className="w-full px-6 py-3 text-[10px] font-black uppercase bg-surface-container-highest text-primary border border-primary/30 rounded-xl hover:bg-primary/10 transition-colors">
+                      🛡️ Delegar Análise ao Sentinel IA
+                    </button>
+                  )}
+                  <div className="flex gap-2 justify-end w-full">
+                    <button onClick={() => handleUpdateStatus(d.id, 'rejected')} className="px-6 py-2 text-[10px] font-black uppercase text-red-400 hover:bg-red-500/10 rounded-xl transition-colors">Recusar Manual</button>
+                    <button onClick={() => handleUpdateStatus(d.id, 'approved')} className="px-6 py-2 text-[10px] font-black uppercase bg-primary text-[#0A0A0A] rounded-xl hover:bg-primary/90 transition-colors shadow-lg shadow-primary/20">Aprovar Manual</button>
+                  </div>
                 </div>
               )}
             </div>

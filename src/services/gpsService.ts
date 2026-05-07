@@ -1,5 +1,5 @@
-// src/services/gpsService.ts
 // GPS REAL — sem fallback hardcoded silencioso
+import { useAppStore } from '../store/useAppStore';
 
 export interface GpsPosition {
   lat: number;
@@ -43,11 +43,12 @@ export async function getCurrentPosition(): Promise<GpsPosition> {
           resolve(LUANDA_FALLBACK);
         } else {
           // Timeout ou indisponível — rejeita para o UI mostrar erro real
-          reject(new Error(
-            err.code === GeolocationPositionError.TIMEOUT
-              ? 'GPS timeout — verifica se o GPS está activo'
-              : 'Não foi possível obter localização'
-          ));
+          const msg = err.code === GeolocationPositionError.TIMEOUT
+            ? 'GPS timeout — verifica se o GPS está activo'
+            : 'Não foi possível obter localização';
+          
+          useAppStore.getState().showToast(msg, 'error');
+          reject(new Error(msg));
         }
       },
       {

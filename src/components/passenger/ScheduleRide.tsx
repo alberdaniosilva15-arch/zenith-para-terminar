@@ -1,12 +1,5 @@
-// =============================================================================
-// ZENITH RIDE v3.3 — ScheduleRide.tsx
-// Feature: Agendar corrida para data/hora futura
-// Inspirado em: Uber Scheduled Rides
-// =============================================================================
-
 import React, { useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Calendar, Clock, CheckCircle, X, AlertCircle } from 'lucide-react';
 
 interface ScheduleRideProps {
   userId:      string;
@@ -77,7 +70,6 @@ const ScheduleRide: React.FC<ScheduleRideProps> = ({
       });
 
       if (dbError) {
-        // Tabela pode não existir — dar feedback ao utilizador
         if (dbError.code === '42P01') {
           setError('Funcionalidade em preparação. A tabela será configurada em breve.');
         } else {
@@ -90,153 +82,136 @@ const ScheduleRide: React.FC<ScheduleRideProps> = ({
           onClose();
         }, 2000);
       }
-    } catch {
+    } catch (err) {
+      console.warn('[ScheduleRide] submit:', err);
       setError('Erro de ligação. Verifica a tua internet.');
-    } finally {
-      setSaving(false);
-    }
+    } finally { setSaving(false); }
   };
 
   if (success) {
     return (
-      <div className="fixed inset-0 z-[500] bg-black/70 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
-        <div className="bg-surface-container-low rounded-[2rem] p-8 max-w-sm w-full shadow-2xl border border-outline-variant/20 text-center space-y-4 animate-in zoom-in-95 duration-300">
-          <div className="w-16 h-16 mx-auto bg-green-500/15 rounded-full flex items-center justify-center">
-            <CheckCircle className="w-8 h-8 text-green-400" />
+      <div className="fixed inset-0 z-[500] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+        <section className="zr-card" style={{ width: '100%', maxWidth: '360px', textAlign: 'center', backgroundColor: 'var(--bg)' }}>
+          <div style={{ display: 'inline-block', marginBottom: '14px', color: 'var(--success)' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '48px' }}>check_circle</span>
           </div>
-          <h3 className="text-lg font-black text-on-surface">Corrida Agendada!</h3>
-          <p className="text-sm text-on-surface-variant font-bold">
+          <h2 className="zr-section-title" style={{ marginBottom: '8px' }}>Corrida Agendada!</h2>
+          <p className="zr-copy">
             {new Date(`${date}T${time}:00+01:00`).toLocaleDateString('pt-AO', {
               weekday: 'long', day: 'numeric', month: 'long',
             })} às {time}
           </p>
-          <p className="text-xs text-on-surface-variant/70 font-bold">
+          <p className="zr-meta" style={{ marginTop: '8px' }}>
             Receberás uma notificação 30 minutos antes.
           </p>
-        </div>
+        </section>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 z-[500] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center animate-in fade-in duration-300">
-      <div className="bg-surface-container-low rounded-t-[2.5rem] sm:rounded-[2.5rem] p-6 max-w-sm w-full shadow-2xl border border-outline-variant/20 space-y-5 animate-in slide-in-from-bottom-10 duration-300 max-h-[90vh] overflow-y-auto">
-
-        {/* Header */}
-        <div className="flex justify-between items-center">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-primary/15 rounded-full flex items-center justify-center">
-              <Calendar className="w-5 h-5 text-primary" />
-            </div>
-            <div>
-              <h3 className="text-sm font-black text-on-surface">Agendar Corrida</h3>
-              <p className="text-[9px] text-on-surface-variant/70 font-bold uppercase tracking-widest">Até 30 dias no futuro</p>
-            </div>
+    <div className="fixed inset-0 z-[500] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4">
+      <section className="zr-card" style={{ width: '100%', maxWidth: '400px', maxHeight: '90vh', overflowY: 'auto', backgroundColor: 'var(--bg)' }}>
+        <div className="zr-inline zr-inline--between" style={{ marginBottom: '16px' }}>
+          <div>
+            <p className="zr-kicker">Até 30 dias no futuro</p>
+            <h3 className="zr-section-title">Agendar Corrida</h3>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-full bg-surface-container-lowest flex items-center justify-center text-on-surface-variant/50 hover:text-on-surface transition-all">
-            <X className="w-4 h-4" />
-          </button>
+          <button onClick={onClose} className="zr-button zr-button--sm zr-button--ghost">✕</button>
         </div>
 
         {/* Rota */}
-        <div className="bg-surface-container-lowest rounded-2xl p-4 space-y-2 border border-outline-variant/10">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-primary" />
-            <span className="text-xs font-black text-on-surface truncate">{pickupName || 'Selecciona partida'}</span>
+        <div className="zr-list" style={{ marginBottom: '16px' }}>
+          <div className="zr-list-item">
+            <div className="zr-route-dots">
+              <span className="dot dot--start"></span>
+            </div>
+            <div style={{ flex: 1 }}>
+              <strong style={{ display: 'block' }}>{pickupName || 'Partida'}</strong>
+              <span className="zr-copy">Partida</span>
+            </div>
           </div>
-          <div className="ml-1 pl-2 border-l-2 border-dashed border-outline-variant/30 h-3" />
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 rounded-full bg-red-500" />
-            <span className="text-xs font-black text-on-surface truncate">{destName || 'Selecciona destino'}</span>
-          </div>
-        </div>
-
-        {/* Data */}
-        <div className="space-y-2">
-          <label className="text-[9px] font-black text-on-surface-variant/70 uppercase tracking-widest flex items-center gap-1">
-            <Calendar className="w-3 h-3" /> Data da corrida
-          </label>
-          <input
-            type="date"
-            min={minDate}
-            max={maxDate}
-            value={date}
-            onChange={e => setDate(e.target.value)}
-            className="w-full bg-surface-container-lowest border border-outline-variant/20 rounded-xl px-4 py-3 text-sm font-bold text-on-surface outline-none focus:border-primary transition-all"
-          />
-        </div>
-
-        {/* Hora */}
-        <div className="space-y-2">
-          <label className="text-[9px] font-black text-on-surface-variant/70 uppercase tracking-widest flex items-center gap-1">
-            <Clock className="w-3 h-3" /> Hora de partida
-          </label>
-          <input
-            type="time"
-            value={time}
-            onChange={e => setTime(e.target.value)}
-            className="w-full bg-surface-container-lowest border border-outline-variant/20 rounded-xl px-4 py-3 text-sm font-bold text-on-surface outline-none focus:border-primary transition-all"
-          />
-        </div>
-
-        {/* Recorrência */}
-        <div className="space-y-2">
-          <label className="text-[9px] font-black text-on-surface-variant/70 uppercase tracking-widest">
-            Repetir
-          </label>
-          <div className="flex gap-2 flex-wrap">
-            {[
-              { value: 'none',     label: 'Apenas uma vez' },
-              { value: 'daily',    label: 'Todos os dias' },
-              { value: 'weekdays', label: 'Dias úteis' },
-              { value: 'weekly',   label: 'Semanal' },
-            ].map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setRecurrence(opt.value as 'none' | 'daily' | 'weekdays' | 'weekly')}
-                className={`px-3 py-1.5 rounded-full text-[9px] font-black transition-all border ${
-                  recurrence === opt.value
-                    ? 'bg-primary/15 text-primary border-primary/30'
-                    : 'bg-surface-container-lowest text-on-surface-variant/70 border-outline-variant/20'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div className="zr-list-item">
+            <div className="zr-route-dots">
+              <span className="dot dot--end"></span>
+            </div>
+            <div style={{ flex: 1 }}>
+              <strong style={{ display: 'block' }}>{destName || 'Destino'}</strong>
+              <span className="zr-copy">Chegada</span>
+            </div>
           </div>
         </div>
 
-        {/* Erro */}
+        {/* Formulario */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          <div>
+            <label className="zr-meta" style={{ display: 'block', marginBottom: '8px' }}>DATA DA CORRIDA</label>
+            <input
+              type="date"
+              min={minDate}
+              max={maxDate}
+              value={date}
+              onChange={e => setDate(e.target.value)}
+              className="zr-input"
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          <div>
+            <label className="zr-meta" style={{ display: 'block', marginBottom: '8px' }}>HORA DE PARTIDA</label>
+            <input
+              type="time"
+              value={time}
+              onChange={e => setTime(e.target.value)}
+              className="zr-input"
+              style={{ width: '100%' }}
+            />
+          </div>
+
+          <div>
+            <label className="zr-meta" style={{ display: 'block', marginBottom: '8px' }}>REPETIR</label>
+            <div className="zr-tabs" style={{ flexWrap: 'wrap' }}>
+              {[
+                { value: 'none',     label: '1 vez' },
+                { value: 'daily',    label: 'Diário' },
+                { value: 'weekdays', label: 'Dias úteis' },
+                { value: 'weekly',   label: 'Semanal' },
+              ].map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setRecurrence(opt.value as 'none' | 'daily' | 'weekdays' | 'weekly')}
+                  className={`zr-tab ${recurrence === opt.value ? 'is-active' : ''}`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
         {error && (
-          <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-            <p className="text-xs text-red-400 font-bold">{error}</p>
+          <div className="zr-alert-box zr-alert-box--danger" style={{ marginTop: '16px' }}>
+            <span className="material-symbols-outlined">error</span>
+            <div className="zr-alert-content">
+              <strong>Erro</strong>
+              <p>{error}</p>
+            </div>
           </div>
         )}
 
-        {/* Botão */}
         <button
           onClick={handleSchedule}
           disabled={saving || !date || !time || !pickupName || !destName}
-          className="w-full py-4 bg-primary text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-[0_15px_30px_rgba(37,99,235,0.3)] disabled:opacity-50 active:scale-98 transition-all flex items-center justify-center gap-2"
+          className="zr-button zr-button--block"
+          style={{ marginTop: '24px' }}
         >
-          {saving ? (
-            <>
-              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              A agendar...
-            </>
-          ) : (
-            <>
-              <Calendar className="w-4 h-4" />
-              Agendar Corrida
-            </>
-          )}
+          {saving ? 'A agendar...' : 'AGENDAR CORRIDA'}
         </button>
 
-        <p className="text-[9px] text-center text-on-surface-variant/50 font-bold">
+        <p className="zr-meta" style={{ textAlign: 'center', marginTop: '12px' }}>
           O preço será calculado no momento da corrida com base no trânsito real
         </p>
-      </div>
+      </section>
     </div>
   );
 };

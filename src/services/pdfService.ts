@@ -32,6 +32,8 @@ export interface ContractData {
   title: string;
   contract_type: 'school' | 'family' | 'corporate';
   address: string;
+  dest_lat?: number;
+  dest_lng?: number;
   time_start: string;
   time_end: string;
   km_accumulated: number;
@@ -72,7 +74,8 @@ async function getMapImageBase64(data: RideReceiptData): Promise<string | null> 
       reader.onerror = () => resolve(null);
       reader.readAsDataURL(blob);
     });
-  } catch {
+  } catch (err) {
+    console.warn('[pdfService] fallback:', err);
     return null;
   }
 }
@@ -307,6 +310,42 @@ export async function buildContractPDF(c: ContractData): Promise<string> {
     y += 20;
   }
 
+  // Adicionar Mapa do Trajecto
+  if (c.dest_lat && c.dest_lng && MAPBOX_TOKEN) {
+    try {
+      // Usa Luanda centro como origem caso não haja origem definida no contrato
+      const originLat = -8.8368;
+      const originLng = 13.2343;
+      const pin1 = `pin-l-a+1D9E75(${originLng},${originLat})`;
+      const pin2 = `pin-l-b+E24B4A(${c.dest_lng},${c.dest_lat})`;
+      const mapUrl = [
+        'https://api.mapbox.com/styles/v1/mapbox/dark-v11/static',
+        `${pin1},${pin2}`,
+        'auto/580x220@2x',
+        `?padding=50&access_token=${MAPBOX_TOKEN}`,
+      ].join('/');
+
+      const res = await fetch(mapUrl);
+      if (res.ok) {
+        const blob = await res.blob();
+        const base64Map = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+        
+        doc.setFontSize(8); doc.setFont('helvetica', 'bold');
+        doc.setTextColor(100, 100, 100);
+        doc.text('TRAJECTO CONTRATADO', M, y);
+        y += 4;
+        doc.addImage(base64Map, 'PNG', M, y, W - M * 2, 44);
+        y += 49;
+      }
+    } catch (e) {
+      console.warn('[pdfService] Erro ao adicionar mapa no PDF do contrato:', e);
+    }
+  }
+
   y = 255;
   doc.setFontSize(6.5); doc.setTextColor(180, 180, 180);
   doc.text('Zenith Ride \u00B7 Mobilidade Urbana Angola', W / 2, y, { align: 'center' });
@@ -463,8 +502,8 @@ export async function shareFile(uriOrBase64: string, fileName: string, options: 
           text:  options.text,
           files: [file],
         });
-      } catch {
-        console.warn('Web Share API falhou ou não suporta ficheiros.');
+      } catch (err) {
+        console.warn('[pdfService] render:', err);
       }
     }
   }

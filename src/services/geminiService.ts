@@ -10,6 +10,7 @@
 import { supabase, edgeFunctionUrl } from '../lib/supabase';
 import type { LocationResult, AutonomousCommand } from '../types';
 import { mapService } from './mapService';
+import { kazeSpeak } from '../lib/kazeVoice';
 
 // =============================================================================
 // FALLBACK LOCAL — IA offline que responde sem Edge Function
@@ -153,10 +154,13 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>): P
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) throw new Error('Utilizador não autenticado. Faz login primeiro.');
 
-    const provider = localStorage.getItem('zenith_ia_provider');
-    const modelOverride = localStorage.getItem('zenith_ia_model');
-    // SEGURANÇA: Chave API NUNCA é guardada no browser — é gerida exclusivamente
-    // pela Edge Function via variáveis de ambiente no Supabase Dashboard.
+    const rawProvider = localStorage.getItem('zenith_ia_provider');
+    const rawModel = localStorage.getItem('zenith_ia_model');
+    const ALLOWED_PROVIDERS = ['google', 'openai', 'anthropic'];
+    const ALLOWED_MODELS = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gpt-4o', 'claude-3-5-sonnet'];
+
+    const provider = rawProvider && ALLOWED_PROVIDERS.includes(rawProvider) ? rawProvider : null;
+    const modelOverride = rawModel && ALLOWED_MODELS.includes(rawModel) ? rawModel : null;
 
     const res = await fetch(edgeFunctionUrl('gemini-proxy'), {
       method:  'POST',
@@ -175,7 +179,7 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>): P
       try {
         const body = await res.json();
         errorMsg = body?.message ?? body?.error ?? errorMsg;
-      } catch { /* ignorar se body não é JSON */ }
+      } catch (err) { console.warn('[geminiService] JSON parse:', err); }
       throw new Error(errorMsg);
     }
 
@@ -190,80 +194,7 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>): P
   }
 }
 
-// =============================================================================
-// ✅ BUG #11 CORRIGIDO: Classe GeminiChatService ao nível do módulo (não dentro de geminiService)
-// =============================================================================
-export class GeminiChatService {
-  private history: ChatMessage[] = [];
 
-  async sendMessage(userText: string, authToken: string): Promise<string> {
-    this.history.push({ role: 'user', content: userText });
-
-    // Converter histórico para formato Gemini ANTES de enviar (excluindo a mensagem actual)
-    const geminiHistory = toGeminiHistory(this.history.slice(0, -1));
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000); // 12s timeout para Kaze
-
-    try {
-      const response = await fetch(edgeFunctionUrl('gemini-proxy'), {
-        method: 'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${authToken}`,
-        },
-        body: JSON.stringify({
-          action:  'kaze_chat',
-          message: userText,
-          history: geminiHistory,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeout);
-
-      if (!response.ok) {
-        throw new Error(`[GeminiService] Edge Function erro ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      const modelText: string =
-        data?.candidates?.[0]?.content?.parts?.[0]?.text ??
-        data?.text ?? '';
-
-      if (!modelText) {
-        throw new Error('[GeminiService] Resposta vazia do modelo.');
-      }
-
-      this.history.push({ role: 'model', content: modelText });
-      this.trimHistory(20);
-
-      return modelText;
-    } catch (err) {
-      clearTimeout(timeout);
-      
-      // Remover a mensagem do user para não quebrar a ordem se quisermos tentar de novo
-      this.history.pop();
-      
-      // FALLBACK IMEDIATO: Resposta offline local super rápida
-      console.warn('[GeminiService] Kaze cloud falhou/timeout. Usando fallback offline.');
-      return getLocalKazeResponse(userText);
-    }
-  }
-
-  clearHistory(): void {
-    this.history = [];
-  }
-
-  private trimHistory(maxMessages: number): void {
-    if (this.history.length > maxMessages) {
-      this.history = this.history.slice(-maxMessages);
-    }
-  }
-}
-
-// =============================================================================
 export const geminiService = {
 
   // ------------------------------------------------------------------
@@ -307,7 +238,7 @@ export const geminiService = {
   }): Promise<{ text: string; type: 'info' | 'motivation' | 'safety' }> {
     try {
       return await callProxy('kaze_insight', { context });
-    } catch { return { text: 'Fica firme na via!', type: 'motivation' }; }
+    } catch (err) { console.warn('[geminiService] motivation:', err); return { text: 'Fica firme na via!', type: 'motivation' }; }
   },
 
   // ------------------------------------------------------------------
@@ -318,7 +249,8 @@ export const geminiService = {
   }> {
     try {
       return await callProxy('simulate_earnings', { driverProfile });
-    } catch {
+    } catch (err) {
+      console.warn('[geminiService] pricing:', err);
       return { dailyEstimateKz: 24500, weeklyEstimateKz: 145000, bestZones: ['Viana', 'Kilamba'], tips: 'Foca nas horas de ponta.' };
     }
   },
@@ -334,7 +266,8 @@ export const geminiService = {
     try {
       const r = await callProxy<{ commands: AutonomousCommand[] }>('autonomous_decisions', { context });
       return r.commands ?? [];
-    } catch {
+    } catch (err) {
+      console.warn('[geminiService] autonomous:', err);
       return [{
         id: crypto.randomUUID(),
         type: 'ROUTE_OPTIMIZE',
@@ -368,13 +301,21 @@ export const geminiService = {
           history.push({ role: 'model', content: r.text });
           return r;
         } catch (err: any) {
-          console.warn('[geminiService.createKazeChat] Edge function indisponível. Usando fallback local.');
+          console.warn('[geminiService.createKazeChat] Erro na Edge function:', err);
           
           // ⚠️ FIX: Remover a mensagem de utilizador que falhou para não quebrar a ordem user-model-user-model do Gemini
           history.pop();
 
-          const fallbackText = getLocalKazeResponse(message);
-          return { text: fallbackText };
+          const errMsg = err?.message || '';
+          
+          // Se for um erro de rede genérico ou timeout (Failed to fetch, AbortError), usa fallback
+          if (errMsg.includes('Failed to fetch') || errMsg.includes('demasiado a responder') || !errMsg) {
+            const fallbackText = getLocalKazeResponse(message);
+            return { text: fallbackText };
+          }
+
+          // Para todos os outros erros (cota, autenticação, rate limit, erros 500), mostra ao utilizador
+          return { text: `⚠️ ${errMsg}` };
         }
       },
       getHistory:   () => [...history],
@@ -392,7 +333,7 @@ export const geminiService = {
   }): Promise<{ text: string }> {
     try {
       return await callProxy('post_ride_review', params);
-    } catch { return { text: 'Obrigado pela corrida!' }; }
+    } catch (err) { console.warn('[geminiService] review:', err); return { text: 'Obrigado pela corrida!' }; }
   },
 
   // ------------------------------------------------------------------
@@ -446,33 +387,20 @@ export const geminiService = {
       setTimeout(() => {
         restarting = false;
         if (closing || speaking) return;
-        try { recognition.start(); } catch { /* evitar crash se já estiver activo */ }
+        try { recognition.start(); } catch (err) { console.warn('[geminiService] recognition start:', err); }
       }, 250);
     };
 
-    const speakReply = (text: string) => {
-      if (!('speechSynthesis' in window)) {
-        queueStart();
-        return;
-      }
-
-      try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'pt-PT';
-      utter.rate = 1;
-      utter.pitch = 1;
-
+    const speakReply = async (text: string) => {
       speaking = true;
-      utter.onend = () => {
+      try {
+        await kazeSpeak(text);
+      } catch (err) {
+        console.warn('[geminiService] kazeSpeak error:', err);
+      } finally {
         speaking = false;
         queueStart();
-      };
-      utter.onerror = () => {
-        speaking = false;
-        queueStart();
-      };
-
-      window.speechSynthesis.speak(utter);
+      }
     };
 
     recognition.onresult = async (event: any) => {
@@ -519,8 +447,8 @@ export const geminiService = {
       close: () => {
         if (closing) return;
         closing = true;
-        try { recognition.stop(); } catch { /* ignore */ }
-        try { window.speechSynthesis.cancel(); } catch { /* ignore */ }
+        try { recognition.stop(); } catch (err) { console.warn('[geminiService] recognition stop:', err); }
+        try { window.speechSynthesis.cancel(); } catch (err) { console.warn('[geminiService] speech cleanup:', err); }
         safeOnClose();
       },
     };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAppStore } from '../store/useAppStore';
 
@@ -13,10 +13,30 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
   const [carModel, setCarModel] = useState('');
   const [carPlate, setCarPlate] = useState('');
   const [carColor, setCarColor] = useState('');
+  const [hasAC, setHasAC] = useState(false);
   const [expiryDate, setExpiryDate] = useState('');
   const [biFile, setBiFile] = useState<File | null>(null);
+  const [aiFeedback, setAiFeedback] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { showToast } = useAppStore();
+
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const { data } = await supabase
+          .from('driver_documents')
+          .select('status, ai_feedback')
+          .eq('driver_id', driverId)
+          .maybeSingle();
+        if (data?.status === 'rejected' && data.ai_feedback) {
+          setAiFeedback(data.ai_feedback);
+        }
+      } catch (err) {
+        console.warn('Erro ao carregar feedback', err);
+      }
+    };
+    fetchStatus();
+  }, [driverId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,7 +70,9 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
         car_model: carModel,
         car_plate: carPlate,
         car_color: carColor,
+        has_ac: hasAC,
         status: 'pending',
+        ai_feedback: null, // Limpa erro anterior ao re-submeter
         expires_at: expiryDate || null,
         updated_at: new Date().toISOString()
       };
@@ -66,7 +88,7 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
 
       if (error) throw error;
 
-      showToast('Documentos enviados! Aguarda a aprovação por um Administrador.', 'success');
+      showToast('Documentos enviados! O Sentinel IA vai analisar brevemente.', 'success');
       onSuccess('pending');
     } catch (err: any) {
       console.error(err);
@@ -87,9 +109,16 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
         </div>
 
         <div className="p-6 overflow-y-auto flex-1">
-          <p className="text-xs text-on-surface-variant mb-6">
-            Por razões de segurança, os passageiros e a Zenith Ride precisam conhecer o teu veículo e verificar a tua identidade antes de ficares ONLINE.
+          <p className="text-xs text-on-surface-variant mb-4">
+            Por razões de segurança, a Sentinel IA vai verificar a tua identidade e veículo antes de ficares ONLINE.
           </p>
+
+          {aiFeedback && (
+            <div className="mb-4 bg-red-500/10 border border-red-500/30 rounded-xl p-3">
+              <p className="text-[10px] font-black text-red-400 uppercase tracking-widest mb-1">❌ Inscrição Recusada (IA)</p>
+              <p className="text-xs text-red-200">{aiFeedback}</p>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             
@@ -114,18 +143,26 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
               <input required value={carColor} onChange={e=>setCarColor(e.target.value)} placeholder="Ex: Branco" className="bg-surface-container border border-outline-variant p-3 rounded-xl text-white text-sm" />
             </label>
 
+            <label className="flex items-center gap-3 bg-surface-container border border-outline-variant p-3 rounded-xl cursor-pointer">
+              <input type="checkbox" checked={hasAC} onChange={e=>setHasAC(e.target.checked)} className="w-5 h-5 accent-primary" />
+              <div className="flex flex-col">
+                <span className="text-xs text-on-surface font-bold uppercase">O Ar Condicionado funciona?</span>
+                <span className="text-[9px] text-on-surface-variant">Penalização por fraude neste campo.</span>
+              </div>
+            </label>
+
             <label className="flex flex-col gap-1">
               <span className="text-[10px] text-on-surface font-bold uppercase">Validade dos Documentos</span>
               <input type="date" value={expiryDate} onChange={e=>setExpiryDate(e.target.value)} className="bg-surface-container border border-outline-variant p-3 rounded-xl text-white text-sm" />
             </label>
 
             <label className="flex flex-col gap-1 mt-2">
-              <span className="text-[10px] text-primary font-bold uppercase">Fotografia do BILHETE (Opcional por agora)</span>
-              <input type="file" accept="image/*" onChange={e => setBiFile(e.target.files?.[0] || null)} className="bg-surface-container border border-outline-variant p-3 rounded-xl text-white text-xs file:bg-primary file:text-white file:border-0 file:px-3 file:py-1 file:rounded-full file:text-[10px] file:font-bold file:mr-3" />
+              <span className="text-[10px] text-primary font-bold uppercase">Fotografia do BILHETE (Obrigatório)</span>
+              <input required type="file" accept="image/*" onChange={e => setBiFile(e.target.files?.[0] || null)} className="bg-surface-container border border-outline-variant p-3 rounded-xl text-white text-xs file:bg-primary file:text-white file:border-0 file:px-3 file:py-1 file:rounded-full file:text-[10px] file:font-bold file:mr-3" />
             </label>
 
             <button disabled={loading} type="submit" className="mt-4 bg-primary text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-50">
-              {loading ? 'A Enviar...' : 'Submeter Para Revisão'}
+              {loading ? 'A Enviar...' : 'Submeter Para Revisão IA'}
             </button>
           </form>
         </div>

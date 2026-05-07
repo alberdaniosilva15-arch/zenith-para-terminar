@@ -10,7 +10,6 @@
 import React, { Suspense } from 'react';
 import { RideState, RideStatus } from '../../types';
 import RideChat from '../RideChat';
-import PanicButton from '../PanicButton';
 import { LiveShareButton } from './LiveShareButton';
 
 const AgoraCall = React.lazy(() => import('../AgoraCall'));
@@ -22,7 +21,6 @@ interface ActiveRideCardProps {
   onCancelRide:    (reason: string) => void;
   emergencyPhone?: string;
   driverName?:     string;
-  silentPanicSignal?: number;
 }
 
 const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
@@ -31,7 +29,6 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
   routeInfo,
   onCancelRide,
   emergencyPhone,
-  silentPanicSignal,
 }) => {
   if (
     ride.status !== RideStatus.SEARCHING &&
@@ -43,6 +40,11 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
 
   const resolvedDriverName = ride.driverName ?? 'Motorista';
   const resolvedRideId     = ride.rideId     ?? '';
+  const confirmCancelRide = () => {
+    if (window.confirm('Queres mesmo cancelar esta corrida?')) {
+      onCancelRide('Cancelado pelo passageiro após aceitação');
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -103,6 +105,23 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
             </div>
           )}
 
+          <div className="grid grid-cols-2 gap-2">
+            <a
+              href="tel:113"
+              className="zr-button zr-button--danger zr-button--block"
+              style={{ padding: '10px 0', fontSize: '10px' }}
+            >
+              📞 Ligar 113
+            </a>
+            <a
+              href="tel:112"
+              className="zr-button zr-button--secondary zr-button--block"
+              style={{ padding: '10px 0', fontSize: '10px', color: 'var(--danger-soft)', borderColor: 'var(--danger-soft)' }}
+            >
+              📞 Ligar 112
+            </a>
+          </div>
+
           {/* Chamada Agora */}
           {resolvedRideId && (
             <Suspense fallback={<div className="text-white/50 text-xs p-2 text-center">A iniciar chamada...</div>}>
@@ -124,6 +143,14 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
               phonePrivacyMode={true}
             />
           )}
+
+          <button
+            onClick={confirmCancelRide}
+            className="zr-button zr-button--block zr-button--secondary"
+            style={{ color: 'var(--danger-soft)', borderColor: 'rgba(239, 68, 68, 0.35)' }}
+          >
+            Cancelar corrida
+          </button>
         </div>
       )}
 
@@ -156,13 +183,22 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
                 pickup={ride.pickup}
                 destination={ride.destination}
               />
-              <PanicButton
-                userId={userId}
-                rideId={resolvedRideId}
-                driverName={resolvedDriverName}
-                emergencyPhone={emergencyPhone}
-                silentSignal={silentPanicSignal}
-              />
+              <div className="grid grid-cols-2 gap-2">
+                <a
+                  href="tel:113"
+                  className="zr-button zr-button--danger zr-button--block"
+                  style={{ padding: '10px 0', fontSize: '10px' }}
+                >
+                  📞 Ligar 113
+                </a>
+                <a
+                  href="tel:112"
+                  className="zr-button zr-button--secondary zr-button--block"
+                  style={{ padding: '10px 0', fontSize: '10px', color: 'var(--danger-soft)', borderColor: 'var(--danger-soft)' }}
+                >
+                  📞 Ligar 112
+                </a>
+              </div>
             </div>
           )}
 

@@ -241,7 +241,7 @@ export interface RideReceipt {
 export type UserLevel    = 'Novato' | 'Bronze' | 'Prata' | 'Ouro' | 'Diamante';
 export type PostType     = 'status' | 'alert' | 'event';
 export type TransactionType = 'ride_payment' | 'ride_earning' | 'top_up' | 'refund' | 'bonus' | 'withdrawal';
-export type TabType      = 'home' | 'contrato' | 'rides' | 'wallet' | 'profile' | 'social' | 'precos';
+export type TabType      = 'home' | 'contrato' | 'rides' | 'wallet' | 'profile' | 'social' | 'precos' | 'admin';
 export type KazeCategory = 'motivation' | 'education' | 'philosophy' | 'anime' | 'spiritual';
 
 export interface Achievement { id: string; title: string; icon: string; date: string; }
@@ -569,14 +569,6 @@ export interface SchoolTrackingSession {
   alerts_sent:  number;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PROFILE AUGMENTED (perfil com campos novos do v3)
-// ─────────────────────────────────────────────────────────────────────────────
-export interface DbProfileV3 extends DbProfile {
-  km_total:          number;
-  free_km_available: number;
-  km_to_next_perk:   number;
-}
 
 // =============================================================================
 // ✅ BUG #9 CORRIGIDO: type-guard para DbProfile

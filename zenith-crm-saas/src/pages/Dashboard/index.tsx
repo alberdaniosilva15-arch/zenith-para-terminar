@@ -87,6 +87,7 @@ const ZoneHeatMap: React.FC<{ zones: { zone: string; count: number }[] }> = ({ z
 const Dashboard: React.FC = () => {
   const { metrics, hourly, zones, loading, refresh } = useMetrics();
   const [broadcastMsg, setBroadcastMsg] = React.useState('');
+  const [toastMsg, setToastMsg] = React.useState('');
 
   const sendBroadcast = async () => {
     if (!broadcastMsg.trim()) return;
@@ -95,7 +96,8 @@ const Dashboard: React.FC = () => {
       event: 'admin_msg',
       payload: { message: broadcastMsg.trim(), time: new Date().toISOString() }
     });
-    alert('Mensagem enviada simultaneamente a todos os utilizadores (Passageiros e Motoristas) online!');
+    setToastMsg('Mensagem enviada!');
+    setTimeout(() => setToastMsg(''), 3000);
     setBroadcastMsg('');
   };
 
@@ -190,9 +192,9 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Broadcast System - Transmissão para App Principal */}
-      <div className="card" style={{ background: 'linear-gradient(145deg, var(--bg2), var(--bg3))', border: '1px solid var(--primary)' }}>
+      <div className="card" style={{ background: 'linear-gradient(145deg, var(--bg2), var(--bg3))', border: '1px solid var(--green)' }}>
         <div className="flex items-center gap-4 mb-4">
-          <div className="w-10 h-10 rounded-xl bg-primary/20 flex flex-col items-center justify-center text-primary">
+          <div className="w-10 h-10 rounded-xl bg-[var(--green-dim)] flex flex-col items-center justify-center text-[var(--green)]">
             <Radio size={20} />
           </div>
           <div>
@@ -200,27 +202,28 @@ const Dashboard: React.FC = () => {
             <p style={{ fontSize: '11px', color: 'var(--text3)', marginTop: '2px' }}>A tua mensagem saltará instantaneamente no ecrã de todos os utilizadores online.</p>
           </div>
         </div>
-        <div className="flex gap-4 items-center">
+        <div className="flex gap-4 items-center relative">
           <input
             type="text"
             value={broadcastMsg}
             onChange={e => setBroadcastMsg(e.target.value)}
             placeholder="Ex: Alerta de Trânsito pesado na Marginal..."
-            className="flex-1 bg-[var(--bg1)] border border-[var(--border1)] p-4 rounded-2xl outline-none focus:border-[var(--primary)] text-sm"
+            className="flex-1 bg-[var(--bg)] border border-[var(--border)] p-4 rounded-2xl outline-none focus:border-[var(--green)] text-sm text-white"
           />
           <button 
             onClick={sendBroadcast}
             disabled={!broadcastMsg.trim()}
-            className="bg-primary text-black py-4 px-8 rounded-2xl font-black text-[10px] uppercase tracking-widest disabled:opacity-50 hover:opacity-90 transition-opacity"
+            className="bg-[var(--green)] text-black py-4 px-8 rounded-2xl font-black text-[10px] uppercase tracking-widest disabled:opacity-50 hover:opacity-90 transition-opacity"
           >
             DISPARAR MENSAGEM
           </button>
+          {toastMsg && <div className="absolute right-0 top-[-40px] bg-[var(--green)] text-black px-4 py-2 rounded-xl text-xs font-bold animate-slide-up z-10">{toastMsg}</div>}
         </div>
       </div>
 
       {/* Gráfico de corridas por hora */}
       <div className="card">
-        <div className="flex items-center justify-between mb-16">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <h3 style={{ fontFamily: 'var(--font-title)', fontSize: '14px', fontWeight: 700 }}>
               Corridas por Hora (últimas 24h)

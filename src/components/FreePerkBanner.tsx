@@ -87,69 +87,54 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
   // ─── MODO CELEBRAÇÃO ────────────────────────────────────────────────────────
   if (celebrating) {
     return (
-      <div className="mx-4 mb-3 animate-in zoom-in duration-300">
-        <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-[2rem] p-5 text-center text-white relative overflow-hidden">
-          <div className="absolute inset-0 opacity-20"
-            style={{ background: 'repeating-linear-gradient(45deg,transparent,transparent 10px,rgba(255,255,255,0.1) 10px,rgba(255,255,255,0.1) 20px)' }} />
-          <p className="text-3xl mb-1">🎉</p>
-          <p className="font-black text-lg uppercase tracking-tight">5 km GRÁTIS!</p>
-          <p className="text-[10px] font-bold opacity-80 mt-1">
-            Chegaste aos {Math.round(perk.km_total ?? 0)} km acumulados. A viagem fica por nossa conta!
-          </p>
+      <section className="zr-card zr-card--success zr-pulse">
+        <div className="zr-inline zr-inline--between">
+          <div>
+            <p className="zr-kicker" style={{color: 'white'}}>🎉 Parabéns!</p>
+            <h2 className="zr-section-title" style={{color: 'white'}}>5 km GRÁTIS!</h2>
+            <p className="zr-copy" style={{color: 'white'}}>Chegaste aos {Math.round(perk.km_total ?? 0)} km. A viagem fica por nossa conta!</p>
+          </div>
         </div>
-      </div>
+      </section>
     );
   }
 
   // ─── MODO FREE KM DISPONÍVEL ────────────────────────────────────────────────
   if (hasFreeKm) {
     return (
-      <div className="mx-4 mb-3 animate-in fade-in duration-300">
-        <div className="bg-primary/10 border border-primary/30 rounded-[2rem] px-5 py-3 flex items-center gap-3">
-          <span className="text-xl">🎁</span>
-          <div className="flex-1">
-            <p className="text-[10px] font-black text-primary uppercase tracking-widest">
-              Tens {(perk.free_km_available ?? 0).toFixed(1)} km grátis
-            </p>
-            <p className="text-[9px] text-primary font-bold">
-              Aplicados automaticamente na próxima corrida
-            </p>
+      <section className="zr-card zr-card--success">
+        <div className="zr-inline zr-inline--between">
+          <div>
+            <p className="zr-kicker">Fidelidade Zenith</p>
+            <h2 className="zr-section-title">Tens {(perk.free_km_available ?? 0).toFixed(1)} km grátis</h2>
+            <p className="zr-copy">Aplicados automaticamente na proxima corrida urbana.</p>
           </div>
-          <span className="text-[9px] font-black text-primary bg-primary/15 px-3 py-1 rounded-full">ACTIVO</span>
+          <span className="zr-chip zr-chip--success">Activo</span>
         </div>
-      </div>
+        <div className="zr-progress" style={{ marginTop: '14px' }}>
+          <div className="zr-progress-fill--success zr-progress-fill" style={{ width: '100%' }}></div>
+        </div>
+      </section>
     );
   }
 
   // ─── MODO BARRA DE PROGRESSO ────────────────────────────────────────────────
   return (
-    <div className="mx-4 mb-3">
-      <div className="bg-surface-container-low/80 border border-outline-variant/20 rounded-[2rem] px-5 py-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <span className="text-sm">🛣️</span>
-            <p className="text-[9px] font-black text-outline uppercase tracking-widest">
-              Fidelidade Zenith
-            </p>
-          </div>
-          <p className="text-[9px] font-black text-on-surface-variant">
-            {kmDone} / {PERK_THRESHOLD} km
-            <span className="text-on-surface-variant/70"> → 5 km grátis</span>
-          </p>
+    <section className="zr-card zr-card--success">
+      <div className="zr-inline zr-inline--between">
+        <div>
+          <p className="zr-kicker">Fidelidade Zenith</p>
+          <h2 className="zr-section-title">Acumula km grátis</h2>
+          <p className="zr-copy">Faltam {Math.ceil(perk.km_to_next_perk ?? PERK_THRESHOLD)} km ate ao proximo bonus de 5 km.</p>
         </div>
-
-        <div className="h-2 bg-surface-container-low rounded-full overflow-hidden">
-          <div
-            className="h-full bg-primary rounded-full transition-all duration-1000"
-            style={{ width: `${progressPct}%` }}
-          />
-        </div>
-
-        <p className="text-[8px] text-on-surface-variant/70 font-bold mt-1.5 text-right">
-          Faltam {Math.ceil(perk.km_to_next_perk ?? PERK_THRESHOLD)} km
-        </p>
       </div>
-    </div>
+      <div className="zr-progress" style={{ marginTop: '14px' }}>
+        <div className="zr-progress-fill--success zr-progress-fill" style={{ width: `${progressPct}%` }}></div>
+      </div>
+      <p className="zr-note" style={{ marginTop: '8px' }}>
+        {kmDone} / {PERK_THRESHOLD} km concluidos.
+      </p>
+    </section>
   );
 };
 

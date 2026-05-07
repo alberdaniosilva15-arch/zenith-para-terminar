@@ -27,13 +27,24 @@ export class ReferralService {
       const firstName = (data?.name?.split(' ')[0] || 'ZENITH').toUpperCase().replace(/[^A-Z]/g, '');
       const code = `${firstName}${Math.floor(1000 + Math.random() * 9000)}`;
 
-      const { error: updErr } = await supabase
+      const { data: updated, error: updErr } = await supabase
         .from('profiles')
         .update({ referral_code: code })
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .is('referral_code', null)
+        .select('referral_code')
+        .maybeSingle();
 
       if (updErr) {
         return { code: null, error: { code: updErr.code, message: 'Erro ao gerar código.' } };
+      }
+
+      if (!updated) {
+        // Race condition: outro request já atualizou o código
+        const { data: finalData } = await supabase.from('profiles').select('referral_code').eq('user_id', userId).single();
+        if (finalData?.referral_code) {
+          return { code: finalData.referral_code, error: null };
+        }
       }
 
       return { code, error: null };

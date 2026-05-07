@@ -44,5 +44,33 @@ supabase/.temp/
 # Ficheiros Sensíveis e de Prompt
 *Lukéni Bot*.json
 src_tree.txt
-src_files.txtsupabase/functions/whatsapp-webhook/
+src_files.txt
+supabase/functions/whatsapp-webhook/
 supabase/functions/dispatch-cascade/
+kaze-agent/.kaze-token
+kaze-agent/logs/
+kaze-agent/.hermes-kaze/
+.npm-cache/
+.opencode/
+.qodo/
+test-results/
+e2e-screenshots/
+dist/
+dist-codex-check/
+node_modules/
+zenith-crm-saas/node_modules/
+zenith-crm-saas/dist/
+*.log
+!kaze-agent/logs/.gitkeep
+temp_tail.txt
+temp_user.txt
+models.txt
+ports.txt
+error.txt
+corrigir erros.txt
+src_files.txt
+src_tree.txt
+*.ipynb
+artifacts/
+*.err.log
+*.out.log

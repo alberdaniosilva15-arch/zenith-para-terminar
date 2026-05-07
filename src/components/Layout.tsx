@@ -23,6 +23,7 @@ const TAB_ICONS: Record<TabType, string> = {
   wallet: 'account_balance_wallet',
   profile: 'person',
   precos: 'price_check',
+  admin: 'admin_panel_settings',
 };
 
 const TAB_ROUTES: Record<TabType, string> = {
@@ -33,6 +34,7 @@ const TAB_ROUTES: Record<TabType, string> = {
   wallet: '/wallet',
   profile: '/profile',
   precos: '/precos',
+  admin: '/admin',
 };
 
 const Layout: React.FC<LayoutProps> = ({
@@ -50,14 +52,19 @@ const Layout: React.FC<LayoutProps> = ({
   const isDriver = role === UserRole.DRIVER;
   const isFleetOwner = role === UserRole.FLEET_OWNER;
 
-  const tabs: TabType[] = isFleetOwner
+  const isAdmin = role === UserRole.ADMIN;
+
+  const tabs: TabType[] = isAdmin
+    ? ['home', 'admin', 'profile']
+    : isFleetOwner
     ? ['home', 'profile']
     : isDriver
       ? ['home', 'social', 'rides', 'wallet', 'profile']
       : ['home', 'social', 'precos', 'contrato', 'rides', 'wallet', 'profile'];
 
   return (
-    <div className="relative mx-auto flex min-h-screen max-w-md flex-col overflow-hidden bg-[#0B0B0B]">
+    <div className="zr-shell">
+      <div className="zr-app">
       <header className="fixed top-0 z-50 flex w-full max-w-md items-center justify-between bg-[#0A0A0A] px-5 py-4 shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
         <div className="flex items-center gap-3">
           <div className="golden-gradient gold-box-glow rounded-full px-4 py-1.5 text-sm font-bold italic tracking-tighter shadow-glow">
@@ -106,37 +113,40 @@ const Layout: React.FC<LayoutProps> = ({
         </div>
       </header>
 
-      <main className="no-scrollbar flex-1 overflow-y-auto pb-24 pt-16">
+      <main className="zr-main" style={{ paddingTop: '64px' }}>
         {children}
       </main>
 
       <DevQRCode />
 
-      <nav className="fixed bottom-0 left-1/2 z-50 flex h-20 w-full max-w-md -translate-x-1/2 items-center justify-around border-t border-primary/30 bg-[#000000] px-4">
+      <nav className="zr-bottom-nav">
         {tabs.map((tab) => {
           const active = location.pathname === TAB_ROUTES[tab];
+          const labels: Record<TabType, string> = {
+            home: 'Home',
+            social: 'Social',
+            contrato: 'Contratos',
+            rides: 'Histórico',
+            wallet: 'Carteira',
+            profile: 'Perfil',
+            precos: 'Preços',
+            admin: 'Admin',
+          };
           return (
             <button
               key={tab}
               onClick={() => navigate(TAB_ROUTES[tab])}
-              className={`relative flex flex-1 flex-col items-center justify-center gap-1 py-2 transition-all ${
-                active ? 'text-primary' : 'text-on-surface-variant/30 hover:text-on-surface-variant/60'
-              }`}
+              className={`zr-nav-link ${active ? 'is-active' : ''}`}
             >
-              <span
-                className="material-symbols-outlined"
-                style={{
-                  fontSize: 24,
-                  fontVariationSettings: active ? "'FILL' 1" : "'FILL' 0",
-                }}
-              >
+              <span className="material-symbols-outlined">
                 {TAB_ICONS[tab]}
               </span>
-              {active && <span className="absolute bottom-1 h-1 w-1 rounded-full bg-primary animate-pulse" />}
+              <span>{labels[tab]}</span>
             </button>
           );
         })}
       </nav>
+      </div>
     </div>
   );
 };

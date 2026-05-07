@@ -127,54 +127,53 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
   };
 
   const openWhatsApp = (message: string) => {
-    const phone = emergencyPhone
+    let phone = emergencyPhone
       ? emergencyPhone.replace(/\D/g, '')
       : '';
+    if (phone && !phone.startsWith('244')) {
+      phone = `244${phone}`;
+    }
     const url = phone
-      ? `https://wa.me/244${phone}?text=${message}`
+      ? `https://wa.me/${phone}?text=${message}`
       : `https://wa.me/?text=${message}`;
     window.open(url, '_blank');
   };
 
   return (
-    <div className="space-y-2">
+    <div style={{ marginTop: '8px' }}>
       <button
         onClick={handleShare}
         disabled={loading}
-        className={`w-full py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center gap-2 ${
-          shared
-            ? 'bg-green-500/10 text-green-400 border border-green-500/30 hover:bg-green-500/15'
-            : 'bg-blue-500/10 text-blue-400 border border-blue-500/30 hover:bg-blue-500/15'
-        } disabled:opacity-60`}
+        className={`zr-button zr-button--block ${
+          shared ? 'zr-button--success' : 'zr-button--secondary'
+        }`}
       >
         {loading ? (
-          <>
-            <span className="w-3.5 h-3.5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin" />
-            A gerar link...
-          </>
+          <>A gerar link...</>
         ) : shared ? (
           <>
-            <span>✅</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '8px' }}>check_circle</span>
             Partilhado! Toca para re-enviar
           </>
         ) : (
           <>
-            <span>📡</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '18px', marginRight: '8px' }}>sensors</span>
             Partilhar Corrida ao Vivo
-            {emergencyPhone && <span className="opacity-60">· WhatsApp</span>}
+            {emergencyPhone && <span style={{ opacity: 0.6 }}> · WhatsApp</span>}
           </>
         )}
       </button>
 
       {shared && link && (
         <div
-          className="bg-green-500/5 border border-green-500/20 rounded-xl p-3 flex items-center gap-3 cursor-pointer active:scale-95 transition-all"
+          className="zr-alert-box"
+          style={{ marginTop: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(34,197,94,0.1)', borderColor: 'rgba(34,197,94,0.3)' }}
           onClick={() => navigator.clipboard.writeText(link).catch(() => {})}
         >
-          <span className="text-sm shrink-0">🔗</span>
-          <div className="min-w-0">
-            <p className="text-[9px] font-black uppercase tracking-widest text-green-400 mb-0.5">Link activo · Toca para copiar</p>
-            <p className="text-[9px] text-on-surface-variant/60 font-mono truncate">{link}</p>
+          <span className="material-symbols-outlined" style={{ color: '#22c55e' }}>link</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p className="zr-kicker" style={{ color: '#22c55e' }}>Link activo · Toca para copiar</p>
+            <p className="zr-copy" style={{ opacity: 0.8, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontFamily: 'monospace' }}>{link}</p>
           </div>
         </div>
       )}

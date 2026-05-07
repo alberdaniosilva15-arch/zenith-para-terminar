@@ -115,7 +115,19 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
   }
 
   return (
-    <div className="space-y-4">
+    <section className="zr-card zr-card--hero">
+      <div className="zr-inline zr-inline--between">
+        <div>
+          <p className="zr-kicker">Pedido de corrida</p>
+          <h2 className="zr-section-title">Pedido de corrida e negociacao</h2>
+        </div>
+        {timeLeft > 0 && (
+          <span className="zr-chip zr-chip--warning">
+            Preço bloqueado {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
+          </span>
+        )}
+      </div>
+
       <ServiceCarousel
         selectedVehicle={selectedVehicle}
         onSelectVehicle={handleVehicleChange}
@@ -152,222 +164,131 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
       )}
 
       {fareData && (
-        <div
-          className="space-y-3 rounded-2xl p-5"
-          style={{
-            background: 'linear-gradient(135deg, #0E0E0E 0%, #1A1600 100%)',
-            border: '1px solid rgba(230,195,100,0.3)',
-          }}
-        >
-          <div className="flex items-end justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'rgba(230,195,100,0.5)' }}>
-                Preco estimado
+        <div className="zr-grid zr-grid--2" style={{ marginTop: '14px' }}>
+          <div className="zr-alert-box">
+            <p className="zr-kicker">Preço estimado</p>
+            <h3 className="zr-title zr-title--sm">{finalFare.toLocaleString('pt-AO')} Kz</h3>
+            {hasScoreDiscount && (
+              <p className="zr-copy" style={{ textDecoration: 'line-through', opacity: 0.5 }}>
+                {originalTotal.toLocaleString('pt-AO')} Kz
               </p>
-              <div className="mt-1 flex flex-wrap items-end gap-2">
-                <p className="text-3xl font-black" style={{ color: '#E6C364' }}>
-                  {finalFare.toLocaleString('pt-AO')} Kz
-                </p>
-                {hasScoreDiscount && (
-                  <p className="pb-1 text-sm font-black text-white/35 line-through">
-                    {originalTotal.toLocaleString('pt-AO')} Kz
-                  </p>
-                )}
-              </div>
-            </div>
-            {timeLeft > 0 && (
-              <div className="text-right">
-                <p className="text-[9px] font-bold uppercase tracking-widest" style={{ color: 'rgba(230,195,100,0.4)' }}>
-                  Preco bloqueado
-                </p>
-                <p className="text-sm font-mono font-bold" style={{ color: 'rgba(230,195,100,0.7)' }}>
-                  {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
-                </p>
-              </div>
+            )}
+            {hasScoreDiscount && scoreDiscount?.discount_label && (
+              <p className="zr-copy" style={{ color: 'var(--gold)' }}>
+                -{scoreDiscount.discount_pct}% {scoreDiscount.discount_label}
+              </p>
+            )}
+            {routeData && (
+              <p className="zr-copy">Distância {routeData.distanceKm.toFixed(1)} km - tráfego {routeData.trafficFactor > 1.3 ? 'intenso' : 'leve'}</p>
             )}
           </div>
-
-          {hasScoreDiscount && scoreDiscount?.discount_label && (
-            <div
-              className="inline-flex w-fit rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-wide"
-              style={{
-                background: 'rgba(230,195,100,0.12)',
-                border: '1px solid rgba(230,195,100,0.35)',
-                color: '#E6C364',
-              }}
+          <div className="zr-alert-box">
+            <p className="zr-kicker">Pagamento</p>
+            <div className="zr-inline" style={{ marginTop: '6px' }}>
+              <span className="zr-chip zr-chip--gold">Saldo Zenith</span>
+              <span className="zr-chip">Cash</span>
+              <span className="zr-chip">Multicaixa</span>
+            </div>
+            
+            <button
+              onClick={() => setHasInsurance((value) => !value)}
+              className="zr-chip"
+              style={{ marginTop: '8px', width: '100%', justifyContent: 'space-between', borderColor: hasInsurance ? 'var(--primary)' : undefined }}
             >
-              -{scoreDiscount.discount_pct}% {scoreDiscount.discount_label}
-            </div>
-          )}
-
-          {fareData.badges.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {fareData.badges.map((badge, index) => (
-                <span
-                  key={`${badge}-${index}`}
-                  className="rounded-full px-2 py-1 text-[9px] font-black uppercase tracking-wider"
-                  style={{
-                    background: 'rgba(230,195,100,0.12)',
-                    border: '1px solid rgba(230,195,100,0.3)',
-                    color: '#E6C364',
-                  }}
-                >
-                  {badge}
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div
-            onClick={() => setHasInsurance((value) => !value)}
-            className={`flex cursor-pointer items-center justify-between rounded-xl border p-3 transition-all ${
-              hasInsurance
-                ? 'border-primary bg-primary/10'
-                : 'border-white/10 bg-white/5 hover:bg-white/10'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className={`flex h-5 w-5 items-center justify-center rounded-full border-2 ${hasInsurance ? 'border-primary bg-primary' : 'border-white/30'}`}>
-                {hasInsurance && <span className="text-[10px] font-black text-white">OK</span>}
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xs font-black leading-tight text-white">Seguro Zenith Basic</span>
-                <span className="text-[9px] font-bold leading-tight text-white/50">Proteccao em viagem</span>
-              </div>
-            </div>
-            <span className="text-xs font-black text-primary">+50 Kz</span>
+              <span>Seguro Zenith {hasInsurance && '✓'}</span>
+              <span style={{ color: 'var(--primary)' }}>+50 Kz</span>
+            </button>
           </div>
-
-          {routeData && (
-            <div className="flex gap-4 border-t pt-2" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-              <MetricBlock label="Distancia" value={`${routeData.distanceKm.toFixed(1)} km`} />
-              <MetricBlock label="Tempo" value={`~${Math.round(routeData.durationMin)} min`} />
-              {routeData.trafficFactor > 1.3 && (
-                <MetricBlock label="Trafego" value="Intenso" tone="#ff6b35" />
-              )}
-            </div>
-          )}
         </div>
       )}
 
       {!fareData ? (
-        <button
-          onClick={isReady ? onCalculatePrice : onCallTaxi}
-          disabled={searching || calculating}
-          className={`w-full rounded-[2.5rem] py-6 text-lg font-black uppercase tracking-[0.15em] shadow-2xl transition-all active:scale-98 disabled:opacity-50 ${
-            isReady
-              ? 'bg-primary text-white shadow-[0_20px_50px_rgba(37,99,235,0.4)]'
-              : 'border border-white/10 bg-[#1a1a1a] text-white'
-          }`}
-        >
-          {calculating ? (
-            <span className="flex items-center justify-center gap-3">
-              <span className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-              A calcular rota...
-            </span>
-          ) : searching ? (
-            <span className="flex items-center justify-center gap-3">
-              <span className="h-5 w-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-              A localizar...
-            </span>
-          ) : isReady ? (
-            'CALCULAR PRECO'
-          ) : (
-            'CHAMAR TAXI'
-          )}
-        </button>
-      ) : (
-        <div className="space-y-3">
+        <div style={{ marginTop: '14px' }}>
           <button
-            onClick={() => onConfirmRideRequest(finalFare)}
-            disabled={timeLeft === 0}
-            className="w-full rounded-[2.5rem] py-6 text-lg font-black uppercase tracking-[0.15em] shadow-2xl transition-all active:scale-98 disabled:opacity-40"
-            style={{ background: '#E6C364', color: '#050505', boxShadow: '0 20px 50px rgba(230,195,100,0.35)' }}
+            onClick={isReady ? onCalculatePrice : onCallTaxi}
+            disabled={searching || calculating}
+            className={`zr-button zr-button--block ${isReady ? '' : 'zr-button--secondary'}`}
           >
-            PEDIR CORRIDA - {finalFare.toLocaleString('pt-AO')} Kz
+            {calculating ? 'A calcular rota...' : searching ? 'A localizar...' : isReady ? 'Calcular Preço' : 'Chamar Táxi'}
           </button>
+        </div>
+      ) : (
+        <div className="zr-card" style={{ marginTop: '14px', padding: '14px', background: 'rgba(230,195,100,0.08)' }}>
+          <div className="zr-inline zr-inline--between">
+            <div>
+              <p className="zr-kicker">Negociação</p>
+              <p className="zr-copy">
+                {!showNegotiate
+                  ? "Podes propor um preço aos motoristas próximos."
+                  : `A tua proposta: ${proposedPrice || '0'} Kz`
+                }
+              </p>
+            </div>
+            {hasScoreDiscount && <span className="zr-chip zr-chip--gold">-{scoreDiscount?.discount_pct}%</span>}
+          </div>
 
           {!showNegotiate ? (
-            <button
-              onClick={() => {
+            <div className="zr-inline" style={{ marginTop: '12px' }}>
+              <button className="zr-button zr-button--sm animate-shimmer" onClick={() => onConfirmRideRequest(finalFare)} disabled={timeLeft === 0}>
+                Pedir corrida
+              </button>
+              <button className="zr-button zr-button--sm zr-button--ghost" onClick={() => {
                 setShowNegotiate(true);
                 setProposedPrice(String(Math.round(discountedBaseFare * 0.85) + insurancePrice));
-              }}
-              className="w-full rounded-2xl border-2 border-dashed py-4 text-[11px] font-black uppercase tracking-widest transition-all active:scale-98"
-              style={{
-                borderColor: 'rgba(230,195,100,0.4)',
-                color: '#E6C364',
-                background: 'rgba(230,195,100,0.05)',
-              }}
-            >
-              Podemos negociar?
-            </button>
+              }}>
+                Lançar proposta
+              </button>
+            </div>
           ) : (
-            <div
-              className="space-y-3 rounded-2xl p-4"
-              style={{ background: 'rgba(230,195,100,0.08)', border: '1px solid rgba(230,195,100,0.25)' }}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#E6C364' }}>
-                  A tua proposta
-                </p>
-                <button onClick={() => setShowNegotiate(false)} className="text-[9px] font-black uppercase text-white/40">
-                  Fechar
-                </button>
+            <div style={{ marginTop: '14px' }}>
+              <div className="zr-inline" style={{ gap: '8px', marginBottom: '14px' }}>
+                <input
+                  type="number"
+                  value={proposedPrice}
+                  onChange={(event) => setProposedPrice(event.target.value)}
+                  className="zr-input"
+                  style={{ flex: 1, textAlign: 'center', fontSize: '18px', fontWeight: 'bold' }}
+                  placeholder="0 Kz"
+                />
               </div>
-              <div className="flex items-center gap-3">
-                <div className="relative flex-1">
-                  <input
-                    type="number"
-                    value={proposedPrice}
-                    onChange={(event) => setProposedPrice(event.target.value)}
-                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-center text-xl font-black text-white outline-none focus:border-[#E6C364]/50"
-                    placeholder="0"
-                    min={100}
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-black text-white/40">Kz</span>
-                </div>
-              </div>
-              <div className="flex gap-2">
+              <div className="zr-grid zr-grid--4" style={{ marginBottom: '14px' }}>
                 {[0.8, 0.85, 0.9, 0.95].map((pct) => {
                   const value = Math.round(discountedBaseFare * pct) + insurancePrice;
                   return (
                     <button
                       key={pct}
                       onClick={() => setProposedPrice(String(value))}
-                      className={`flex-1 rounded-lg py-2 text-[9px] font-black transition-all ${
-                        proposedPrice === String(value)
-                          ? 'bg-[#E6C364] text-black'
-                          : 'bg-white/5 text-white/50'
-                      }`}
+                      className="zr-chip"
+                      style={{ background: proposedPrice === String(value) ? 'var(--gold)' : 'transparent', color: proposedPrice === String(value) ? 'var(--bg)' : 'var(--gold)' }}
                     >
                       -{Math.round((1 - pct) * 100)}%
                     </button>
                   );
                 })}
               </div>
-              <p className="text-center text-[8px] font-bold text-white/30">
-                Motoristas proximos vao ver a tua proposta e decidir se aceitam.
-              </p>
-              <button
-                onClick={() => {
-                  const value = parseInt(proposedPrice, 10);
-                  if (!Number.isNaN(value) && value >= 100) {
-                    onNegotiate?.(value);
-                    setShowNegotiate(false);
-                  }
-                }}
-                disabled={!proposedPrice || parseInt(proposedPrice, 10) < 100}
-                className="w-full rounded-2xl py-4 text-sm font-black uppercase tracking-widest transition-all active:scale-98 disabled:opacity-40"
-                style={{ background: '#E6C364', color: '#050505' }}
-              >
-                LANCAR PROPOSTA - {proposedPrice ? parseInt(proposedPrice, 10).toLocaleString('pt-AO') : '0'} Kz
-              </button>
+              <div className="zr-inline">
+                <button
+                  onClick={() => {
+                    const value = parseInt(proposedPrice, 10);
+                    if (!Number.isNaN(value) && value >= 100) {
+                      onNegotiate?.(value);
+                      setShowNegotiate(false);
+                    }
+                  }}
+                  disabled={!proposedPrice || parseInt(proposedPrice, 10) < 100}
+                  className="zr-button zr-button--sm"
+                >
+                  Lançar {proposedPrice} Kz
+                </button>
+                <button className="zr-button zr-button--sm zr-button--ghost" onClick={() => setShowNegotiate(false)}>
+                  Cancelar
+                </button>
+              </div>
             </div>
           )}
         </div>
       )}
-    </div>
+    </section>
   );
 };
 

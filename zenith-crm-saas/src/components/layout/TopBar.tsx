@@ -4,11 +4,14 @@ import { RefreshCw, Bell } from 'lucide-react';
 
 const PAGE_TITLES: Record<string, string> = {
   '/dashboard':  'Dashboard Central',
+  '/kaze':       'KAZE Agente IA',
   '/pricing':    'Pricing Engine',
   '/drivers':    'Gestão de Motoristas',
   '/passengers': 'Gestão de Passageiros',
+  '/contracts':  'Contratos IA',
   '/rides':      'Corridas',
   '/finance':    'Painel Financeiro',
+  '/admins':     'Equipa Admin',
   '/tenants':    'White-Label / Tenants',
   '/settings':   'Configurações',
 };

@@ -2,6 +2,7 @@ import React, { Suspense, useEffect, useRef } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import FullPageSpinner from './components/FullPageSpinner';
+import { hasRecoveryType } from './lib/authUtils';
 
 const Login = React.lazy(() => import('./components/Login'));
 const ParentTrackingPage = React.lazy(() => import('./components/ParentTrackingPage'));
@@ -97,6 +98,12 @@ function SessionResetScreen({ onSignOut }: { onSignOut: () => Promise<void> }) {
   return <FullPageSpinner label="A limpar a sessao antiga..." />;
 }
 
+function hasSessionResetRequest(pathname: string, search: string): boolean {
+  if (pathname === '/logout' || pathname === '/switch-account') return true;
+  const searchParams = new URLSearchParams(search);
+  return searchParams.get('logout') === '1' || searchParams.get('switch') === '1';
+}
+
 function AuthShellRoutes() {
   const { dbUser, loading, session, signOut } = useAuth();
   const location = useLocation();
@@ -170,19 +177,5 @@ const App: React.FC = () => {
 
 export default App;
 
-function hasRecoveryType(search: string, hash: string): boolean {
-  const searchParams = new URLSearchParams(search);
-  if (searchParams.get('type') === 'recovery') return true;
 
-  const normalizedHash = hash.startsWith('#') ? hash.slice(1) : hash;
-  if (!normalizedHash) return false;
 
-  const hashParams = new URLSearchParams(normalizedHash);
-  return hashParams.get('type') === 'recovery';
-}
-
-function hasSessionResetRequest(pathname: string, search: string): boolean {
-  if (pathname === '/logout' || pathname === '/switch-account') return true;
-  const searchParams = new URLSearchParams(search);
-  return searchParams.get('logout') === '1' || searchParams.get('switch') === '1';
-}

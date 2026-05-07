@@ -1,23 +1,11 @@
-// =============================================================================
-// ZENITH RIDE v3.3 — SocialFeed.tsx
-// FEATURES v3.3:
-//   1. Mensagens auto-destrutivas: default 24h, opção 1h/6h/12h/24h
-//   2. Campo expires_at inserido no BD — cron job apaga no servidor
-//   3. Filtro frontend (defesa em profundidade)
-//   4. Tempo restante mostrado em cada post
-//   5. Posts expirados removidos do state a cada 60s
-// =============================================================================
-
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import type { Post } from '../types';
 import { UserRole } from '../types';
-import { MessageSquare, Heart, Share2, Send, MapPin, ShieldCheck, Clock, Trash2 } from 'lucide-react';
 
 const ZONES = ['Geral', 'Viana', 'Kilamba', 'Talatona', 'Cazenga', 'Maianga', 'Zango'];
 
-// Opções de temporizador auto-destrutivo
 const TIMER_OPTIONS = [
   { label: '1h',  value: 1,  ms: 1 * 60 * 60 * 1000 },
   { label: '6h',  value: 6,  ms: 6 * 60 * 60 * 1000 },
@@ -36,20 +24,18 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
   const [loading,  setLoading]  = useState(true);
   const [posting,  setPosting]  = useState(false);
   const [likedIds, setLikedIds] = useState<Set<string>>(new Set());
-  const [timerHours, setTimerHours] = useState(24); // default 24h
+  const [timerHours, setTimerHours] = useState(24);
   const [showTimerPicker, setShowTimerPicker] = useState(false);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Filtrar posts expirados no frontend ─────────────────────────────────────
   const filterExpired = (postList: Post[]): Post[] => {
     const now = Date.now();
     return postList.filter(p => {
-      if (!p.expiresAt) return true; // sem expiração = visível
+      if (!p.expiresAt) return true;
       return p.expiresAt > now;
     });
   };
 
-  // ── Tick automático: remover posts expirados a cada 30s ──────────────────────
   useEffect(() => {
     tickRef.current = setInterval(() => {
       setPosts(prev => filterExpired(prev));
@@ -57,14 +43,12 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     return () => { if (tickRef.current) clearInterval(tickRef.current); };
   }, []);
 
-  // ── Carregar posts ───────────────────────────────────────────────────────────
   useEffect(() => {
     let mounted = true;
 
     const load = async () => {
       setLoading(true);
 
-      // Carregar posts activos (com expires_at no futuro ou null)
       const { data, error } = await supabase
         .from('posts')
         .select('id, user_id, content, post_type, location, likes, created_at, expires_at')
@@ -73,14 +57,12 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
         .limit(30);
 
       if (error) {
-        console.error('[SocialFeed] Erro na query posts:', error.message);
         if (mounted) setLoading(false);
         return;
       }
 
       if (!data || !mounted) { setLoading(false); return; }
 
-      // Buscar nomes em batch
       const ids = [...new Set(data.map((p: any) => p.user_id))];
       
       let profileRows: any[] = [];
@@ -156,11 +138,7 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
         const d = payload.old as any;
         setPosts(prev => prev.filter(p => p.id !== d.id));
       })
-      .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR') {
-          console.warn('[SocialFeed] Realtime channel error — a trabalhar sem RT.');
-        }
-      });
+      .subscribe();
 
     return () => {
       mounted = false;
@@ -168,12 +146,10 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     };
   }, [userId, userName, role]);
 
-  // ── Publicar post ────────────────────────────────────────────────────────────
   const handlePost = async () => {
     if (!newPost.trim() || posting) return;
     setPosting(true);
 
-    // Calcular expiração
     const expiresAt = new Date(Date.now() + timerHours * 60 * 60 * 1000).toISOString();
 
     const { error } = await supabase.from('posts').insert({
@@ -185,19 +161,13 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
       expires_at: expiresAt,
     });
 
-    if (error) {
-      console.error('[SocialFeed] Erro ao publicar:', error.message);
-      alert('❌ Não foi possível publicar. Verifica a tua ligação e tenta de novo.');
-    } else {
-      setNewPost('');
-    }
+    if (!error) setNewPost('');
     setPosting(false);
   };
 
-  // ── Apagar post manualmente ──────────────────────────────────────────────────
   const handleDelete = async (postId: string, postUserId: string) => {
     if (postUserId !== userId) return;
-    if (!confirm('Tens a certeza que queres apagar este post?')) return;
+    if (!confirm('Apagar este post?')) return;
     
     const { error } = await supabase.from('posts').delete().eq('id', postId);
     if (!error) {
@@ -212,13 +182,10 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     setLikedIds(prev => new Set([...prev, post.id]));
     setPosts(prev => prev.map(p => p.id === post.id ? { ...p, likes: optimisticLikes } : p));
 
-    const { data, error } = await supabase.rpc('increment_post_likes', {
-      p_post_id: post.id,
-    });
+    const { data, error } = await supabase.rpc('increment_post_likes', { p_post_id: post.id });
     const nextLikes = Number(data);
 
     if (error || !Number.isFinite(nextLikes) || nextLikes < 0) {
-      if (error) console.error('[SocialFeed] Erro ao dar like:', error.message);
       setLikedIds(prev => {
         const next = new Set(prev);
         next.delete(post.id);
@@ -233,10 +200,10 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
 
   const timeAgo = (ts: number) => {
     const diff = Math.floor((Date.now() - ts) / 60000);
-    if (diff < 1) return 'agora mesmo';
-    if (diff < 60) return `${diff}m atrás`;
-    if (diff < 1440) return `${Math.floor(diff / 60)}h atrás`;
-    return `${Math.floor(diff / 1440)}d atrás`;
+    if (diff < 1) return 'agora';
+    if (diff < 60) return `${diff}m`;
+    if (diff < 1440) return `${Math.floor(diff / 60)}h`;
+    return `${Math.floor(diff / 1440)}d`;
   };
 
   const timeRemaining = (expiresAt: number | null | undefined) => {
@@ -245,255 +212,168 @@ const SocialFeed: React.FC<{ userId: string; userName: string; role: UserRole }>
     if (remaining <= 0) return 'expirado';
     const hours = Math.floor(remaining / 3600000);
     const mins  = Math.floor((remaining % 3600000) / 60000);
-    if (hours > 0) return `⏱ ${hours}h restantes`;
-    return `⏱ ${Math.max(mins, 1)}min`;
+    if (hours > 0) return `${hours}h restantes`;
+    return `${Math.max(mins, 1)}m restantes`;
   };
 
   const expiryProgress = (timestamp: number, expiresAt: number | null | undefined) => {
     if (!expiresAt) return null;
-
     const totalWindow = Math.max(expiresAt - timestamp, 1);
     const remaining = Math.max(0, expiresAt - Date.now());
     const progress = Math.max(6, Math.min(100, Math.round((remaining / totalWindow) * 100)));
-
-    return {
-      progress,
-      urgent: remaining < 3600000,
-    };
+    return { progress, urgent: remaining < 3600000 };
   };
 
   return (
-    <div className="flex flex-col bg-surface-container-lowest pb-24 min-h-screen">
+    <div className="zr-app" style={{ minHeight: '100vh', paddingBottom: '120px' }}>
+      <header className="zr-header">
+        <p className="zr-kicker">Comunidade</p>
+        <h2 className="zr-section-title">Feed Zenith</h2>
+      </header>
 
-      {/* Header */}
-      <div className="bg-surface-container-low p-4 border-b border-outline-variant/20 sticky top-0 z-10 shadow-sm">
-        <h2 className="text-lg font-black text-on-surface flex items-center gap-2">
-          <ShieldCheck className="w-5 h-5 text-primary" />
-          Comunidade Zenith
-        </h2>
-        <p className="text-xs text-outline font-bold">Alertas e status em tempo real de Luanda · Mensagens auto-destrutivas</p>
+      {/* Zones / Filters */}
+      <div className="zr-scroll-x" style={{ padding: '0 14px 14px' }}>
+        {ZONES.map(z => (
+          <button 
+            key={z} 
+            className={`zr-chip ${zone === z ? 'zr-chip--gold' : 'zr-chip--muted'}`}
+            onClick={() => setZone(z)}
+          >
+            {z}
+          </button>
+        ))}
       </div>
 
-      {/* Criar post */}
-      <div className="bg-surface-container-low p-4 mb-2 shadow-sm border-b border-outline-variant/10">
-        {/* Zonas */}
-        <div className="flex gap-2 overflow-x-auto no-scrollbar mb-4">
-          {ZONES.map(z => (
-            <button key={z} onClick={() => setZone(z)}
-              className={`px-4 py-2 rounded-full text-[9px] font-black uppercase shrink-0 transition-all border ${
-                zone === z
-                  ? 'bg-surface-container-highest text-white border-outline-variant'
-                  : 'bg-surface-container-low text-on-surface-variant/70 border-outline-variant/30 hover:border-outline-variant'
-              }`}>
-              {z}
-            </button>
-          ))}
-        </div>
-
-        {/* Tipo */}
-        <div className="flex gap-2 mb-4">
+      {/* Create Post */}
+      <section className="zr-card" style={{ marginInline: '14px', marginBottom: '24px' }}>
+        <div style={{ marginBottom: '12px' }}>
           {(['status', 'alert', 'event'] as const).map(t => (
-            <button key={t} onClick={() => setPostType(t)}
-              className={`px-4 py-2 rounded-full text-[9px] font-black uppercase transition-all border ${
-                postType === t
-                  ? t === 'alert' ? 'bg-red-600 text-white border-red-600'
-                  : t === 'event' ? 'bg-primary text-white border-primary'
-                  : 'bg-surface-container-highest text-white border-outline-variant'
-                  : 'bg-surface-container-low text-on-surface-variant/70 border-outline-variant/30'
-              }`}>
-              {t === 'status' ? '💬 Status' : t === 'alert' ? '🚨 Alerta' : '📍 Evento'}
+            <button 
+              key={t} 
+              onClick={() => setPostType(t)}
+              className={`zr-chip ${postType === t ? (t === 'alert' ? 'zr-chip--danger' : t === 'event' ? 'zr-chip--info' : 'zr-chip--gold') : 'zr-chip--muted'}`}
+              style={{ marginRight: '8px' }}
+            >
+              {t === 'status' ? 'Status' : t === 'alert' ? 'Alerta' : 'Evento'}
             </button>
           ))}
         </div>
+        
+        <textarea
+          value={newPost}
+          onChange={e => setNewPost(e.target.value)}
+          placeholder="Partilha o que se passa..."
+          className="zr-textarea"
+          rows={2}
+          style={{ width: '100%', marginBottom: '12px' }}
+        />
 
-        <div className="flex gap-3">
-          <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-black shrink-0">
-            {(userName || 'U').charAt(0).toUpperCase()}
-          </div>
-          <div className="flex-1">
-            <textarea
-              value={newPost}
-              onChange={e => setNewPost(e.target.value)}
-              placeholder={
-                postType === 'alert' ? '🚨 Reporta um alerta de trânsito...' :
-                postType === 'event' ? '📍 Partilha um evento em Luanda...' :
-                '💬 O que está a acontecer no trânsito?'
-              }
-              className="w-full p-3 bg-surface-container-lowest rounded-xl text-sm border border-outline-variant/20 outline-none focus:ring-2 focus:ring-primary/30 resize-none font-bold text-on-surface"
-              rows={2}
-              maxLength={280}
-            />
-            <div className="flex justify-between items-center mt-2">
-              <div className="flex items-center gap-3">
-                <div className="flex items-center gap-1 text-xs text-on-surface-variant/70">
-                  <MapPin className="w-3 h-3" />
-                  <span className="font-bold">{zone}</span>
-                  <span className="text-on-surface-variant/40">· {newPost.length}/280</span>
-                </div>
-
-                {/* Temporizador auto-destrutivo */}
-                <div className="relative">
-                  <button
-                    onClick={() => setShowTimerPicker(!showTimerPicker)}
-                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-surface-container-lowest border border-outline-variant/20 text-[9px] font-black text-on-surface-variant/70 hover:border-primary/50 transition-all"
+        <div className="zr-inline zr-inline--between">
+          <div style={{ position: 'relative' }}>
+            <button className="zr-chip zr-chip--muted" onClick={() => setShowTimerPicker(!showTimerPicker)}>
+              ⏱ {timerHours}h
+            </button>
+            {showTimerPicker && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, marginTop: '8px', background: 'var(--surface-3)', borderRadius: '12px', padding: '8px', zIndex: 10, display: 'flex', gap: '4px' }}>
+                {TIMER_OPTIONS.map(opt => (
+                  <button 
+                    key={opt.value}
+                    className="zr-button zr-button--sm zr-button--ghost"
+                    onClick={() => { setTimerHours(opt.value); setShowTimerPicker(false); }}
+                    style={{ minWidth: '40px', padding: '0 8px' }}
                   >
-                    <Clock className="w-3 h-3" />
-                    <span>⏱️ {timerHours}h</span>
+                    {opt.label}
                   </button>
-                  
-                  {showTimerPicker && (
-                    <div className="absolute bottom-full left-0 mb-2 bg-surface-container-highest border border-outline-variant/30 rounded-xl shadow-2xl p-2 z-20 flex gap-1 animate-in slide-in-from-bottom-5 duration-200">
-                      {TIMER_OPTIONS.map(opt => (
-                        <button
-                          key={opt.value}
-                          onClick={() => { setTimerHours(opt.value); setShowTimerPicker(false); }}
-                          className={`px-3 py-1.5 rounded-lg text-[9px] font-black transition-all ${
-                            timerHours === opt.value
-                              ? 'bg-primary text-white'
-                              : 'text-on-surface-variant/70 hover:bg-surface-container-low'
-                          }`}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                ))}
               </div>
-
-              <button
-                onClick={handlePost}
-                disabled={posting || !newPost.trim()}
-                className="gilded-gradient text-on-primary px-4 py-1.5 rounded-full text-xs font-black flex items-center gap-2 disabled:opacity-50 hover:opacity-90 active:scale-95 transition-all"
-              >
-                <Send className="w-3 h-3" />
-                {posting ? 'A publicar...' : 'Publicar'}
-              </button>
-            </div>
+            )}
           </div>
+          
+          <button 
+            onClick={handlePost} 
+            disabled={posting || !newPost.trim()}
+            className="zr-button zr-button--sm"
+          >
+            {posting ? 'A enviar...' : 'Publicar'}
+          </button>
         </div>
-      </div>
+      </section>
 
       {/* Feed */}
-      <div className="flex-1 space-y-2 p-3">
+      <div style={{ padding: '0 14px' }}>
         {loading ? (
-          <div className="flex flex-col items-center justify-center py-12 gap-3">
-            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-            <p className="text-[10px] font-black text-on-surface-variant/50 uppercase tracking-widest">A carregar feed...</p>
+          <div style={{ padding: '40px 0', textAlign: 'center' }}>
+            <div className="zr-loading-dots"><span></span><span></span><span></span></div>
           </div>
         ) : posts.length === 0 ? (
-          <div className="text-center py-12">
-            <p className="text-3xl mb-3">📻</p>
-            <p className="font-black text-on-surface-variant/70 text-sm">Ainda sem publicações</p>
-            <p className="text-xs text-on-surface-variant/50 mt-1 font-bold">Sê o primeiro a partilhar um alerta!</p>
+          <div className="zr-empty">
+            <span className="material-symbols-outlined" style={{ fontSize: '48px', color: 'var(--muted)' }}>forum</span>
+            <p>Nenhuma publicação encontrada.</p>
           </div>
         ) : (
           posts.map(post => {
             const expiry = expiryProgress(post.timestamp, post.expiresAt);
             return (
-            <div key={post.id}
-              className={`bg-surface-container-low p-4 rounded-2xl shadow-sm border border-outline-variant/20 animate-in fade-in duration-300 overflow-hidden ${
-                expiry?.urgent ? 'opacity-70' : ''
-              }`}>
-
-              {expiry && (
-                <div className="mb-4 -mx-4 -mt-4 h-1 bg-white/5">
-                  <div
-                    className={`h-full ${expiry.urgent ? 'bg-red-400' : 'bg-primary'}`}
-                    style={{ width: `${expiry.progress}%` }}
-                  />
-                </div>
-              )}
-
-              <div className="flex justify-between items-start mb-3">
-                <div className="flex gap-3 items-center">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-black text-sm ${
-                    post.userRole === UserRole.DRIVER ? 'bg-primary/15 text-primary' : 'bg-primary/10 text-primary'
-                  }`}>
-                    {(post.userName || 'U').charAt(0).toUpperCase()}
+              <div key={post.id} className="zr-card zr-post" style={{ marginBottom: '14px', position: 'relative', overflow: 'hidden' }}>
+                {/* Expire bar */}
+                {expiry && (
+                  <div className="zr-post-bar" style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', background: 'var(--line)' }}>
+                    <div style={{ width: `${expiry.progress}%`, height: '100%', background: expiry.urgent ? 'var(--danger)' : 'var(--gold)' }} />
+                  </div>
+                )}
+                
+                <div className="zr-inline zr-inline--between" style={{ marginBottom: '12px', marginTop: expiry ? '8px' : '0' }}>
+                  <div className="zr-inline">
+                    <div className="zr-avatar" style={{ width: '32px', height: '32px', fontSize: '12px' }}>
+                      {(post.userName || 'U').charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '13px' }}>{post.userName}</strong>
+                      <span className="zr-meta">{timeAgo(post.timestamp)} {post.location && `· ${post.location}`}</span>
+                    </div>
                   </div>
                   <div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-sm font-black text-on-surface">{post.userName}</span>
-                      {post.userRole === UserRole.DRIVER && (
-                        <span className="text-[8px] bg-primary/15 text-primary px-1.5 py-0.5 rounded font-black uppercase">Motorista</span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] text-on-surface-variant/70 font-bold">{timeAgo(post.timestamp)}</span>
-                      {post.location && (
-                        <span className="text-[9px] text-on-surface-variant/70 font-bold flex items-center gap-0.5">
-                          <MapPin className="w-2.5 h-2.5" />{post.location}
-                        </span>
-                      )}
-                    </div>
+                    {post.type === 'alert' && <span className="zr-chip zr-chip--danger">Alerta</span>}
+                    {post.type === 'event' && <span className="zr-chip zr-chip--info">Evento</span>}
+                    {post.type === 'status' && <span className="zr-chip zr-chip--muted">Status</span>}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
-                  {/* Tempo restante */}
+                <p className="zr-copy" style={{ marginBottom: '16px', color: 'var(--text)' }}>
+                  {post.content}
+                </p>
+
+                <div className="zr-inline" style={{ borderTop: '1px solid var(--line)', paddingTop: '12px', gap: '16px' }}>
+                  <button 
+                    onClick={() => handleLike(post)} 
+                    style={{ background: 'none', border: 'none', color: likedIds.has(post.id) ? 'var(--danger)' : 'var(--muted)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 'bold' }}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: '18px', fontVariationSettings: likedIds.has(post.id) ? "'FILL' 1" : "'FILL' 0" }}>favorite</span>
+                    {post.likes}
+                  </button>
+                  <button style={{ background: 'none', border: 'none', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', fontWeight: 'bold' }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>chat_bubble</span>
+                    {post.comments}
+                  </button>
+                  
+                  {post.userId === userId && (
+                    <button 
+                      onClick={() => handleDelete(post.id, post.userId)}
+                      style={{ background: 'none', border: 'none', color: 'var(--muted)', marginLeft: 'auto', display: 'flex', alignItems: 'center' }}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>delete</span>
+                    </button>
+                  )}
+                  
                   {post.expiresAt && (
-                    <span className={`text-[8px] font-black px-2 py-0.5 rounded-full flex items-center gap-1 ${
-                      (post.expiresAt - Date.now()) < 3600000
-                        ? 'bg-red-500/15 text-red-400 animate-pulse'
-                        : 'bg-surface-container text-on-surface-variant/50'
-                    }`}>
+                    <span className="zr-meta" style={{ marginLeft: post.userId === userId ? '12px' : 'auto' }}>
                       {timeRemaining(post.expiresAt)}
                     </span>
                   )}
-
-                  {post.type === 'alert' && (
-                    <span className="text-[9px] bg-red-100 text-red-600 px-2 py-1 rounded-full font-black uppercase animate-pulse">
-                      🚨 Alerta
-                    </span>
-                  )}
-                  {post.type === 'event' && (
-                    <span className="text-[9px] bg-primary/10 text-primary px-2 py-1 rounded-full font-black uppercase">
-                      📍 Evento
-                    </span>
-                  )}
-                  {post.type === 'status' && (
-                    <span className="text-[9px] bg-blue-500/10 text-blue-400 px-2 py-1 rounded-full font-black uppercase">
-                      💬 Status
-                    </span>
-                  )}
                 </div>
               </div>
-
-              <p className="text-sm text-on-surface-variant leading-relaxed mb-4 font-bold">{post.content}</p>
-
-              <div className="flex items-center gap-6 pt-3 border-t border-outline-variant/10">
-                <button
-                  onClick={() => handleLike(post)}
-                  className={`flex items-center gap-1.5 transition-colors ${
-                    likedIds.has(post.id) ? 'text-red-500' : 'text-on-surface-variant/70 hover:text-red-500'
-                  }`}
-                >
-                  <Heart className={`w-4 h-4 ${likedIds.has(post.id) ? 'fill-current' : ''}`} />
-                  <span className="text-xs font-bold">{post.likes}</span>
-                </button>
-                <button className="flex items-center gap-1.5 text-on-surface-variant/70 hover:text-primary transition-colors">
-                  <MessageSquare className="w-4 h-4" />
-                  <span className="text-xs font-bold">{post.comments}</span>
-                </button>
-                
-                {/* Botão apagar (só para o autor) */}
-                {post.userId === userId && (
-                  <button 
-                    onClick={() => handleDelete(post.id, post.userId)}
-                    className="flex items-center gap-1.5 text-on-surface-variant/70 hover:text-red-500 transition-colors"
-                    title="Apagar mensagem"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
-
-                <button className="flex items-center gap-1.5 text-on-surface-variant/70 hover:text-on-surface-variant transition-colors ml-auto">
-                  <Share2 className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          )})
+            );
+          })
         )}
       </div>
     </div>

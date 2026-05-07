@@ -10,8 +10,7 @@
 //   - AI Vigilante (alertas)
 // =============================================================================
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import FullPageSpinner from './FullPageSpinner';
 import { AutonomousCommand, UserRole } from '../types';
@@ -23,6 +22,8 @@ import { AdminDriverDocs } from './AdminDriverDocs';
 import AdminSOSPanel from './admin/AdminSOSPanel';
 import AdminUsersPanel from './admin/AdminUsersPanel';
 import AdminServicesPanel from './admin/AdminServicesPanel';
+
+const LazyMarketChart = lazy(() => import('./admin/MarketChart'));
 
 interface AdminDashboardProps {
   lastCommand?: AutonomousCommand | null;
@@ -82,6 +83,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
   const [loading, setLoading]     = useState(false);
   const [metrics, setMetrics]     = useState<DashboardMetrics>(INITIAL_METRICS);
   const [zonesData, setZonesData] = useState<{ name: string; demand: number; risk: number }[]>([]);
+  const [loadingZones, setLoadingZones] = useState(true);
   const [activeSosCount, setActiveSosCount] = useState(0);
   const [referralStats, setReferralStats] = useState<ReferralStats>(INITIAL_REFERRAL_STATS);
   
@@ -320,10 +322,16 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
     const mapboxgl = mapboxglRef.current;
     if (!mapboxgl) return;
 
-    // Markers de motoristas
     driverMarkers.forEach(d => {
       const el = document.createElement('div');
       el.className = 'admin-driver-marker';
+      const safeName = (d.name ?? 'Motorista')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+        
       el.innerHTML = `
         <div style="
           width: 14px; height: 14px; border-radius: 50%;
@@ -337,7 +345,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
           background: rgba(0,0,0,0.8); color: white; font-size: 8px; font-weight: 900;
           padding: 2px 6px; border-radius: 6px; white-space: nowrap;
           letter-spacing: 0.05em; text-transform: uppercase;
-        ">${d.name ?? 'Motorista'}</div>
+        ">${safeName}</div>
       `;
 
       const marker = new mapboxgl.Marker({ element: el })
@@ -350,13 +358,9 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
     activeRides.forEach(r => {
       if (r.origin_lat && r.origin_lng) {
         const el = document.createElement('div');
-        el.innerHTML = `
-          <div style="
-            width: 10px; height: 10px; border-radius: 50%;
-            background: #3b82f6; border: 2px solid white;
-            box-shadow: 0 0 6px rgba(59,130,246,0.6);
-          "></div>
-        `;
+        const dot = document.createElement('div');
+        dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:#3b82f6;border:2px solid white;box-shadow:0 0 6px rgba(59,130,246,0.6);';
+        el.appendChild(dot);
         const marker = new mapboxgl.Marker({ element: el })
           .setLngLat([r.origin_lng, r.origin_lat])
           .addTo(mapRef.current!);
@@ -425,7 +429,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
         setCommands(data);
       } catch (e) {
         console.error('[AdminDashboard] Erro AI:', e);
-      } finally { setLoading(false); }
+      } finally { setLoading(false); setLoadingZones(false); }
     };
     fetchDecisions();
     const interval = setInterval(fetchDecisions, 60000);
@@ -453,7 +457,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
     <div className="min-h-screen bg-surface-container-lowest flex flex-col">
       {/* Header compacto */}
       <div className="bg-[#0A0A0A] p-6 space-y-2 relative overflow-hidden">
-        <div className="absolute -right-20 -top-20 w-60 h-60 bg-primary rounded-full blur-[80px] opacity-20 animate-pulse" />
+        <div className="absolute -right-20 -top-20 w-60 h-60 bg-primary rounded-full blur-[80px] opacity-20 " />
         <div className="flex justify-between items-center relative z-10">
           <div>
             <span className="bg-surface-container-low/10 border border-white/20 px-2 py-0.5 rounded-md font-black text-[7px] uppercase tracking-widest">
@@ -465,7 +469,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
           </div>
           <div className="text-right">
             <p className="text-xs font-black text-primary flex items-center justify-end gap-2">
-              <span className="w-2 h-2 rounded-full bg-primary animate-pulse" /> ONLINE
+              <span className="w-2 h-2 rounded-full bg-primary animate-pulse-gold" /> ONLINE
             </p>
           </div>
         </div>
@@ -502,7 +506,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
             >
               {tab.icon} {tab.label}
               {'badge' in tab && tab.badge > 0 && (
-                <span className="absolute right-2 top-1.5 flex min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[8px] font-black text-white animate-pulse">
+                <span className="absolute right-2 top-1.5 flex min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[8px] font-black text-white ">
                   {tab.badge}
                 </span>
               )}
@@ -522,7 +526,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
               <div className="absolute top-4 left-4 z-10 bg-[#0A0A0A]/90 backdrop-blur-xl rounded-2xl p-4 border border-white/10 space-y-2 min-w-[160px]">
                 <p className="text-[7px] font-black text-white/40 uppercase tracking-widest">Ao Vivo</p>
                 <div className="flex items-center gap-2">
-                  <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                  <span className="w-2 h-2 bg-green-400 rounded-full " />
                   <span className="text-xs font-black text-white">{driverMarkers.filter(d => d.status === 'available').length} disponíveis</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -639,22 +643,18 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
               <h3 className="text-[9px] font-black text-on-surface-variant/70 uppercase tracking-widest mb-6">
                 Heatmap de Demanda
               </h3>
-              {zonesData.length === 0 ? (
+              {loadingZones ? (
                 <div className="flex items-center justify-center h-40">
                   <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                 </div>
+              ) : zonesData.length === 0 ? (
+                <div className="flex items-center justify-center h-40 text-on-surface-variant/50 text-xs font-bold">
+                  Nenhum dado de demanda disponível no momento.
+                </div>
               ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={zonesData}>
-                    <XAxis dataKey="name" axisLine={false} tickLine={false} fontSize={9} tick={{ fontWeight: '900', fill: '#94a3b8' }} />
-                    <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', fontWeight: 'bold', fontSize: '10px' }} />
-                    <Bar dataKey="demand" radius={[10, 10, 10, 10]} barSize={24}>
-                      {zonesData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.risk > 15 ? '#ef4444' : '#4f46e5'} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<div className="flex items-center justify-center h-full"><div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>}>
+                  <LazyMarketChart zonesData={zonesData} />
+                </Suspense>
               )}
             </div>
 
@@ -843,6 +843,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = ({ lastCommand }) => 
         )}
 
       </div>
+
     </div>
   );
 };

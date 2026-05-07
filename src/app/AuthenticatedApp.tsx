@@ -18,6 +18,9 @@ const SocialFeed = React.lazy(() => import('../components/SocialFeed'));
 const KazeMascot = React.lazy(() => import('../components/KazeMascot'));
 const PostRideReview = React.lazy(() => import('../components/PostRideReview'));
 const FleetDashboard = React.lazy(() => import('../components/fleet/FleetDashboard'));
+// @ts-ignore
+const KazePanel = React.lazy(() => import('../components/KazePanel'));
+const AdminDashboard = React.lazy(() => import('../components/AdminDashboard'));
 
 function useMapTabResize() {
   useEffect(() => {
@@ -194,6 +197,8 @@ export default function AuthenticatedApp() {
           <Route path="/social" element={<SocialFeed userId={dbUser?.id ?? ''} userName={profile?.name ?? ''} role={effectiveRole} />} />
           <Route path="/contrato" element={<Contract />} />
           <Route path="/precos" element={<ZonePriceMap />} />
+          <Route path="/admin" element={role === UserRole.ADMIN ? <AdminDashboard /> : <Navigate to="/" replace />} />
+          <Route path="/admin/kaze" element={role === UserRole.ADMIN ? <KazePanel /> : <Navigate to="/" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
