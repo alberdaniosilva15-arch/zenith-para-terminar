@@ -74,3 +74,20 @@ src_tree.txt
 artifacts/
 *.err.log
 *.out.log
+.gemini/
+graphify-out/
+OpenJarvis-main/
+zenith-crm-saas/
+android/
+video do logotipo/
+obsidian memorias/
+preview_html/
+graphfy/
+kaze-workspace/
+package-lock.json
+models.json
+KAZE_MAPA_ANALISE_COMPLETA.txt
+kaze ideias para meter.txt
+Force Git Commit Resolution.md
+importante para detectar erros.ipynb
+zenith_schema_final.sql
