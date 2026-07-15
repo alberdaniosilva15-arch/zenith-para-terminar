@@ -175,7 +175,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
   const handleWithdrawConfirm = async () => {
     if (!wallet) { setWithdrawError('Carteira indisponível. Recarrega a página.'); return; }
     const amount = Number(withdrawAmount);
-    if (!Number.isFinite(amount) || amount < 500)    { setWithdrawError('Montante mínimo: 500 Kz'); return; }
+    if (!Number.isFinite(amount) || amount < 1000)   { setWithdrawError('Montante mínimo: 1.000 Kz'); return; }
     if (amount > 500000)                              { setWithdrawError('Montante máximo: 500.000 Kz'); return; }
     if (amount > wallet.balance)                      { setWithdrawError('Saldo insuficiente.'); return; }
     
@@ -358,10 +358,10 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
                     <label className="zr-label">Valor a levantar (Kz)</label>
                     <input 
                       type="number" value={withdrawAmount} onChange={(e) => setWithdrawAmount(e.target.value)}
-                      placeholder="ex: 5000" min={500} max={500000}
+                      placeholder="ex: 5000" min={1000} max={500000}
                       className="zr-input" 
                     />
-                    <p className="zr-meta" style={{ marginTop: '4px' }}>Min: 500 Kz | Max: 500.000 Kz | Disponível: {balance.toLocaleString('pt-AO')} Kz</p>
+                    <p className="zr-meta" style={{ marginTop: '4px' }}>Min: 1.000 Kz | Max: 500.000 Kz | Disponível: {balance.toLocaleString('pt-AO')} Kz</p>
                   </div>
                 </div>
 

@@ -5,7 +5,7 @@
 // ✅ Mantém: subscribeToAvailableRides + subscribeToDriverAssignments (fallback)
 // =============================================================================
 
-import React, { useState, useEffect, useRef, useCallback, Suspense } from 'react';
+import React, { useState, useEffect, useRef, useCallback, Suspense, useMemo } from 'react';
 import RideTalk from './RideTalk';
 import AvailableRidesList from './AvailableRidesList';
 import DriverActiveCard from './DriverActiveCard';
@@ -28,7 +28,7 @@ import DriverAgreementModal from './fleet/DriverAgreementModal';
 import type { RideState, DbRide, FleetDriverAgreementRecord, LatLng } from '../types';
 import { RideStatus, UserRole } from '../types';
 import { useToastStore } from '../store/useAppStore';
-import { cellToLatLng } from 'h3-js';
+import { cellToLatLng, latLngToCell, gridDisk } from 'h3-js';
 import { MapSingleton } from '../lib/mapInstance';
 
 const Map3D = React.lazy(() => import('./Map3D'));
@@ -56,7 +56,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 }) => {
   const { profile } = useAuth();
   const [isOnline,      setIsOnline]      = useState(false);
-  const [availableRides, setAvailableRides] = useState<DbRide[]>([]);
+
   const [incomingRide,  setIncomingRide]  = useState<DbRide | null>(null);
   const [isAuctionRide, setIsAuctionRide] = useState(false);
   const [simulation,    setSimulation]    = useState<{
@@ -65,6 +65,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const [actionLoading, setActionLoading] = useState(false);
   const [heatmapData, setHeatmapData] = useState<Array<{ h3_index: string; demand_count: number; supply_count: number }>>([]);
   const [driverCoords, setDriverCoords] = useState<LatLng | null>(null);
+  const driverCoordsRef = useRef<LatLng | null>(null);
   const [idleMinutes, setIdleMinutes] = useState(0);
   const [onlineSince, setOnlineSince] = useState<string | null>(null);
   const [clockTick, setClockTick] = useState(() => Date.now());
@@ -343,6 +344,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
     const onlineStartedAt = new Date().toISOString();
     setDriverCoords(coords ?? null);
+    driverCoordsRef.current = coords ?? null;
     setOnlineSince(onlineStartedAt);
     setIdleMinutes(0);
     void supabase
@@ -360,7 +362,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     setIsSwitchingOnline(true);
     isOnlineRef.current = false;
     setIsOnline(false);
-    setAvailableRides([]);
+
     setIncomingRide(null);
     setOnlineSince(null);
     setIdleMinutes(0);
@@ -568,6 +570,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       // GPS tracking
       gpsRef.current = mapService.watchPosition(async (coords, heading) => {
         setDriverCoords(coords);
+        driverCoordsRef.current = coords;
         await rideService.updateDriverLocation(driverId, coords, heading);
       });
 
@@ -576,7 +579,6 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
       // Subscrição 1: corridas em "searching" (fallback manual)
       const rides = await rideService.getAvailableRides();
-      setAvailableRides(rides);
       if (rides.length > 0) {
         const firstRide = rides[0];
         if (!firstRide) {
@@ -588,20 +590,22 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         });
       }
 
-      // 2. Subscreve a novas (SEM FILTRO H3 PARA DESENVOLVIMENTO)
+      // 2. Subscreve a novas corridas com filtro H3 geográfico
+      // Calcula H3 cells da vizinhança do motorista (~5km radius)
+      const myH3Cells = driverCoordsRef.current
+        ? gridDisk(latLngToCell(driverCoordsRef.current.lat, driverCoordsRef.current.lng, 9), 5)
+        : undefined;
       unsubRef1.current = rideService.subscribeToAvailableRides(
         (r) => {
-          setAvailableRides(prev => [r, ...prev]);
           setIncomingRide(prev => {
             if (!prev) { setIsAuctionRide(false); return r; }
             return prev;
           });
         },
         (id) => {
-          setAvailableRides(prev => prev.filter(r => r.id !== id));
           setIncomingRide(prev => prev?.id === id ? null : prev);
         },
-        [] // <-- Removido driverH3Cells aqui para que o motorista de teste receba TODAS as corridas
+        myH3Cells,
       );
 
       // Subscrição 2: passageiro escolheu-me directamente (leilão)
@@ -620,6 +624,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
     initOnline();
   }, [isOnline, driverId, loadPendingNotifications, subscribeToNotifications]);
+
 
 
 
