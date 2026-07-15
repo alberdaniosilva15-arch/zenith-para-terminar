@@ -16,7 +16,15 @@
 import { latLngToCell, gridDisk } from 'h3-js';
 import { haversineMeters } from '../lib/geo';
 import type { RealtimeChannel } from '@supabase/supabase-js';
-import { supabase, edgeFunctionUrl } from '../lib/supabase';
+import { edgeFunctionUrl, supabase } from '../lib/supabase';
+
+// Helper para obter token activo
+async function getActiveToken(): Promise<string | null> {
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+  if (!refreshError && refreshData?.session?.access_token) return refreshData.session.access_token;
+  const { data: fb } = await supabase.auth.getSession();
+  return fb?.session?.access_token ?? null;
+}
 import type {
   DbRide, AuctionDriver, NearbyDriver,
   PriceEstimate, AppError, LatLng,
@@ -483,8 +491,8 @@ class RideService {
 
   private async triggerDriverWhatsAppFallback(rideId: string): Promise<void> {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      const token = await getActiveToken();
+      if (!token) {
         return;
       }
 
@@ -492,7 +500,7 @@ class RideService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           action: 'driver_fallback_for_ride',
@@ -502,7 +510,10 @@ class RideService {
       });
 
       if (!response.ok) {
-        const body = await response.text().catch(() => '');
+        const body = await response.text().catch((e) => {
+          console.warn('[WhatsApp Fallback] Falha no text():', e);
+          return '';
+        });
         console.warn('[rideService.triggerDriverWhatsAppFallback] Falhou:', response.status, body);
       }
     } catch (error) {
@@ -513,8 +524,8 @@ class RideService {
   // ── driverConfirmRide ──────────────────────────────────────────────────────
   private async notifyPassengerRideAccepted(rideId: string): Promise<void> {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      const token = await getActiveToken();
+      if (!token) {
         return;
       }
 
@@ -522,7 +533,7 @@ class RideService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${session.access_token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           action: 'passenger_ride_accepted',
@@ -532,7 +543,10 @@ class RideService {
       });
 
       if (!response.ok) {
-        const body = await response.text().catch(() => '');
+        const body = await response.text().catch((e) => {
+          console.warn('[WhatsApp Accept] Falha no text():', e);
+          return '';
+        });
         console.warn('[rideService.notifyPassengerRideAccepted] Falhou:', response.status, body);
       }
     } catch (error) {
@@ -1145,8 +1159,8 @@ class RideService {
   // ── getPriceEstimate ───────────────────────────────────────────────────────
   async getPriceEstimate(origin: LatLng, dest: LatLng): Promise<PriceEstimate | null> {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      const token = await getActiveToken();
+      if (!token) {
         return this._localPriceEstimate(origin, dest);
       }
 
@@ -1154,7 +1168,7 @@ class RideService {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
+          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({ origin, dest }),
         signal: AbortSignal.timeout(8000),
@@ -1203,21 +1217,24 @@ class RideService {
 
   async initiateTopUp(amountKz: number, phone: string): Promise<{ success: boolean; message: string; reference?: string }> {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      const token = await getActiveToken();
+      if (!token) {
         return { success: false, message: 'Sessão expirada. Faz login novamente.' };
       }
 
       const res = await fetch(edgeFunctionUrl('multicaixa-pay'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ action: 'initiate_payment', amount_kz: amountKz, phone_number: phone }),
       });
       if (!hasJsonContentType(res)) {
         return { success: false, message: 'Resposta inválida do servidor.' };
       }
 
-      const payload = await res.json().catch(() => null) as {
+      const payload = await res.json().catch((e) => {
+        console.warn('[rideService.initiateTopUp] parse error:', e);
+        return null;
+      }) as {
         success?: boolean;
         message?: string;
         reference?: string;

@@ -4,7 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const { processCommand } = require('./agent');
 const memory = require('./brain/kazeMemory');
-const hermesService = require('./services/hermesService');
+
+const hermesService = {
+  getStatus: async () => ({ status: 'online', mode: 'proxy' }),
+  ensureStarted: async () => ({ status: 'online' }),
+  listSkills: async () => [],
+  execute: async () => ({ success: false, error: 'Hermes moved to gemini-proxy' })
+};
 
 const envFiles = ['../.env', '../.env.local'];
 for (const relativeFile of envFiles) {
@@ -29,9 +35,13 @@ const ALLOWED_ORIGINS = new Set([
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://[::1]:5173',
+  'http://localhost:4000',
+  'http://127.0.0.1:4000',
+  'http://[::1]:4000',
 ]);
-const MAX_COMMANDS_PER_MINUTE = 20;
+const MAX_COMMANDS_PER_MINUTE = 100;
 const BODY_LIMIT = 50_000;
+const AUDIO_BODY_LIMIT = 8_000_000;
 const authCache = new Map();
 const rateLimitMap = new Map();
 
@@ -134,13 +144,13 @@ async function authenticate(req) {
   return verifySupabaseToken(token);
 }
 
-function readJsonBody(req) {
+function readJsonBody(req, limit = BODY_LIMIT) {
   return new Promise((resolve, reject) => {
     let body = '';
 
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > BODY_LIMIT) {
+      if (body.length > limit) {
         req.destroy();
         reject(new Error('Payload demasiado grande'));
       }
@@ -163,10 +173,82 @@ function readJsonBody(req) {
   });
 }
 
+function cleanTranscript(text) {
+  return String(text || '')
+    .replace(/^["'\s]+|["'\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizeGeminiModelName(model) {
+  const value = String(model || '').trim();
+  if (!value) return 'models/gemini-2.0-flash';
+  return value.startsWith('models/') ? value : `models/${value}`;
+}
+
+async function transcribeAudioPayload(payload) {
+  const apiKey = String(payload.apiKey || '').trim()
+    || process.env.GEMINI_API_KEY
+    || process.env.VITE_GEMINI_API_KEY
+    || process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY indisponivel para transcricao local.');
+  }
+
+  const audioBase64 = String(payload.audioBase64 || '');
+  const mimeType = String(payload.mimeType || 'audio/wav').split(';')[0];
+  if (!audioBase64 || audioBase64.length < 1000) {
+    throw new Error('Audio invalido ou vazio.');
+  }
+
+  const model = normalizeGeminiModelName(payload.model || process.env.KAZE_STT_MODEL || 'gemini-2.0-flash');
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: 'Transcreve o audio em portugues. Responde apenas com a frase dita, sem comentarios, sem pontuacao extra e sem markdown.',
+              },
+              {
+                inline_data: {
+                  mime_type: mimeType,
+                  data: audioBase64,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          maxOutputTokens: 120,
+        },
+      }),
+    },
+  );
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.error?.message || `Gemini STT ${response.status}`);
+  }
+
+  const text = cleanTranscript(data?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+  if (!text) {
+    throw new Error('Transcricao vazia.');
+  }
+
+  return { text, model: model.replace(/^models\//, ''), mimeType };
+}
+
 async function handleCommandRequest(req, res, mode = 'smart') {
   const ip = normalizeIp(req);
   if (isRateLimited(ip)) {
-    sendJson(res, 429, { error: 'Rate limit excedido. Máximo 20 comandos por minuto por IP.' });
+    sendJson(res, 429, { error: 'Rate limit excedido. Aguarde um minuto.' });
     return;
   }
 
@@ -225,6 +307,23 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && req.url === '/transcribe-audio') {
+    const ip = normalizeIp(req);
+    if (isRateLimited(ip)) {
+      sendJson(res, 429, { error: 'Rate limit excedido. Aguarde um minuto.' });
+      return;
+    }
+
+    try {
+      const payload = await readJsonBody(req, AUDIO_BODY_LIMIT);
+      const result = await transcribeAudioPayload(payload);
+      sendJson(res, 200, { ok: true, ...result });
+    } catch (error) {
+      sendJson(res, 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
   const authenticated = await authenticate(req);
   if (!authenticated) {
     sendJson(res, 401, { error: 'Token inválido' });
@@ -257,7 +356,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'POST' && req.url === '/hermes/execute') {
     const ip = normalizeIp(req);
     if (isRateLimited(ip)) {
-      sendJson(res, 429, { error: 'Rate limit excedido. Máximo 20 comandos por minuto por IP.' });
+      sendJson(res, 429, { error: 'Rate limit excedido. Aguarde um minuto.' });
       return;
     }
 

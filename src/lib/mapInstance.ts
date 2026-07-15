@@ -184,7 +184,10 @@ export const MapSingleton = {
       return map;
     } catch (err: any) {
       console.warn("Failed to initialize WebGL or Mapbox:", err.message);
-      targetContainer.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;margin:15px;background:#1e293b;border-radius:15px;color:#94a3b8;font-size:12px;text-align:center;padding:20px;">O teu navegador não suporta mapas em 3D (WebGL) ou falhou. Tenta reiniciar o browser.</div>';
+      const errorDiv = document.createElement('div');
+      errorDiv.textContent = 'O teu navegador não suporta mapas em 3D (WebGL) ou falhou. Tenta reiniciar o browser.';
+      errorDiv.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100%;margin:15px;background:#1e293b;border-radius:15px;color:#94a3b8;font-size:12px;text-align:center;padding:20px;';
+      targetContainer.replaceChildren(errorDiv);
       return null;
     }
   },

@@ -28,6 +28,9 @@ const CLIENT_ONLY_STORAGE_KEYS = [
   'oauth_role_intent',
   'zenith_ia_provider',
   'zenith_ia_model',
+  'zenith_ia_api_key',
+  'zenith_ia_base_url',
+  'zenith_ia_models_cache',
 ];
 
 // Global lock to prevent DOS on auto-repair during mass incidents
@@ -36,7 +39,16 @@ let autoRepairTimeout: ReturnType<typeof setTimeout> | null = null;
 
 const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
 const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
-const REST_FALLBACK_TIMEOUT_MS = 6000;
+const REST_FALLBACK_TIMEOUT_MS = 12000;
+const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_intent';
+
+function sanitizeRedirectTarget(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  if (!candidate.startsWith('/')) return null;
+  if (candidate.startsWith('//')) return null;
+  if (candidate.startsWith('/login')) return null;
+  return candidate;
+}
 
 function clearBrowserAuthStorage(): void {
   if (typeof window === 'undefined') {
@@ -196,7 +208,7 @@ interface AuthContextValue {
 
   // Acções
   signIn:      (email: string, password: string) => Promise<AppError | null>;
-  signInWithGoogle: (role: UserRole) => Promise<AppError | null>;
+  signInWithGoogle: (role: UserRole, redirectPath?: string) => Promise<AppError | null>;
   signUp:      (email: string, password: string, name: string, role: UserRole) => Promise<AppError | null>;
   signOut:     () => Promise<void>;
   updateProfile: (data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone' | 'emergency_contact_phone'>>) => Promise<AppError | null>;
@@ -594,14 +606,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ------------------------------------------------------------------
   // SIGN IN WITH GOOGLE
   // ------------------------------------------------------------------
-  const signInWithGoogle = useCallback(async (role: UserRole): Promise<AppError | null> => {
+  const signInWithGoogle = useCallback(async (role: UserRole, redirectPath?: string): Promise<AppError | null> => {
     try {
       persistStoredRoleIntent(role);
+      const safeRedirectTarget = sanitizeRedirectTarget(redirectPath);
+      if (safeRedirectTarget && typeof window !== 'undefined') {
+        window.localStorage.setItem(AUTH_REDIRECT_STORAGE_KEY, safeRedirectTarget);
+      }
+      const redirectTo = safeRedirectTarget
+        ? `${window.location.origin}/login?next=${encodeURIComponent(safeRedirectTarget)}`
+        : `${window.location.origin}/login`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           queryParams: { role },
-          redirectTo: window.location.origin
+          redirectTo,
         }
       });
       if (error) throw error;
@@ -645,7 +664,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       // 1. Marcar que estamos a fazer signOut (previne re-autenticação pelo listener)
       pendingAuthEventRef.current = null;
-      isInitRef.current = false; // Bloqueia o listener de re-autenticar
 
       // 2. Limpar a sessão local imediatamente para a UI largar a conta antiga.
       purgeClientSession();

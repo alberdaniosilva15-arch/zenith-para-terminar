@@ -11,7 +11,7 @@ import { rideService, checkRouteDeviation } from '../services/rideService';
 import { mapService } from '../services/mapService';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { useAppStore, INITIAL_RIDE, INITIAL_AUCTION, INITIAL_POST_RIDE } from '../store/useAppStore';
+import { useAppStore } from '../store/useAppStore';
 import type { RideState, DbRide, AppError, LatLng, AuctionDriver, AuctionState, PostRideState } from '../types';
 import { RideStatus } from '../types';
 
@@ -459,7 +459,7 @@ export function useRide(): UseRideReturn {
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, showToast]);
+  }, [dbUser?.id, showToast, ride.rideId]);
 
   // ── submitReview ──────────────────────────────────────────────────────────
   const submitReview = useCallback(async (score: number, comment?: string) => {

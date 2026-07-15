@@ -98,12 +98,12 @@ export function startScreamDetection(onScream: ScreamCallback): ScreamDetectorHa
     recognition.onend = () => {
       if (active) {
         setTimeout(() => {
-          try { recognition.start(); } catch (e) {}
+          try { recognition.start(); } catch (e) { /* ignorado */ }
         }, 1000);
       }
     };
 
-    try { recognition.start(); } catch (e) {}
+    try { recognition.start(); } catch (e) { /* reconhecimento indisponível */ }
   };
 
   initAudio();

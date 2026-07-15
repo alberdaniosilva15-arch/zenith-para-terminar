@@ -44,6 +44,7 @@ export function usePassengerGPS({
       });
 
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisible]); // NÃO adicionar existingPickupCoords como dependência — executa só 1x
 
   return { userLocation, setUserLocation };

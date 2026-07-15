@@ -1,0 +1,1166 @@
+================================================================================
+        RELATÓRIO DE AUDITORIA COMPLETA — ZENITH RIDE v3.0
+        Análise de Ponta a Ponta: Erros, Quebras e Prontidão para Produção
+================================================================================
+Data da Análise: 2026-07-15
+Analista: MiMoCode (Automação)
+Escopo: TODOS os módulos — Auth, Services, Components, Hooks, SQL, Libs, Tests
+
+================================================================================
+ÍNDICE
+================================================================================
+  1. VISÃO GERAL DO PROJETO
+  2. RESUMO EXECUTIVO — NOTA DE PRONTIDÃO
+  3. CAMADA 1: AUTENTICAÇÃO & CONFIG
+  4. CAMADA 2: SERVIÇOS (Backend Services)
+  5. CAMADA 3: COMPONENTES REACT
+  6. CAMADA 4: HOOKS & STATE
+  7. CAMADA 5: LIBS UTILITÁRIAS
+  8. CAMADA 6: BANCO DE DADOS (SQL/Schema)
+  9. CAMADA 7: TESTES
+  10. CAMADA 8: DEPLOY & CONFIGURAÇÃO
+  11. BUGS CRÍTICOS (BLOQUEADORES DE PRODUÇÃO)
+  12. BUGS DE ALTA PRIORIDADE
+  13. BUGS DE MÉDIA PRIORIDADE
+  14. QUESTÕES DE SEGURANÇA
+  15. CÓDIGO MORTO
+  16. RESUMO FINAL & ROADMAP DE CORREÇÃO
+
+================================================================================
+1. VISÃO GERAL DO PROJETO
+================================================================================
+
+O Zenith Ride é um aplicativo de ride-sharing (tipo Uber) voltado para Angola
+(moeda Kz, foco em Luanda). Stack tecnológica:
+
+  Frontend:  React 18 + TypeScript + Vite + TailwindCSS + Capacitor (mobile)
+  Backend:   Supabase (PostgreSQL + Auth + Storage + Realtime + Edge Functions)
+  Mapas:     Mapbox GL JS + H3 (geospatial)
+  AI:        Google Gemini (chat Kaze) + ElevenLabs (voz) + Sentinel Vision
+  Voice:     Web Speech API + Python TTS Server + ElevenLabs
+  Testes:    Playwright (E2E mínimo)
+  Deploy:    Vercel
+
+Estrutura de pastas principal:
+  zenith-ride-build/
+  ├── src/
+  │   ├── components/     (~40+ componentes React)
+  │   ├── contexts/       (AuthContext)
+  │   ├── hooks/          (6 hooks customizados)
+  │   ├── lib/            (~15 utilitários)
+  │   ├── services/       (~10 serviços)
+  │   ├── store/          (Zustand store)
+  │   ├── config/         (env.ts)
+  │   └── types.ts        (definições de tipos)
+  ├── supabase/           (Edge Functions + 53 migrations)
+  ├── e2e/                (2 testes smoke mínimos)
+  └── zenith_schema_final.sql  (schema completo ~800 linhas)
+
+================================================================================
+2. RESUMO EXECUTIVO — NOTA DE PRONTIDÃO
+================================================================================
+
+  ┌─────────────────────────────────┬────────────────────────────┐
+  │ CAMADA                          │ PRONTIDÃO                  │
+  ├─────────────────────────────────┼────────────────────────────┤
+  │ Autenticação (AuthContext)      │ 70% ⚠️  (logError quebrado)│
+  │ Configuração (env, vite)        │ 80% ✅                     │
+  │ Supabase Client                 │ 95% ✅                     │
+  │ Types                           │ 90% ✅                     │
+  │ Services (ride, gps, map, etc)  │ 80% ✅                     │
+  │ Components React                │ 75% ⚠️  (giant components) │
+  │ Hooks                           │ 80% ✅                     │
+  │ Libs Utilitárias                │ 85% ✅                     │
+  │ Banco de Dados (SQL)            │ 75% ⚠️  (schema drift)    │
+  │ Testes                          │ 20% ❌  (quase zero)       │
+  │ Deploy                          │ 80% ✅                     │
+  │ Segurança                       │ 65% ❌  (API keys expostas)│
+  ├─────────────────────────────────┼────────────────────────────┤
+  │ MÉDIA GERAL                     │ ~75% ⚠️                    │
+  └─────────────────────────────────┴────────────────────────────┘
+
+  VEREDICTO: O sistema NÃO está 80% pronto para produção.
+  Está ~75% pronto — funcional como MVP, mas com bloqueadores críticos
+  que precisam ser resolvidos ANTES de lançar.
+
+  BLOCKERS PRINCIPAIS:
+  1. Import logError quebrado em 4 arquivos (crash em runtime)
+  2. API keys secretas expostas no bundle do cliente (VITE_ prefix)
+  3. Schema SQL não bate com o código frontend (colunas/tabelas/RPCs faltando)
+  4. Testes quase inexistentes (2 smoke tests)
+
+================================================================================
+3. CAMADA 1: AUTENTICAÇÃO & CONFIG
+================================================================================
+
+--- 3.1. src/contexts/AuthContext.tsx (795 linhas) ---
+
+O que faz: Provider central de autenticação. Gerencia sessão Supabase,
+carregamento de dados do usuário, Google OAuth, login/logout, verificação
+de suspensão de conta, e auto-repair quando o trigger do banco falha.
+
+BUG CRÍTICO — Import logError não existe:
+  Arquivo: src/contexts/AuthContext.tsx:23
+  Código:
+    import { logError } from '../lib/logger';
+
+  O arquivo src/lib/logger.ts só exporta um objeto 'logger':
+    // src/lib/logger.ts (7 linhas):
+    const isDev = import.meta.env.DEV;
+    export const logger = {
+      warn: (...args: unknown[]) => { if (isDev) console.warn(...args); },
+      info: (...args: unknown[]) => { if (isDev) console.info(...args); },
+      error: (...args: unknown[]) => { console.error(...args); },
+    };
+
+  NÃO EXISTE exportação 'logError'. Isso é usado nas linhas 363, 389 e 519.
+  Quando o auto-repair falhar (cenário de erro), o próprio handler de erro
+  vai CRASHAR — "logError is not a function".
+
+  Impacto: O sistema de error-reporting falha EXATAMENTE quando mais precisa.
+  Severidade: 🔴 CRÍTICO
+
+Race condition no autoRepairInProgress:
+  Arquivo: src/contexts/AuthContext.tsx:366-393
+  Código simplificado:
+    const autoRepairInProgress = { current: false };
+
+    async function ensureUserExists() {
+      if (autoRepairInProgress.current) return;
+      autoRepairInProgress.current = true;
+      try {
+        // ... repair logic com timeout de 30s (linha 369-372)
+        // Se timeout dispara, autoRepairInProgress = false
+        await supabase.rpc('ensure_user_exists', ...);
+      } finally {
+        autoRepairInProgress.current = false; // pode ser tarde demais
+      }
+    }
+
+  O timeout de 30s reseta o flag para false, mas o try ainda pode estar
+  rodando. Dois requests concorrentes podem ambos entrar no repair.
+
+  Impacto: Race condition rara mas possível.
+  Severidade: 🟡 MÉDIA
+
+Role intent controllável pelo cliente:
+  Arquivo: src/contexts/AuthContext.tsx:125-141
+  Código:
+    function persistStoredRoleIntent(role: UserRole) {
+      if (role === UserRole.PASSENGER || role === UserRole.DRIVER ||
+          role === UserRole.FLEET_OWNER) {
+        localStorage.setItem('auth_role_intent', role);
+      }
+    }
+
+  Um passageiro pode setar 'auth_role_intent' = 'fleet_owner' no localStorage.
+  Isso faz o sistema chamar supabase.rpc('set_my_role_fleet_owner').
+  Se o RPC não validar server-side, é ESCALAÇÃO DE PRIVILÉGIOS.
+
+  Impacto: Possível escalação (depende do RLS no banco).
+  Severidade: 🟠 ALTA
+
+resolveSessionRole não memoizado:
+  Arquivo: src/contexts/AuthContext.tsx:716
+  Código:
+    const role = resolveSessionRole((safeDbUser as any)?.role);
+    // resolveSessionRole lê localStorage a cada render
+
+  Isso roda em CADA render de CADA componente que consome o contexto.
+  Poderia ser useMemo.
+
+  Severidade: 🟡 MÉDIA (performance)
+
+
+--- 3.2. src/config/env.ts (7 linhas) ---
+
+  O que faz: Exporta SUPABASE_URL de VITE_SUPABASE_URL. Lança erro se faltar.
+
+  Problema: Só centraliza 1 de ~10 variáveis de ambiente. Todas as outras
+  (MAPBOX_TOKEN, AGORA_APP_ID, GEMINI_API_KEY, etc.) são acessadas diretamente
+  via import.meta.env em dezenas de arquivos.
+
+  Código:
+    const ENV = {
+      SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL as string,
+    };
+    if (!ENV.SUPABASE_URL) throw new Error('...');
+    export { ENV };
+
+  Existem duas validações redundantes — uma aqui e outra em supabase.ts.
+
+  Severidade: 🟢 BAIXA (funcional, mas incompleto)
+
+
+--- 3.3. src/lib/supabase.ts (38 linhas) ---
+
+  O que faz: Cria o singleton do cliente Supabase com auth persistido.
+
+  Avaliação: ✅ PRODUCTION-READY. Configuração limpa e correta.
+
+  Nota: Não configura `lock` para sincronização entre abas.
+  Em multi-tab, múltiplas abas podem competir para refresh do token.
+
+  Severidade: 🟢 BAIXA
+
+
+--- 3.4. .env — SEGURANÇA CRÍTICA ---
+
+  ⚠️  API KEYS SECRETAS EXPOSTAS NO BUNDLE DO CLIENTE:
+
+  Linha 15: VITE_GEMINI_API_KEY=AIzaSyC9c...
+    → Prefixo VITE_ = incluído no JavaScript do cliente
+    → Qualquer pessoa pode extrair do bundle e usar
+    → CUSTO FINANCEIRO DIRETO
+
+  Linha 17: VITE_ELEVENLABS_API_KEY=sk_79dd...
+    → Prefixo sk_ = SECRET KEY
+    → Prefixo VITE_ = EXPOSTO ao cliente
+    → Qualquer pessoa pode gerar áudio usando sua conta
+
+  Linha 20: RESEND_API_KEY=re_jQ4G...
+    → Sem prefixo VITE_ = não exposto no bundle
+    → Mas ainda está no .env que pode vazar
+
+  Código no .env:
+    VITE_GEMINI_API_KEY=AIzaSyC9c...
+    VITE_ELEVENLABS_API_KEY=sk_79dd...
+    RESEND_API_KEY=re_jQ4G...
+
+  O .env.example diz que GEMINI_API_KEY "goes to Edge Function secret",
+  mas o .env real usa VITE_ prefix, contradizendo a documentação.
+
+  Impacto: Perda financeira direta, uso indevido de APIs
+  Severidade: 🔴 CRÍTICO
+
+
+--- 3.5. src/types.ts (583 linhas) ---
+
+  Avaliação: ✅ PRODUCTION-READY. Tipos abrangentes para o domínio.
+
+  Nota menor: isDbProfile (linhas 576-583) só verifica 2 campos:
+    export function isDbProfile(obj: unknown): obj is DbProfile {
+      return obj !== null && typeof obj === 'object' &&
+        'user_id' in obj && 'phone_privacy' in obj;
+    }
+
+  Não valida tipos dos campos. Um objeto com user_id=123 passaria.
+
+================================================================================
+4. CAMADA 2: SERVIÇOS (Backend Services)
+================================================================================
+
+--- 4.1. rideService.ts (1284 linhas) — CORE DO SISTEMA ---
+
+  O que faz: Serviço central de corridas. Ciclo completo: criar corrida,
+  encontrar motoristas (H3 + PostGIS), aceitar/rejeitar/cancelar,
+  GPS, realtime, scoring, WhatsApp, pagamento, gamificação, heatmap.
+
+  BUG — setInterval em escopo de módulo vaza em SSR/testes:
+    Arquivo: src/services/rideService.ts:119-126
+    Código:
+      setInterval(() => {
+        const now = Date.now();
+        for (const [key, entry] of rideRateTracker) {
+          if (now - entry.windowStart > 60_000) rideRateTracker.delete(key);
+        }
+      }, 60_000);
+
+    Isso roda quando o módulo é importado. Nunca é limpo.
+    Em SSR, testing com jsdom, ou HMR, vaza memória.
+
+  BUG — Race condition no _updateKmPerk:
+    Arquivo: src/services/rideService.ts:754-769
+    Código:
+      async _updateKmPerk(userId: string, km: number) {
+        const { data } = await supabase.from('profiles')
+          .select('km_total').eq('user_id', userId).single();
+        const newTotal = (data?.km_total ?? 0) + km;
+        await supabase.from('profiles')
+          .update({ km_total: newTotal }).eq('user_id', userId);
+      }
+
+    Read-modify-write clássico. Duas corridas rápidas sobrescrevem.
+    Deveria ser um RPC atômico no banco.
+
+  ISSUE — updateRideStatus não usa RPC atômico:
+    Enquanto acceptRide usa 'accept_ride_atomic' e cancelRide usa
+    'cancel_ride_safe', o updateRideStatus faz update direto.
+    Pode ter race conditions com updates concorrentes.
+
+  AVALIAÇÃO: ✅ PRODUCTION-READY com ressalvas.
+  Os RPCs atômicos para accept/decline/cancel são sólidos.
+
+
+--- 4.2. gpsService.ts (88 linhas) ---
+
+  O que faz: Wrappers para Geolocation API com fallback para Luanda.
+
+  BUG — Fallback silencioso para coordenadas erradas:
+    Arquivo: src/services/gpsService.ts:40-51
+    Código:
+      case GeolocationPositionError.PERMISSION_DENIED:
+        resolve(LUANDA_FALLBACK); // ← resolve, não rejeita!
+        break;
+      default:
+        reject(err); // ← rejeita em outros casos
+
+    Se o usuário estiver em Benguela e recusar permissão, o app
+    mostra corridas em Luanda. Coordenadas erradas silenciosas.
+
+  Avaliação: ✅ PRODUCTION-READY para mobile-first.
+  O fallback de Luanda é uma escolha consciente para Angola.
+
+
+--- 4.3. mapService.ts (471 linhas) ---
+
+  O que faz: Busca de locais, geocoding reverso, rotas, cache.
+
+  BUG — Implementação duplicada de getCurrentPosition:
+    Existe gpsService.ts E mapService.ts ambas implementando
+    getCurrentPosition com comportamento diferente. Confusão garantida.
+
+  ISSUE — Cache geocode sem limite:
+    A linha 122 usa um Map que cresce indefinidamente. Sem TTL ou eviction.
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+
+--- 4.4. routeService.ts (103 linhas) ---
+
+  O que faz: Wrapper da API Mapbox Directions com cache simples.
+
+  BUG — trafficFactor sempre hardcoded em 1.2:
+    Código:
+      const trafficFactor = 1.2; // sempre 1.2
+
+    Nunca usa dados reais de trânsito do Mapbox.
+
+  BUG — durationMinNoTraffic = durationMin * 0.8 (chute):
+    Não usa dados reais. É uma aproximação.
+
+  Avaliação: ✅ PRODUCTION-READY para uso básico.
+
+
+--- 4.5. mapboxRoutingService.ts (62 linhas) ---
+
+  ⚠️ DUPLICAÇÃO COM lib/mapbox-directions.ts:
+    Dois implementações da mesma API Mapbox Directions com
+    tratamento de erros, cache e tipos diferentes.
+
+  BUG — Sem timeout no fetch:
+    Código:
+      const response = await fetch(url);
+    Sem AbortController. Pode travar em rede lenta.
+
+  BUG — Sem tratamento de resposta malformada:
+    Se data.routes[0].distance for undefined, route.distance/1000 = NaN.
+
+  BUG — bbox com spread pode estourar stack:
+    Math.min(...lngs) falha com milhares de pontos.
+
+  Avaliação: ⚠️ PARCIALMENTE READY.
+
+
+--- 4.6. referralService.ts (106 linhas) ---
+
+  O que faz: Geração e aplicação de códigos de indicação.
+
+  BUG — Race condition na geração de código:
+    Código (linhas 30-50):
+      // Gera código localmente (ex: JOAO_3847)
+      // Tenta salvar no banco
+      // Se falhar, relê o que foi salvo
+      // MAS retorna o código LOCAL, não o do banco
+
+    Dois requests concorrentes podem retornar códigos diferentes.
+
+  ISSUE — Sem rate limiting na aplicação:
+    Um usuário pode tentar códigos infinitamente (brute force).
+
+  Avaliação: ✅ PRODUCTION-READY para volume baixo.
+
+
+--- 4.7. premiumService.ts (481 linhas) ---
+
+  O que faz: Reservas de motorista particular, charter, e cargo.
+
+  BUG — Rollback sem transação:
+    Código (linhas 258-298):
+      // 1. Insere em premium_bookings
+      // 2. Insere em charter_bookings (referencia premium_bookings.id)
+      // Se step 2 falhar, deleta premium_bookings
+      // Mas entre step 1 e 2, outro processo pode referenciar
+
+  ISSUE — cancelBooking não verifica status:
+    Uma reserva "in_progress" pode ser cancelada.
+
+  Avaliação: ✅ PRODUCTION-READY com ressalvas.
+
+
+--- 4.8. pdfService.ts (553 linhas) ---
+
+  O que faz: Geração de PDFs (recibos, contratos, relatórios de frota).
+
+  BUG — buildContractPDF hardcoded y=255 para footer:
+    Se o conteúdo for longo, o footer sobrepõe o texto.
+
+  ISSUE — shareFile silenciosamente falha em Firefox:
+    navigator.share não suportado → nenhum fallback.
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+
+--- 4.9. geminiService.ts (703 linhas) ---
+
+  O que faz: Serviço de chat AI "Kaze" via Gemini + Edge Functions.
+
+  BUG — Double timeout:
+    Código:
+      // 1. AbortController com timeout (linha 166-167)
+      controller.abort.bind(controller), timeoutMs
+      // 2. Promise.race com outro timeout (linha 240-243)
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('timeout')), timeoutMs);
+      })
+
+    Dois timers independentes disparam ao mesmo tempo.
+    O segundo setTimeout NUNCA é limpo (.finally só limpa o primeiro).
+    Memory leak + double-rejection possível.
+
+  ISSUE — consecutiveFailures rastreado mas nunca usado:
+    Variável incrementada mas nunca lida para decisões (backoff, disable).
+
+  Avaliação: ✅ PRODUCTION-READY com bug de double timeout.
+
+
+--- 4.10. zonePrice.ts (265 linhas) ---
+
+  O que faz: Preços fixos por zona em Luanda.
+
+  ISSUE — Maianga tem zona no mapa mas pode não ter preço no banco:
+    detectZone retorna 'Maianga', mas se zone_prices não tem
+    entrada para 'Maianga', getZonePrice retorna null.
+
+  ISSUE — Mesma zona origem/destino retorna null (sem preço fixo).
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+
+--- MAPA DE TABELAS SUPABASE REFERENCIADAS PELOS SERVICES ---
+
+  rides, driver_locations, profiles, ratings, demand_heatmap,
+  ride_tracking_shares, route_deviation_alerts, geocoding_cache,
+  referrals, premium_bookings, charter_bookings, cargo_bookings,
+  service_pricing, zone_prices
+
+  RPCs: find_drivers_h3, find_drivers_for_auction, find_nearby_drivers,
+  create_selected_ride_atomic, accept_ride_atomic, decline_ride_atomic,
+  cancel_ride_safe, get_active_ride, calculate_fare_engine_pro,
+  recharge_chat_quota, increment_geocode_hit
+
+================================================================================
+5. CAMADA 3: COMPONENTES REACT
+================================================================================
+
+--- 5.1. src/App.tsx (227 linhas) ---
+
+  O que faz: Roteamento raiz, gate de autenticação, telas protegidas.
+
+  BUG CRÍTICO — URL hardcoded:
+    Arquivo: src/App.tsx:11
+    Código:
+      const CRM_ADMIN_ORIGIN = 'http://127.0.0.1:4000';
+
+    Em produção, localhost não funciona. Deveria ser variável de ambiente.
+
+  ISSUE — sanitizeRedirectTarget duplicado:
+    Mesma função existe em App.tsx:13-19 E AuthContext.tsx:45-51.
+
+  Avaliação: ⚠️ 80% pronto.
+
+
+--- 5.2. src/components/Login.tsx (559 linhas) ---
+
+  O que faz: Tela de autenticação multi-tela (signin, signup, forgot, reset).
+
+  BUG — URL hardcoded (mesmo do App.tsx):
+    Linha 18: const CRM_ADMIN_ORIGIN = 'http://127.0.0.1:4000';
+
+  CÓDIGO MORTO — handleSubmit definido mas nunca chamado:
+    Linhas 315-333: função inteira não usada no JSX.
+
+  Avaliação: ⚠️ 85% pronto.
+
+
+--- 5.3. src/components/Layout.tsx (151 linhas) ---
+
+  O que faz: Shell do app com header, nav bar, e abas por role.
+
+  CÓDIGO MORTO — DevQRCode sempre renderizado:
+    Linha 116: <DevQRCode />
+    Deveria ser condicional: import.meta.env.DEV && <DevQRCode />
+
+  ISSUE — userName prop definida mas nunca usada:
+    interface LayoutProps { userName?: string; }
+    mas não é desestruturada nem usada.
+
+  Avaliação: ✅ 90% pronto.
+
+
+--- 5.4. src/components/PassengerHome.tsx (846 linhas) ---
+
+  O que faz: Tela principal do passageiro — GPS, mapa, rota, preço,
+  leilão, agendamento, referrals, serviços premium.
+
+  ISSUE — Componente GOD (846 linhas, 25+ variáveis de estado):
+    Precisa ser decomposto em sub-componentes menores.
+    Viola SRP (Single Responsibility Principle).
+
+  ISSUE — calculateBBox com spread pode falhar:
+    Math.min(...lngs) com arrays muito grandes.
+
+  ISSUE — handleShowDrivers sem try/catch:
+    Se onStartAuction lançar erro, é não tratado.
+
+  Avaliação: ✅ 80% pronto (funcional, mas grande demais).
+
+
+--- 5.5. src/components/DriverHome.tsx (965 linhas) ---
+
+  O que faz: Tela principal do motorista — online/offline, GPS, heatmap,
+  notificações, documentos, segurança, copiloto, chat.
+
+  ISSUE — MAIOR COMPONENTE DO PROJETO (965 linhas):
+    Precisa urgente de decomposição.
+
+  CÓDIGO MORTO — useAutoMarkNotificationsRead exportado do arquivo:
+    Linhas 910-963: Hook que deveria estar em src/hooks/.
+    Lógica duplicada com inline no componente (linhas 500-516).
+
+  ISSUE — eslint-disable para react-hooks/exhaustive-deps:
+    Linhas 525 e 918 suprimem warnings de dependências.
+
+  Avaliação: ✅ 75% pronto (funcional, mas precisa refatoração).
+
+
+--- 5.6. src/components/Wallet.tsx (529 linhas) ---
+
+  O que faz: Carteira — saldo, transações, top-up Multicaixa, saque, QR.
+
+  ISSUE — Import path confuso:
+    import { ZenithPayPartners } from './MotoGoPayPartners';
+    Nome do arquivo não bate com o nome do export.
+
+  CÓDIGO MORTO — zenithPayQrError definido mas nunca lido:
+    Linha 60.
+
+  Avaliação: ✅ 85% pronto.
+
+
+--- 5.7. src/components/Profile.tsx (350 linhas) ---
+
+  O que faz: Perfil do usuário com upload de avatar, edição, senha.
+
+  CÓDIGO MORTO — console.log em produção:
+    Linha 93: console.log('[Profile] A guardar:', ...)
+
+  ISSUE — Sem confirmação para mudança de senha:
+    Usuário pode mudar senha acidentalmente.
+
+  Avaliação: ✅ 90% pronto.
+
+
+--- 5.8. src/components/RidesHistory.tsx (276 linhas) ---
+
+  O que faz: Histórico de corridas com insights AI e detalhes expandíveis.
+
+  BUG — Sem try/catch no loadRides:
+    Linha 78: rideService.getRideHistory(...) sem error handling.
+    Se lançar erro, loading fica preso para sempre.
+
+  Avaliação: ✅ 85% pronto.
+
+
+--- 5.9. src/components/ErrorBoundary.tsx (52 linhas) ---
+
+  Avaliação: ✅ PRODUCTION-READY. Limpo e mínimo.
+
+
+--- 5.10. src/components/PanicButton.tsx ---
+
+  O que faz: Botão de emergência com gravação de áudio, alerta Supabase,
+  SMS nativo, chamada de emergência noturna, detecção de gritos.
+
+  ISSUE — senderRole hardcoded como DRIVER no RideTalk:
+    Linha 55: senderRole: UserRole.DRIVER (sempre, mesmo para passageiros)
+
+  Avaliação: ✅ PRODUCTION-READY para funcionalidade de segurança.
+
+
+--- 5.11. src/components/fleet/FleetDashboard.tsx (423 linhas) ---
+
+  O que faz: Dashboard de frota — gestão de carros, motoristas, cobrança.
+
+  BUG — Non-null assertion perigosa:
+    Linha 379: cars.find(c => c.id === trackingCarId)!
+    Se trackingCarId referenciar carro deletado → crash.
+
+  Avaliação: ✅ 85% pronto.
+
+
+--- 5.12. src/components/passenger/RideRequestForm.tsx (316 linhas) ---
+
+  CÓDIGO MORTO — MetricBlock definido mas nunca usado:
+    Linhas 295-314.
+
+  Avaliação: ✅ PRODUCTION-READY (remover código morto).
+
+
+--- 5.13. src/components/RideTalk.tsx ---
+
+  BUG — senderRole sempre DRIVER:
+    Todas as mensagens são atribuídas a UserRole.DRIVER,
+    independente de quem postou.
+
+  BUG — audio_url não existe na tabela posts:
+    Linha 247: tenta inserir audio_url mas a tabela não tem essa coluna.
+    Vai falhar no INSERT.
+
+  BUG — increment_post_likes RPC não existe no schema:
+    Linha 216: chama RPC que não está definido.
+
+  Avaliação: ⚠️ 60% pronto. Múltiplos bugs de schema.
+
+
+--- 5.14. src/components/Contract.tsx ---
+
+  BUG — Colunas inexistentes na tabela rides:
+    Linha 131-142: contract_id e scheduled_time não existem em rides.
+
+  BUG — Colunas inexistentes na tabela profiles:
+    last_known_lat, last_known_lng, has_pass,
+    pass_rides_remaining, pass_expires_at — nenhuma existe no schema.
+
+  Avaliação: ⚠️ 65% pronto. Schema mismatch sério.
+
+
+--- 5.15. src/components/SocialFeed.tsx ---
+
+  Avaliação: ✅ PRODUCTION-READY. Realtime, optimistic updates, expiration.
+
+
+--- 5.16. src/components/ZonePriceMap.tsx ---
+
+  Avaliação: ✅ PRODUCTION-READY. Simples e limpo.
+
+
+--- 5.17. src/components/AdminDriverDocs.tsx ---
+
+  BUG — logError import não existe (mesmo bug do AuthContext):
+    import { logError } from '../lib/logger';
+    logger.ts não exporta logError.
+
+  Avaliação: ⚠️ 75% pronto.
+
+
+--- 5.18. src/components/NightSafetyBanner.tsx ---
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+
+--- 5.19. src/components/ZenithScore.tsx ---
+
+  ISSUE — Tabela zenith_scores pode não existir:
+    Tenta consultar zenith_scores, fallback para motogo_scores.
+    Sugere migração incompleta.
+
+  Avaliação: ✅ 85% pronto.
+
+================================================================================
+6. CAMADA 4: HOOKS & STATE
+================================================================================
+
+--- 6.1. src/hooks/useRide.ts (524 linhas) ---
+
+  O que faz: Hook central de ciclo de vida da corrida — leilão, criação,
+  asignação, realtime, desvio de rota, tracking, review.
+
+  BUG — Race condition no requestRide:
+    Linhas 338-345: Se geocoding falhar, rPickup/rDest usam
+    coordenadas originais com .lat falso → corrida com coords inválidas.
+
+  CÓDIGO MORTO — useSafeTimeout exportado mas nunca importado:
+    Linhas 500-523.
+
+  Avaliação: ✅ 85% pronto.
+
+
+--- 6.2. src/hooks/useNearbyDrivers.ts (32 linhas) ---
+
+  ISSUE — Sem debounce: cada mudança de GPS dispara query ao banco.
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+
+--- 6.3. src/hooks/usePassengerGPS.ts (51 linhas) ---
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+
+--- 6.4. src/hooks/useIdleMount.ts (40 linhas) ---
+
+  Avaliação: ✅ PRODUCTION-READY. requestIdleCallback com fallback.
+
+
+--- 6.5. src/hooks/useSilentTripleTap.ts (46 linhas) ---
+
+  Avaliação: ✅ PRODUCTION-READY. Detecção de triple-tap para SOS silencioso.
+
+
+--- 6.6. src/store/useAppStore.ts (132 linhas) ---
+
+  BUG — Race condition no toast:
+    Linha 108: setTimeout(() => set({ toast: null }), 4000)
+    Se showToast chamado duas vezes rápido, o primeiro timeout
+    limpa o segundo toast.
+
+  Avaliação: ✅ 90% pronto.
+
+================================================================================
+7. CAMADA 5: LIBS UTILITÁRIAS
+================================================================================
+
+--- 7.1. src/lib/logger.ts (7 linhas) ---
+
+  BUG — Não exporta logError (usado em 4 arquivos):
+    Exporta apenas 'logger' com .warn, .info, .error.
+    Quatro arquivos importam logError que não existe.
+
+  Avaliação: ⚠️ FUNCIONAL mas com export faltando.
+
+
+--- 7.2. src/lib/geo.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY. Haversine correto.
+
+
+--- 7.3. src/lib/mapbox-directions.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY. Timeout de 8s, fallback Haversine.
+
+
+--- 7.4. src/lib/kazeVoice.ts ---
+
+  BUG — LOCAL_TTS_URL hardcoded para localhost:
+    http://127.0.0.1:3848/tts — não funciona em dispositivo mobile real.
+
+  ISSUE — ElevenLabs key lida de localStorage (contradiz comentário):
+    Código lê de localStorage APESAR do comentário dizer "nunca localStorage".
+
+  Avaliação: ⚠️ 60% pronto (localhost = não funciona em mobile).
+
+
+--- 7.5. src/lib/kazeAudioCapture.ts ---
+
+  BUG — LOCAL_KAZE_URL hardcoded para localhost:
+    http://localhost:3847 — mesmo problema.
+
+  Avaliação: ⚠️ 60% pronto.
+
+
+--- 7.6. src/lib/screamDetector.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY. Threshold 0.85, cooldown 30s.
+
+
+--- 7.7. src/lib/driverMarker.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+
+--- 7.8. src/lib/driverTracker.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY. LERP com threshold-based RAF stop.
+
+
+--- 7.9. src/lib/mapInstance.ts ---
+
+  ISSUE — as any para localIdeographFontFamily:
+    Linha 104: false as any — esconde mismatch de tipo.
+
+  Avaliação: ✅ 90% pronto.
+
+
+--- 7.10. src/lib/aiModelSettings.ts ---
+
+  BUG — API key exposta no bundle:
+    VITE_IA_API_KEY acessado via import.meta.env → incluído no JS.
+
+  Avaliação: ⚠️ 70% pronto (segurança).
+
+
+--- 7.11. src/lib/phone.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY. Validação de telefone angolano.
+
+
+--- 7.12. src/lib/nativeEmergency.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY. SMS nativo + WhatsApp fallback.
+
+
+--- 7.13. src/lib/authUtils.ts ---
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+================================================================================
+8. CAMADA 6: BANCO DE DADOS (SQL/Schema)
+================================================================================
+
+--- 8.1. zenith_schema_final.sql (~800 linhas) ---
+
+  O que faz: Schema completo — 20 tabelas, 12+ funções, 40+ RLS policies,
+  triggers, views, seeds para Luanda.
+
+  TABELAS: users, profiles, wallets, driver_locations, rides, transactions,
+  posts, ratings, contracts, driver_bids, user_privacy, geocoding_cache,
+  ai_usage_logs, ip_rate_limits, zone_prices, ride_predictions,
+  motogo_scores, school_tracking_sessions, motogopay_partners,
+  route_deviation_alerts
+
+  BUG — Colunas duplicadas (add + create):
+    payment_processed definida no CREATE TABLE e adicionada via ALTER.
+    route_deviation_alert e max_deviation_km idem.
+    Inofensivo mas bagunçado.
+
+  BUG — TABELAS/RPCS FALTANDO vs CÓDIGO FRONTEND:
+
+  ┌──────────────────────────────┬────────────────────────────────────┐
+  │ O QUE O FRONTEND USA         │ O QUE EXISTE NO SCHEMA            │
+  ├──────────────────────────────┼────────────────────────────────────┤
+  │ posts.audio_url              │ ❌ NÃO EXISTE (RideTalk.tsx:247)  │
+  │ rides.contract_id            │ ❌ NÃO EXISTE (Contract.tsx:131)  │
+  │ rides.scheduled_time         │ ❌ NÃO EXISTE (Contract.tsx:131)  │
+  │ profiles.last_known_lat/lng  │ ❌ NÃO EXISTE (Contract.tsx:123)  │
+  │ profiles.has_pass            │ ❌ NÃO EXISTE (Contract.tsx:50)   │
+  │ profiles.pass_rides_remaining│ ❌ NÃO EXISTE (Contract.tsx:51)   │
+  │ profiles.pass_expires_at     │ ❌ NÃO EXISTE (Contract.tsx:52)   │
+  │ zenith_scores (tabela)       │ ❌ NÃO EXISTE (ZenithScore.tsx)   │
+  │ increment_post_likes (RPC)   │ ❌ NÃO DEFINIDA (RideTalk.tsx:216)│
+  │ referrals tabela             │ ✅ EXISTE                          │
+  │ premium_bookings tabela      │ ✅ EXISTE                          │
+  └──────────────────────────────┴────────────────────────────────────┘
+
+  Essas colunas/tabelas provavelmente foram adicionadas em migrations
+  que não estão no schema monolítico. RISCO DE DRIFT.
+
+  SECURITY — geocoding_cache poisoning:
+    Qualquer usuário autenticado pode inserir no cache.
+    Poderia ser preenchido com dados falsos.
+
+  SECURITY — posts sem rate limiting:
+    Qualquer usuário pode postar infinitamente.
+
+  Avaliação: ⚠️ 75% pronto. Schema drift entre monolítico e migrations.
+
+
+--- 8.2. supabase/migrations/ (53 arquivos) ---
+
+  Migrations de Abril-Julho 2026. Muitas são fix SQL:
+  - correcao_tabelas_em_falta.sql
+  - correcoes_bloco5.sql
+  - diagnostico_tabelas.sql
+  - rls_fixes.sql
+
+  ISSUE — Conflito entre schema monolítico e migrations:
+    O rls_fixes.sql dropa e recria políticas que já existem
+    no zenith_schema_final.sql. Se ambos são aplicados, conflito.
+
+  Avaliação: ⚠️ 70% pronto. Muitos fixes indicam instabilidade.
+
+
+--- 8.3. supabase/functions/ (13 Edge Functions) ---
+
+  admin-ai-proxy, admin-gate, agora-token, analyze-patterns,
+  calculate-price, dispatch-cascade, gemini-proxy, kaze,
+  match-driver, multicaixa-pay, safety-watchdog, sentinel-vision
+
+  Avaliação: ✅ Backend maduro. 13 functions = cobertura boa.
+
+================================================================================
+9. CAMADA 7: TESTES
+================================================================================
+
+--- 9.1. e2e/auth.spec.cjs ---
+
+  O que faz: Smoke test básico — verifica se telas de auth existem.
+  Não completa nenhum fluxo real (signup, login, etc.)
+
+--- 9.2. e2e/home.spec.cjs ---
+
+  O que faz: Smoke test — carrega home, tira screenshot.
+
+  ISSUE — Cria diretório e2e-screenshots toda vez sem limpar.
+
+  AVALIAÇÃO: ❌ 20% PRONTO.
+  Cobertura de testes quase zero. Nenhum:
+  - Unit test
+  - Integration test
+  - Teste de service
+  - Teste de componente
+  - Teste de RLS
+  - Teste de fluxo de corrida
+
+  Para produção, mínimo aceitável seria ~60% cobertura nos services
+  e fluxos críticos (criar corrida, aceitar, cancelar, pagamento).
+
+================================================================================
+10. CAMADA 8: DEPLOY & CONFIGURAÇÃO
+================================================================================
+
+--- 10.1. vite.config.ts (101 linhas) ---
+
+  Avaliação: ✅ PRODUCTION-READY.
+  Chunk splitting agressivo para produção. Bom.
+
+--- 10.2. vite.admin.config.ts (44 linhas) ---
+
+  ISSUE — admin-dev/ está no .gitignore:
+    Se o diretório não existir, vite falha ao iniciar.
+
+  Avaliação: ✅ PRODUCTION-READY (com diretório existindo).
+
+--- 10.3. tsconfig.json ---
+
+  ISSUE — noUnusedLocals e noUnusedParameters desabilitados:
+    Permite código morto se acumular silenciosamente.
+
+  Avaliação: ✅ PRODUCTION-READY.
+
+--- 10.4. capacitor.config.ts (26 linhas) ---
+
+  ISSUE — Sem version/versionCode para loja de apps:
+    Necessário para submissão na Play Store/App Store.
+
+  Avaliação: ⚠️ 80% pronto.
+
+--- 10.5. vercel.json ---
+
+  Não lido, mas presente. Configuração de deploy Vercel.
+
+================================================================================
+11. BUGS CRÍTICOS (BLOQUEADORES DE PRODUÇÃO)
+================================================================================
+
+Estes bugs IMPENDEM o lançamento em produção:
+
+ #  │ ARQUIVO                          │ LINHA(S) │ DESCRIÇÃO
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C1 │ src/lib/logger.ts                │ exports  │ Não exporta 'logError' —
+    │                                  │          │ 4 arquivos importam e VÃO
+    │                                  │          │ CRASHAR em runtime
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C2 │ .env                             │ 15       │ VITE_GEMINI_API_KEY exposta
+    │                                  │          │ no bundle do cliente. Custo
+    │                                  │          │ financeiro direto.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C3 │ .env                             │ 17       │ VITE_ELEVENLABS_API_KEY (sk_)
+    │                                  │          │ exposta no bundle. Qualquer
+    │                                  │          │ pessoa gera áudio na sua conta.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C4 │ RideTalk.tsx                     │ 247      │ Insere audio_url que não
+    │                                  │          │ existe na tabela posts.
+    │                                  │          │ INSERT vai falhar.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C5 │ Contract.tsx                     │ 131-142  │ Insere contract_id e
+    │                                  │          │ scheduled_time que não
+    │                                  │          │ existem na tabela rides.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C6 │ Contract.tsx                     │ 50-53    │ Referencia colunas que não
+    │                                  │          │ existem em profiles
+    │                                  │          │ (has_pass, pass_*).
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C7 │ RideTalk.tsx                     │ 216      │ Chama increment_post_likes
+    │                                  │          │ RPC que não existe no schema.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C8 │ AdminDriverDocs.tsx              │ 4        │ Import logError não existe.
+    │                                  │          │ Componente não carrega.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ C9 │ App.tsx + Login.tsx              │ 11, 18   │ CRM_ADMIN_ORIGIN hardcoded
+    │                                  │          │ http://127.0.0.1:4000
+    │                                  │          │ Não funciona em produção.
+================================================================================
+12. BUGS DE ALTA PRIORIDADE
+================================================================================
+
+ #  │ ARQUIVO                          │ LINHA(S) │ DESCRIÇÃO
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A1 │ rideService.ts                   │ 119-126  │ setInterval em escopo de
+    │                                  │          │ módulo vaza em SSR/HMR
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A2 │ rideService.ts                   │ 754-769  │ _updateKmPerk: read-modify-
+    │                                  │          │ write race condition.
+    │                                  │          │ Deveria ser RPC atômico.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A3 │ useRide.ts                       │ 338-345  │ Geocoding falha → corrida
+    │                                  │          │ criada com coords inválidas.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A4 │ geminiService.ts                 │ 166-248  │ Double timeout: dois timers
+    │                                  │          │ independentes, um nunca é
+    │                                  │          │ limpo. Memory leak.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A5 │ AuthContext.tsx                  │ 125-141  │ Role intent no localStorage
+    │                                  │          │ pode ser manipulado para
+    │                                  │          │ escalação de privilégio.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A6 │ RideTalk.tsx                     │ 55       │ senderRole hardcoded DRIVER
+    │                                  │          │ para todas as mensagens.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A7 │ kazeVoice.ts                     │ 10-17    │ ElevenLabs key lida de
+    │                                  │          │ localStorage (XSS-vulnerável)
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A8 │ aiModelSettings.ts               │ 103      │ VITE_IA_API_KEY exposta no
+    │                                  │          │ bundle do cliente.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ A9 │ AuthContext.tsx                  │ 366-393  │ TOCTOU race no autoRepair
+    │                                  │          │ com timeout de 30s.
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+A10 │ mapboxRoutingService.ts          │ 23       │ Sem timeout no fetch. Pode
+    │                                  │          │ travar em rede lenta.
+
+================================================================================
+13. BUGS DE MÉDIA PRIORIDADE
+================================================================================
+
+ #  │ ARQUIVO                          │ DESCRIÇÃO
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M1 │ gpsService.ts:40-51              │ Fallback Luanda silencioso para
+    │                                  │ permission denied (coords erradas)
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M2 │ referralService.ts:30-50         │ Race condition na geração de
+    │                                  │ código de referral
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M3 │ premiumService.ts:258-298        │ Rollback sem transação DB
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M4 │ useAppStore.ts:108               │ Toast race condition
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M5 │ RidesHistory.tsx:78              │ Sem try/catch no loadRides
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M6 │ pdfService.ts:349                │ Footer hardcoded y=255 no contrato
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M7 │ ZenithScore.tsx:59-70            │ Tabela zenith_scores pode não existir
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M8 │ mapService.ts:122                │ Cache geocode sem limite/TTL
+────┼──────────────────────────────────┼──────────────────────────────────────
+ M9 │ routeService.ts:61,73,87         │ trafficFactor hardcoded 1.2
+────┼──────────────────────────────────┼──────────────────────────────────────
+M10 │ DriverHome.tsx                   │ 965 linhas, precisa decompor
+────┼──────────────────────────────────┼──────────────────────────────────────
+M11 │ PassengerHome.tsx                │ 846 linhas, precisa decompor
+────┼──────────────────────────────────┼──────────────────────────────────────
+M12 │ zonePrice.ts                     │ Maianga sem preço no banco
+
+================================================================================
+14. QUESTÕES DE SEGURANÇA
+================================================================================
+
+ #  │ SEVERIDADE │ ARQUIVO              │ DESCRIÇÃO
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S1 │ 🔴 CRÍTICA │ .env:15              │ VITE_GEMINI_API_KEY exposta ao cliente
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S2 │ 🔴 CRÍTICA │ .env:17              │ VITE_ELEVENLABS_API_KEY exposta
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S3 │ 🟠 ALTA    │ aiModelSettings.ts   │ VITE_IA_API_KEY exposta
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S4 │ 🟠 ALTA    │ kazeVoice.ts:10-17   │ ElevenLabs key em localStorage
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S5 │ 🟠 ALTA    │ AuthContext:125-141  │ Role intent manipulável via localStorage
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S6 │ 🟡 MÉDIA   │ referralService.ts   │ Sem rate limiting na aplicação
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S7 │ 🟡 MÉDIA   │ geocoding_cache      │ Qualquer user pode encher o cache
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S8 │ 🟡 MÉDIA   │ posts                │ Sem rate limiting em inserções
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+ S9 │ 🟢 BAIXA   │ mapService.ts:161    │ Mapbox token em URLs (padrão)
+────┼────────────┼──────────────────────┼──────────────────────────────────────
+S10 │ 🟢 BAIXA   │ PanicButton.tsx:102  │ Áudio via Realtime pode ser
+    │            │                      │ escutado por quem conhece o user_id
+
+================================================================================
+15. CÓDIGO MORTO
+================================================================================
+
+ #  │ ARQUIVO                          │ LINHA(S) │ O QUE
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D1 │ Login.tsx                        │ 315-333  │ handleSubmit() nunca chamado
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D2 │ RideRequestForm.tsx              │ 295-314  │ MetricBlock nunca usado
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D3 │ useRide.ts                       │ 500-523  │ useSafeTimeout nunca importado
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D4 │ Wallet.tsx                       │ 60       │ zenithPayQrError nunca lido
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D5 │ Layout.tsx                       │ 14       │ userName prop nunca usada
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D6 │ Profile.tsx                      │ 93       │ console.log debug
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D7 │ geminiService.ts                 │ 479-568  │ consecutiveFailures rastreado
+    │                                  │          │ mas nunca lido
+────┼──────────────────────────────────┼──────────┼──────────────────────────────
+ D8 │ DriverHome.tsx                   │ 910-963  │ useAutoMarkNotificationsRead
+    │                                  │          │ duplica lógica inline
+
+================================================================================
+16. RESUMO FINAL & ROADMAP DE CORREÇÃO
+================================================================================
+
+O Zenith Ride é um MVP impressionantemente ambicioso para o mercado angolano.
+Features diferenciadas: detecção de gritos, botão de pânico com gravação,
+safety noturno, scoring com parcerias bancárias (BCA, BFA, BAI, ENSA),
+preços fixos por zona, e o assistente AI Kaze.
+
+PORÉM, para produção NÃO está pronto. Nota: ~75%.
+
+═══════════════════════════════════════════════════════════════════════════
+PARA ATINGIR 80% (MVP VIÁVEL), CORRIGIR NESTA ORDEM:
+═══════════════════════════════════════════════════════════════════════════
+
+FASE 1 — BLOQUEADORES CRÍTICOS (1-2 dias):
+  1. Adicionar export logError ao logger.ts OU mudar imports para logger.error
+  2. Mover GEMINI_API_KEY e ELEVENLABS_API_KEY para server-only (Edge Functions)
+  3. Corrigir CRM_ADMIN_ORIGIN → variável de ambiente
+  4. Remover console.log do Profile.tsx
+
+FASE 2 — SCHEMA MATCH (2-3 dias):
+  5. Adicionar colunas faltantes ao schema (audio_url, contract_id, etc.)
+  6. Criar tabela zenith_scores ou unificar com motogo_scores
+  7. Criar RPC increment_post_likes
+  8. Aplicar migrations pendentes e gerar novo schema monolítico
+
+FASE 3 — SEGURANÇA (1-2 dias):
+  9. Mover TODAS as API keys para server-only
+  10. Adicionar validação server-side para role intent
+  11. Rate limiting em referrals e posts
+  12. Validação no kazeVoice para não ler de localStorage
+
+FASE 4 — CÓDIGO MORTO & LIMPEZA (1 dia):
+  13. Remover código morto (D1-D8)
+  14. Consolidar implementações duplicadas (getCurrentPosition, Mapbox)
+  15. Extrair useAutoMarkNotificationsRead para hooks/
+  16. Remover DevQRCode condicional (import.meta.env.DEV)
+
+FASE 5 — TESTES MÍNIMOS (3-5 dias):
+  17. Testes de service para rideService (criar, aceitar, cancelar)
+  18. Testes de componente para Login, PassengerHome, DriverHome
+  19. Testes de RLS no banco
+  20. Testes E2E para fluxo completo de corrida
+
+═══════════════════════════════════════════════════════════════════════════
+ESFORÇO ESTIMADO: ~8-12 dias de trabalho para atingir 80% production-ready
+═══════════════════════════════════════════════════════════════════════════
+
+================================================================================
+FIM DO RELATÓRIO — Gerado automaticamente por MiMoCode em 2026-07-15
+================================================================================

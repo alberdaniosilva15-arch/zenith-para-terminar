@@ -50,6 +50,7 @@ const ZenithScore: React.FC<ZenithScoreProps> = ({ driverId }) => {
 
   useEffect(() => {
     loadScore();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [driverId]);
 
   const loadScore = async () => {

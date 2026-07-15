@@ -5,15 +5,13 @@ const fileTool = require('./tools/fileTool');
 const networkTool = require('./tools/networkTool');
 const emailTool = require('./tools/emailTool');
 const musicTool = require('./tools/musicTool');
-const hermesService = require('./services/hermesService');
+const kazeEdgeService = require('./services/kazeEdgeService');
 const { classifyIntent, auditLog } = require('./security/permissions');
 const { enforcePolicy, resetCommandContext, incrementToolCount } = require('./security/executionPolicy');
 const { runAutoOperator } = require('./core/autoOperator');
 
-// Windows + Node on this machine fail CA validation for Gemini/OpenRouter.
-// This local agent is loopback-only, so we allow insecure TLS to keep the
-// admin orchestrator operational on the user's desktop.
-if (!process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+// Only disable TLS validation when explicitly requested for a local diagnostic.
+if (process.env.KAZE_ALLOW_INSECURE_TLS === '1' && !process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 }
 
@@ -25,16 +23,53 @@ const GEMINI_MODEL_CHAIN = (
   .split(',')
   .map((model) => model.trim())
   .filter(Boolean);
+const DEFAULT_OPENAI_MODEL = process.env.KAZE_OPENAI_MODEL || 'gpt-4.1-mini';
+const DEFAULT_OPENROUTER_MODEL = process.env.KAZE_OPENROUTER_MODEL || 'anthropic/claude-3.7-sonnet';
+const DEFAULT_ANTHROPIC_MODEL = process.env.KAZE_ANTHROPIC_MODEL || 'claude-3-5-sonnet-latest';
+const DEFAULT_GROQ_MODEL = process.env.KAZE_GROQ_MODEL || 'llama-3.1-8b-instant';
+
+function normalizeProvider(provider) {
+  const value = String(provider || '').trim().toLowerCase();
+  if (value === 'gemini') return 'google';
+  if (['google', 'openai', 'anthropic', 'openrouter', 'groq', 'custom'].includes(value)) return value;
+  return null;
+}
+
+function normalizeGeminiModel(model) {
+  const value = String(model || '').trim();
+  if (!value) return null;
+  return value.startsWith('models/') ? value : `models/${value}`;
+}
+
+function normalizeModelPreferences(modelPreferences = {}) {
+  const provider = normalizeProvider(modelPreferences.provider);
+  return {
+    provider,
+    model: String(modelPreferences.model || modelPreferences.modelOverride || '').trim(),
+    baseUrl: String(modelPreferences.baseUrl || '').trim().replace(/\/+$/, ''),
+  };
+}
+
+function uniq(values) {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function openAiCompatibleEndpoint(baseUrl) {
+  const clean = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!clean) return '';
+  if (clean.endsWith('/chat/completions')) return clean;
+  return `${clean}/chat/completions`;
+}
 
 const TOOLS = {
   file: fileTool,
   network: networkTool,
   email: emailTool,
   music: musicTool,
-  hermes: {
+  kazeEdge: {
     execute: (task, skill, dryRun = false, context = {}) =>
-      hermesService.execute(task, { skill, dryRun, context }),
-    listSkills: () => hermesService.listSkills(),
+      kazeEdgeService.execute(task, { skill, dryRun, context }),
+    listSkills: () => kazeEdgeService.listSkills(),
   },
 };
 
@@ -48,7 +83,7 @@ const TOOL_SCHEMAS = {
   'network.post': { required: ['url', 'body'], types: { url: 'string', body: 'object', headers: 'object' } },
   'email.sendEmail': { required: ['to', 'subject', 'body'], types: { to: 'string', subject: 'string', body: 'string' } },
   'music.playMusic': { required: ['searchOrUrl'], types: { searchOrUrl: 'string' } },
-  'hermes.execute': {
+  'kazeEdge.execute': {
     required: ['task'],
     types: { task: 'string', skill: 'string', dryRun: 'boolean', context: 'object' },
   },
@@ -64,8 +99,50 @@ const TOOL_ARGUMENT_BUILDERS = {
   'network.post': (args) => [args.url, args.body, args.headers || {}],
   'email.sendEmail': (args) => [args.to, args.subject, args.body],
   'music.playMusic': (args) => [args.searchOrUrl],
-  'hermes.execute': (args) => [args.task, args.skill, args.dryRun, args.context || {}],
+  'kazeEdge.execute': (args) => [args.task, args.skill, args.dryRun, args.context || {}],
 };
+
+function tokenizeForMatching(text) {
+  return String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length >= 3);
+}
+
+function summarizeKazeEdgeSkills(command, kazeEdgeSkills) {
+  const safeSkills = Array.isArray(kazeEdgeSkills) ? kazeEdgeSkills : [];
+  const queryTokens = tokenizeForMatching(command);
+
+  const rankedSkills = safeSkills
+    .map((skill) => {
+      const haystack = tokenizeForMatching(`${skill.name} ${skill.category} ${skill.source}`);
+      const overlap = queryTokens.filter((token) => haystack.some((entry) => entry.includes(token) || token.includes(entry)));
+      const boost = /(agent|agente|browser|github|vercel|openai|docs|skill|plugin|workflow|automation|deploy|chat)/i.test(
+        `${skill.name} ${skill.category}`,
+      )
+        ? 1
+        : 0;
+
+      return {
+        ...skill,
+        score: overlap.length * 4 + boost,
+      };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  const relevant = rankedSkills.filter((skill) => skill.score > 0).slice(0, 10);
+  const categories = [...new Set(safeSkills.map((skill) => skill.category).filter(Boolean))];
+
+  return {
+    total: safeSkills.length,
+    categories,
+    relevant,
+    strongMatch: relevant[0]?.score >= 4,
+  };
+}
 
 function validateToolCall(call) {
   if (!call || typeof call.tool !== 'string' || typeof call.args !== 'object' || !call.args) {
@@ -101,12 +178,12 @@ function validateToolCall(call) {
 function buildPlan(command, { intentLevel, existingSkill, routeMeta }) {
   const steps = [];
 
-  if (routeMeta?.route === 'hermes') {
-    steps.push(`Encaminhar para Hermes (${routeMeta.reason || 'skill externa'})`);
+  if (routeMeta?.route === 'kazeEdge') {
+    steps.push(`Encaminhar para KazeEdge (${routeMeta.reason || 'skill externa'})`);
   } else if (routeMeta?.route === 'auto') {
     steps.push('Entrar em loop multi-step com observação contínua');
   } else if (routeMeta?.route === 'hybrid') {
-    steps.push('Combinar tools locais com skills externas do Hermes');
+    steps.push('Combinar tools locais com skills externas do KazeEdge');
   } else {
     steps.push('Processar no Kaze local');
   }
@@ -194,21 +271,31 @@ function parseJsonText(text) {
 
 function resolveApiKeys(apiKeys = {}) {
   return {
-    gemini: apiKeys.gemini || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '',
+    gemini: apiKeys.gemini || apiKeys.google || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '',
+    google: apiKeys.google || apiKeys.gemini || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '',
     openrouter: apiKeys.openrouter || process.env.OPENROUTER_API_KEY || '',
     openai: apiKeys.openai || process.env.OPENAI_API_KEY || '',
+    anthropic: apiKeys.anthropic || process.env.ANTHROPIC_API_KEY || '',
+    groq: apiKeys.groq || process.env.GROQ_API_KEY || '',
+    custom: apiKeys.custom || '',
   };
 }
 
-async function callGemini({ systemPrompt, command, apiKeys }) {
-  if (!apiKeys.gemini) {
+async function callGemini({ systemPrompt, command, apiKeys, modelPreferences }) {
+  if (!apiKeys.gemini && !apiKeys.google) {
     return null;
   }
 
   let lastError = null;
+  const preference = normalizeModelPreferences(modelPreferences);
+  const modelChain = uniq([
+    preference.provider === 'google' ? normalizeGeminiModel(preference.model) : null,
+    ...GEMINI_MODEL_CHAIN,
+  ]);
+  const apiKey = apiKeys.gemini || apiKeys.google;
 
-  for (const model of GEMINI_MODEL_CHAIN) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKeys.gemini}`;
+  for (const model of modelChain) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`;
     try {
       const response = await fetch(url, {
         method: 'POST',
@@ -246,12 +333,13 @@ async function callGemini({ systemPrompt, command, apiKeys }) {
   return null;
 }
 
-async function callOpenRouter({ systemPrompt, command, apiKeys }) {
+async function callOpenRouter({ systemPrompt, command, apiKeys, modelPreferences }) {
   if (!apiKeys.openrouter) {
     return null;
   }
 
-  const model = process.env.KAZE_OPENROUTER_MODEL || 'anthropic/claude-3.7-sonnet';
+  const preference = normalizeModelPreferences(modelPreferences);
+  const model = preference.provider === 'openrouter' && preference.model ? preference.model : DEFAULT_OPENROUTER_MODEL;
   const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -280,12 +368,13 @@ async function callOpenRouter({ systemPrompt, command, apiKeys }) {
   return { text, provider: 'openrouter', model };
 }
 
-async function callOpenAI({ systemPrompt, command, apiKeys }) {
+async function callOpenAI({ systemPrompt, command, apiKeys, modelPreferences }) {
   if (!apiKeys.openai) {
     return null;
   }
 
-  const model = process.env.KAZE_OPENAI_MODEL || 'gpt-4.1-mini';
+  const preference = normalizeModelPreferences(modelPreferences);
+  const model = preference.provider === 'openai' && preference.model ? preference.model : DEFAULT_OPENAI_MODEL;
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -315,13 +404,139 @@ async function callOpenAI({ systemPrompt, command, apiKeys }) {
   return { text, provider: 'openai', model };
 }
 
-async function callLLM({ systemPrompt, command, apiKeys }) {
+async function callGroq({ systemPrompt, command, apiKeys, modelPreferences }) {
+  if (!apiKeys.groq) {
+    return null;
+  }
+
+  const preference = normalizeModelPreferences(modelPreferences);
+  const model = preference.provider === 'groq' && preference.model ? preference.model : DEFAULT_GROQ_MODEL;
+  return callOpenAICompatible({
+    systemPrompt,
+    command,
+    apiKey: apiKeys.groq,
+    provider: 'groq',
+    model,
+    baseUrl: 'https://api.groq.com/openai/v1',
+  });
+}
+
+async function callAnthropic({ systemPrompt, command, apiKeys, modelPreferences }) {
+  if (!apiKeys.anthropic) {
+    return null;
+  }
+
+  const preference = normalizeModelPreferences(modelPreferences);
+  const model = preference.provider === 'anthropic' && preference.model ? preference.model : DEFAULT_ANTHROPIC_MODEL;
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKeys.anthropic,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 2048,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: command }],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Anthropic ${response.status}`);
+  }
+
+  const data = await response.json();
+  const text = (data.content || [])
+    .map((part) => part?.text || '')
+    .join('\n')
+    .trim();
+  if (!text) {
+    throw new Error('Anthropic sem resposta');
+  }
+
+  return { text, provider: 'anthropic', model };
+}
+
+async function callOpenAICompatible({ systemPrompt, command, apiKey, provider, model, baseUrl }) {
+  if (!apiKey || !baseUrl || !model) {
+    return null;
+  }
+
+  const endpoint = openAiCompatibleEndpoint(baseUrl);
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.5,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: command },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`${provider} ${response.status}`);
+  }
+
+  const data = await response.json();
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) {
+    throw new Error(`${provider} sem resposta`);
+  }
+
+  return { text, provider, model };
+}
+
+async function callCustomProvider({ systemPrompt, command, apiKeys, modelPreferences }) {
+  const preference = normalizeModelPreferences(modelPreferences);
+  if (preference.provider !== 'custom' || !apiKeys.custom) {
+    return null;
+  }
+
+  return callOpenAICompatible({
+    systemPrompt,
+    command,
+    apiKey: apiKeys.custom,
+    provider: 'custom',
+    model: preference.model,
+    baseUrl: preference.baseUrl,
+  });
+}
+
+async function callLLM({ systemPrompt, command, apiKeys, modelPreferences }) {
   const resolvedKeys = resolveApiKeys(apiKeys);
   const errors = [];
+  const preference = normalizeModelPreferences(modelPreferences);
+  const providerCalls = {
+    google: callGemini,
+    openai: callOpenAI,
+    anthropic: callAnthropic,
+    openrouter: callOpenRouter,
+    groq: callGroq,
+    custom: callCustomProvider,
+  };
+  const providerOrder = uniq([
+    preference.provider,
+    'google',
+    'openrouter',
+    'openai',
+    'anthropic',
+    'groq',
+    'custom',
+  ]);
 
-  for (const providerCall of [callGemini, callOpenRouter, callOpenAI]) {
+  for (const provider of providerOrder) {
+    const providerCall = providerCalls[provider];
+    if (!providerCall) continue;
     try {
-      const result = await providerCall({ systemPrompt, command, apiKeys: resolvedKeys });
+      const result = await providerCall({ systemPrompt, command, apiKeys: resolvedKeys, modelPreferences: preference });
       if (result?.text) {
         return result;
       }
@@ -330,7 +545,7 @@ async function callLLM({ systemPrompt, command, apiKeys }) {
     }
   }
 
-  if (!resolvedKeys.gemini && !resolvedKeys.openrouter && !resolvedKeys.openai) {
+  if (!resolvedKeys.gemini && !resolvedKeys.openrouter && !resolvedKeys.openai && !resolvedKeys.anthropic && !resolvedKeys.groq && !resolvedKeys.custom) {
     return {
       text: 'Nenhuma chave de IA configurada para o Kaze Core.',
       provider: 'none',
@@ -341,11 +556,11 @@ async function callLLM({ systemPrompt, command, apiKeys }) {
   throw new Error(errors.join(' | ') || 'Falha ao contactar o modelo');
 }
 
-function heuristicRouteFallback(command) {
+function heuristicRouteFallback(command, kazeEdgeContext = { strongMatch: false }) {
   const normalized = command.toLowerCase();
 
   if (/(github|research|pesquisa|documenta|documentação|pull request|issue|repo)/i.test(normalized)) {
-    return { route: 'hermes', intentLevel: classifyIntent(command), reason: 'Pedido favorece skill externa do Hermes.' };
+    return { route: 'kazeEdge', intentLevel: classifyIntent(command), reason: 'Pedido favorece skill externa do KazeEdge.' };
   }
 
   if (/(passo a passo|multi-step|autónom|autonom|continua até|faz tudo)/i.test(normalized)) {
@@ -355,14 +570,14 @@ function heuristicRouteFallback(command) {
   return { route: 'local', intentLevel: classifyIntent(command), reason: 'Fallback local.' };
 }
 
-async function routeCommandWithLLM(command, apiKeys) {
+async function routeCommandWithLLM(command, apiKeys, modelPreferences) {
   const systemPrompt = `
 És o router inteligente do KAZE Core.
 Decide a melhor rota para um comando administrativo.
 
 Responde APENAS JSON:
 {
-  "route": "local" | "hermes" | "hybrid" | "auto",
+  "route": "local" | "kazeEdge" | "hybrid" | "auto",
   "intentLevel": "safe" | "sensitive" | "critical",
   "reason": "texto curto",
   "confidence": 0.0
@@ -370,14 +585,14 @@ Responde APENAS JSON:
 
 Regras:
 - "local": ficheiros permitidos, emails, rede interna, música.
-- "hermes": GitHub, research, documentação, produtividade externa.
-- "hybrid": quando precisa do Kaze local + Hermes.
+- "kazeEdge": GitHub, research, documentação, produtividade externa.
+- "hybrid": quando precisa do Kaze local + KazeEdge.
 - "auto": quando o pedido exige várias iterações de planear → executar → observar.
 - Acções destrutivas ou de escrita importante devem ser "critical".
 `;
 
   try {
-    const result = await callLLM({ systemPrompt, command, apiKeys });
+    const result = await callLLM({ systemPrompt, command, apiKeys, modelPreferences });
     const parsed = parseJsonText(result.text);
     if (parsed?.route && parsed?.intentLevel) {
       return {
@@ -396,7 +611,7 @@ Regras:
   return heuristicRouteFallback(command);
 }
 
-async function planAutoStep({ originalCommand, history, apiKeys }) {
+async function planAutoStep({ originalCommand, history, apiKeys, modelPreferences }) {
   const systemPrompt = `
 És o auto-operador do KAZE Core.
 Planeia apenas o PRÓXIMO passo seguro com base no pedido original e no histórico.
@@ -404,7 +619,7 @@ Planeia apenas o PRÓXIMO passo seguro com base no pedido original e no históri
 Responde APENAS JSON:
 {
   "done": false,
-  "executor": "local" | "hermes",
+  "executor": "local" | "kazeEdge",
   "stepCommand": "comando objectivo do próximo passo",
   "reason": "texto curto"
 }
@@ -429,7 +644,7 @@ Se já terminou:
     })),
   });
 
-  const result = await callLLM({ systemPrompt, command: userPrompt, apiKeys });
+  const result = await callLLM({ systemPrompt, command: userPrompt, apiKeys, modelPreferences });
   const parsed = parseJsonText(result.text);
 
   if (parsed?.done) {
@@ -446,7 +661,7 @@ Se já terminou:
   };
 }
 
-async function observeAutoStep({ originalCommand, history, apiKeys }) {
+async function observeAutoStep({ originalCommand, history, apiKeys, modelPreferences }) {
   const lastEntry = history[history.length - 1];
   if (!lastEntry) {
     return { done: false };
@@ -475,7 +690,7 @@ Responde APENAS JSON:
   });
 
   try {
-    const result = await callLLM({ systemPrompt, command: userPrompt, apiKeys });
+    const result = await callLLM({ systemPrompt, command: userPrompt, apiKeys, modelPreferences });
     const parsed = parseJsonText(result.text);
     if (typeof parsed?.done === 'boolean') {
       return parsed;
@@ -544,6 +759,7 @@ async function executeLocalFlow({
   command,
   confirmed,
   apiKeys,
+  modelPreferences,
   intentLevel,
   existingSkill,
   pastContext,
@@ -558,7 +774,7 @@ async function executeLocalFlow({
 ${soul}
 
 CONTEXTO DE EXECUÇÃO: KAZE CORE LOCAL
-Ferramentas locais: ficheiros autorizados, rede interna, email, música e ponte Hermes.
+Ferramentas locais: ficheiros autorizados, rede interna, email, música e ponte KazeEdge.
 Rota escolhida: ${routeMeta?.route || 'local'}.
 Justificação da rota: ${routeMeta?.reason || 'local'}.
 Memória de preferências: ${JSON.stringify(longMemory.preferences)}
@@ -583,10 +799,10 @@ Tools disponíveis:
 - network.post(url, body, headers?)
 - email.sendEmail(to, subject, body)
 - music.playMusic(searchOrUrl)
-- hermes.execute(task, skill?, dryRun?, context?)
+- kazeEdge.execute(task, skill?, dryRun?, context?)
 `;
 
-  const llmResult = await callLLM({ systemPrompt, command, apiKeys });
+  const llmResult = await callLLM({ systemPrompt, command, apiKeys, modelPreferences });
   const toolsUsed = [];
   const errors = [];
   let finalResponse = llmResult.text.replace(/```json[\s\S]*?```/g, '').trim();
@@ -627,7 +843,7 @@ Tools disponíveis:
 }
 
 async function processCommand(payload, options = {}) {
-  const { command, confirmed = false, apiKeys = {}, maxIterations = 10, mode = 'smart' } = payload || {};
+  const { command, confirmed = false, apiKeys = {}, modelPreferences = {}, maxIterations = 10, mode = 'smart' } = payload || {};
 
   if (typeof command !== 'string' || command.length > 2000) {
     return { response: 'Comando inválido.', toolsUsed: [] };
@@ -639,6 +855,7 @@ async function processCommand(payload, options = {}) {
   const existingSkill = memory.findRelevantSkill(command);
   const longMemory = memory.loadLongTermMemory();
   const resolvedKeys = resolveApiKeys(apiKeys);
+  const resolvedModelPreferences = normalizeModelPreferences(modelPreferences);
 
   let routeMeta;
   if (options.forcedRoute) {
@@ -654,7 +871,7 @@ async function processCommand(payload, options = {}) {
       reason: 'Modo auto solicitado pelo cliente.',
     };
   } else {
-    routeMeta = await routeCommandWithLLM(command, resolvedKeys);
+    routeMeta = await routeCommandWithLLM(command, resolvedKeys, resolvedModelPreferences);
   }
 
   const intentLevel = routeMeta.intentLevel || classifyIntent(command);
@@ -673,39 +890,39 @@ async function processCommand(payload, options = {}) {
 
   let result;
 
-  if (routeMeta.route === 'hermes') {
-    const hermesResult = await hermesService.execute(command, { dryRun: false, context: { source: 'kaze-core' } });
+  if (routeMeta.route === 'kazeEdge') {
+    const kazeEdgeResult = await kazeEdgeService.execute(command, { dryRun: false, context: { source: 'kaze-core' } });
     result = {
-      response: hermesResult.response || hermesResult.error || 'Hermes executado.',
-      toolsUsed: ['hermes.execute'],
+      response: kazeEdgeResult.response || kazeEdgeResult.error || 'KazeEdge executado.',
+      toolsUsed: ['kazeEdge.execute'],
       plan,
       intentLevel,
-      route: 'hermes',
+      route: 'kazeEdge',
       routeReason: routeMeta.reason,
-      toolResult: hermesResult,
-      errors: hermesResult.success ? [] : [hermesResult.error || 'Hermes indisponível'],
+      toolResult: kazeEdgeResult,
+      errors: kazeEdgeResult.success ? [] : [kazeEdgeResult.error || 'KazeEdge indisponível'],
     };
   } else if (routeMeta.route === 'auto') {
     const autoResult = await runAutoOperator({
       command,
       maxIterations,
-      planStep: ({ history }) => planAutoStep({ originalCommand: command, history, apiKeys: resolvedKeys }),
+      planStep: ({ history }) => planAutoStep({ originalCommand: command, history, apiKeys: resolvedKeys, modelPreferences: resolvedModelPreferences }),
       executeStep: async ({ plan: nextPlan }) => {
-        if (nextPlan.executor === 'hermes') {
-          const hermesResult = await hermesService.execute(nextPlan.stepCommand, {
+        if (nextPlan.executor === 'kazeEdge') {
+          const kazeEdgeResult = await kazeEdgeService.execute(nextPlan.stepCommand, {
             dryRun: false,
             context: { source: 'kaze-auto', originalCommand: command },
           });
           return {
-            route: 'hermes',
-            response: hermesResult.response || hermesResult.error || 'Hermes executado.',
-            raw: hermesResult,
-            error: hermesResult.success ? null : hermesResult.error,
+            route: 'kazeEdge',
+            response: kazeEdgeResult.response || kazeEdgeResult.error || 'KazeEdge executado.',
+            raw: kazeEdgeResult,
+            error: kazeEdgeResult.success ? null : kazeEdgeResult.error,
           };
         }
 
         const localResult = await processCommand(
-          { command: nextPlan.stepCommand, confirmed: true, apiKeys: resolvedKeys, mode: 'smart' },
+          { command: nextPlan.stepCommand, confirmed: true, apiKeys: resolvedKeys, modelPreferences: resolvedModelPreferences, mode: 'smart' },
           { forcedRoute: 'local' },
         );
 
@@ -716,7 +933,7 @@ async function processCommand(payload, options = {}) {
           error: localResult.errors?.[0] || null,
         };
       },
-      observeStep: ({ history }) => observeAutoStep({ originalCommand: command, history, apiKeys: resolvedKeys }),
+      observeStep: ({ history }) => observeAutoStep({ originalCommand: command, history, apiKeys: resolvedKeys, modelPreferences: resolvedModelPreferences }),
     });
 
     result = {
@@ -734,6 +951,7 @@ async function processCommand(payload, options = {}) {
       command,
       confirmed,
       apiKeys: resolvedKeys,
+      modelPreferences: resolvedModelPreferences,
       intentLevel,
       existingSkill,
       pastContext,

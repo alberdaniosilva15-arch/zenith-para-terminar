@@ -13,7 +13,7 @@ import { useNavigate } from 'react-router-dom';
 
 import LocationSearch from './passenger/LocationSearch';
 import RoutePreview from './passenger/RoutePreview';
-import AuctionList from './passenger/AuctionList';
+
 import RideRequestForm from './passenger/RideRequestForm';
 import ActiveRideCard from './passenger/ActiveRideCard';
 import KazePreditivo  from './KazePreditivo';
@@ -27,7 +27,7 @@ import { ReferralModal } from './ReferralModal';
 import { usePassengerGPS } from '../hooks/usePassengerGPS';
 import { useNearbyDrivers } from '../hooks/useNearbyDrivers';
 import AuctionScreen from './passenger/AuctionScreen';
-const ZonePriceMap = React.lazy(() => import('./ZonePriceMap'));
+
 import PanicButton from './PanicButton';
 import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
 import { applyScoreDiscount, zonePriceService } from '../services/zonePrice';
@@ -55,7 +55,7 @@ import { RideStatus } from '../types';
 
 const ScheduleRide = React.lazy(() => import('./passenger/ScheduleRide'));
 const Map3D = React.lazy(() => import('./Map3D'));
-const AgoraCall = React.lazy(() => import('./AgoraCall'));
+
 
 interface PassengerHomeProps {
   ride:            RideState;
@@ -225,40 +225,28 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   // ── Motoristas próximos (hook extraído) ──
   const { nearbyCount } = useNearbyDrivers(pickupCoords, isVisible ?? true);
 
-  // ── Carregar Passenger Score do Utilizador ─────────────────────────────────
+  // ── Carregar Passenger Score do Utilizador (diferido 3s) ─────────────────
   useEffect(() => {
     let cancelled = false;
-
-    const loadPassengerScore = async () => {
+    const timer = setTimeout(async () => {
       try {
         await supabase.rpc('calculate_passenger_score', { p_user_id: userId });
       } catch (err) {
-        // A migração pode ainda não estar aplicada; seguimos sem desconto.
-        // Registamos silenciosamente para facilitar debug sem assustar o utilizador.
         console.warn('[PassengerHome] calculate_passenger_score indisponível:', err);
       }
-
       try {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('passenger_scores')
           .select('user_id, score, rides_component, payment_component, behavior_component, cancel_rate_pct, last_calculated')
           .eq('user_id', userId)
           .maybeSingle();
-
-        if (!cancelled) {
-          setPassengerScore(data as PassengerScore);
-        }
+        if (!cancelled) setPassengerScore(data as PassengerScore);
       } catch (err) {
         console.warn('[PassengerHome] loadPassengerScore fail:', err);
-        if (!cancelled) {
-          setPassengerScore(null);
-        }
+        if (!cancelled) setPassengerScore(null);
       }
-    };
-
-    void loadPassengerScore();
-
-    return () => { cancelled = true; };
+    }, 3000);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [userId]);
 
   // ── Pesquisa com debounce — agora passa posição do utilizador ────────────────
@@ -634,7 +622,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
             <button
               className="zr-button zr-button--secondary"
               style={{ marginTop: '10px' }}
-              onClick={() => navigate('/profile')}
+              onClick={() => navigate('/profile', { state: { scrollTo: 'emergency' } })}
             >
               Abrir Perfil
             </button>

@@ -11,6 +11,7 @@ import { supabase, edgeFunctionUrl } from '../lib/supabase';
 import type { LocationResult, AutonomousCommand } from '../types';
 import { mapService } from './mapService';
 import { kazeSpeak } from '../lib/kazeVoice';
+import { getAiModelSettings } from '../lib/aiModelSettings';
 
 // =============================================================================
 // FALLBACK LOCAL — IA offline que responde sem Edge Function
@@ -82,16 +83,28 @@ const KAZE_LOCAL_RESPONSES: Array<{ patterns: RegExp[]; responses: string[] }> =
     ],
   },
   {
-    patterns: [/obrigad/i, /valeu/i, /fixe/i, /top/i, /bacano/i, /massa/i],
+    patterns: [/obrigad/i, /valeu/i, /thanks/i, /fixe/i, /top/i, /bacano/i, /massa/i],
     responses: [
       'De nada, mano! Estou sempre aqui para ajudar. Boa corrida! 🚀',
       'Tranquilo! Qualquer coisa, é só chamar o Kaze. 💪',
       'Na boa! Vai com calma e boa viagem! 🔥',
     ],
   },
+  {
+    patterns: [/novidade/i, /novo/i, /atualiza/i, /news/i],
+    responses: [
+      '📢 Neste momento estou em modo local (sem ligação ao servidor de IA). Posso ajudar-te com:\n• Preços das corridas\n• Segurança\n• Como funciona o app\n• Dicas sobre Luanda\n• Trânsito\nPergunta-me sobre qualquer um destes temas! 🚗',
+    ],
+  },
+  {
+    patterns: [/moto/i, /motogo/i, /mota/i, /capacete/i],
+    responses: [
+      '🏍️ O MotoGo é a opção mais rápida!\n\n• Preço: -40% do standard\n• Seguro opcional: +50 Kz por viagem\n• Capacete OBRIGATÓRIO por lei\n• Ideal para fugir ao trânsito de Luanda\n\nPede a tua moto na tab principal!',
+    ],
+  },
 ];
 
-function getLocalKazeResponse(userText: string): string {
+export function getLocalKazeResponse(userText: string): string {
   const text = userText.toLowerCase().trim();
 
   for (const entry of KAZE_LOCAL_RESPONSES) {
@@ -146,52 +159,196 @@ type VoiceWindow = Window & {
 // =============================================================================
 // HELPER: chamar Edge Function com auth automático + timeout aumentado
 // =============================================================================
-async function callProxy<T>(action: string, payload: Record<string, unknown>): Promise<T> {
+// Cache de sessão para evitar refreshSession() em cada pedido
+let cachedSession: { token: string; expiresAt: number } | null = null;
+
+async function callProxy<T>(action: string, payload: Record<string, unknown>, timeoutMs = 30000): Promise<T> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  try {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) throw new Error('Utilizador não autenticado. Faz login primeiro.');
+  const innerCall = async () => {
+    try {
+      let session;
+      // Usar sessão cacheada se ainda válida (com margem de 60s)
+      if (cachedSession && Date.now() < cachedSession.expiresAt - 60_000) {
+        session = { access_token: cachedSession.token };
+      } else {
+        const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+        if (sessionErr || !sessionData?.session) {
+          // Fallback: refresh uma única vez
+          const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+          if (!refreshError && refreshData?.session) {
+            session = refreshData.session;
+          } else {
+            throw new Error('Utilizador não autenticado. Faz login primeiro.');
+          }
+        } else {
+          session = sessionData.session;
+        }
+        // Guardar em cache
+        cachedSession = {
+          token: session.access_token,
+          expiresAt: (session.expires_at ?? 0) * 1000,
+        };
+      }
 
-    const rawProvider = localStorage.getItem('zenith_ia_provider');
-    const rawModel = localStorage.getItem('zenith_ia_model');
-    const ALLOWED_PROVIDERS = ['google', 'openai', 'anthropic'];
-    const ALLOWED_MODELS = ['gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gpt-4o', 'claude-3-5-sonnet'];
+      if (!session) throw new Error('Utilizador não autenticado. Faz login primeiro.');
 
-    const provider = rawProvider && ALLOWED_PROVIDERS.includes(rawProvider) ? rawProvider : null;
-    const modelOverride = rawModel && ALLOWED_MODELS.includes(rawModel) ? rawModel : null;
+      const aiSettings = getAiModelSettings();
+      const provider = aiSettings.provider || null;
+      const modelOverride = aiSettings.model || null;
 
-    const res = await fetch(edgeFunctionUrl('gemini-proxy'), {
-      method:  'POST',
+      const res = await fetch(edgeFunctionUrl('gemini-proxy'), {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
+        },
+        body:   JSON.stringify({
+          action,
+          provider,
+          modelOverride,
+          ai: {
+            provider,
+            model: modelOverride,
+            apiKey: aiSettings.apiKey || undefined,
+            baseUrl: aiSettings.baseUrl || undefined,
+          },
+          ...payload,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        let errorMsg = `Erro HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          errorMsg = body?.message ?? body?.error ?? errorMsg;
+        } catch (err) { console.warn('[geminiService] JSON parse:', err); }
+        throw new Error(errorMsg);
+      }
+
+      return res.json() as Promise<T>;
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        throw new Error('A IA demorou demasiado a responder (cold start). Aguarda 5s e tenta de novo.');
+      }
+      throw e;
+    }
+  };
+
+  return Promise.race([
+    innerCall(),
+    new Promise<T>((_, reject) => 
+      setTimeout(() => reject(new Error('Falha de ligacao à IA (timeout)')), timeoutMs)
+    )
+  ]).finally(() => {
+    clearTimeout(timeout);
+  });
+}
+
+async function callAdminProxy<T>(payload: Record<string, unknown>, timeoutMs = 35000): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const innerCall = async () => {
+    try {
+      let session;
+      // Reutilizar cache de sessão
+      if (cachedSession && Date.now() < cachedSession.expiresAt - 60_000) {
+        session = { access_token: cachedSession.token };
+      } else {
+        const { data: sessionData, error: sessionErr } = await supabase.auth.getSession();
+        if (sessionErr || !sessionData?.session) {
+          const { data: refreshData } = await supabase.auth.refreshSession();
+          session = refreshData?.session;
+        } else {
+          session = sessionData.session;
+        }
+        if (session) {
+          cachedSession = {
+            token: session.access_token,
+            expiresAt: (session.expires_at ?? 0) * 1000,
+          };
+        }
+      }
+
+      if (!session) throw new Error('Admin nao autenticado. Faz login primeiro.');
+
+    const aiSettings = getAiModelSettings();
+    const provider = aiSettings.provider || 'google';
+    const modelOverride = aiSettings.model || undefined;
+
+    const res = await fetch(edgeFunctionUrl('admin-ai-proxy'), {
+      method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${session.access_token}`,
       },
-      body:   JSON.stringify({ action, provider, modelOverride, ...payload }),
+      body: JSON.stringify({
+        ai: {
+          provider,
+          model: modelOverride,
+          apiKey: aiSettings.apiKey || undefined,
+          baseUrl: aiSettings.baseUrl || undefined,
+        },
+        ...payload,
+      }),
       signal: controller.signal,
     });
 
-    clearTimeout(timeout);
-
     if (!res.ok) {
-      let errorMsg = `Erro HTTP ${res.status}`;
+      let errorMsg = `admin-ai-proxy HTTP ${res.status}`;
       try {
         const body = await res.json();
         errorMsg = body?.message ?? body?.error ?? errorMsg;
-      } catch (err) { console.warn('[geminiService] JSON parse:', err); }
+      } catch (err) {
+        console.warn('[geminiService.callAdminProxy] JSON parse:', err);
+      }
       throw new Error(errorMsg);
     }
 
-    return res.json() as Promise<T>;
-
-  } catch (e: any) {
-    clearTimeout(timeout);
-    if (e.name === 'AbortError') {
-      throw new Error('A IA demorou demasiado a responder (cold start). Aguarda 5s e tenta de novo.');
+    return await res.json() as T;
+    } catch (error: any) {
+      if (error?.name === 'AbortError') {
+        throw new Error('Kaze/Hermes online demorou demasiado a responder.');
+      }
+      throw error;
     }
-    throw e;
+  };
+
+  return Promise.race([
+    innerCall(),
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Kaze/Hermes online timeout.')), timeoutMs))
+  ]).finally(() => {
+    clearTimeout(timeout);
+  });
+}
+
+function getHermesEmergencyResponse(input: string): string {
+  const text = String(input || '').toLowerCase();
+  if (/ol[aá]|oi|bom dia|boa tarde|boa noite/i.test(text)) {
+    return 'Kaze/Hermes em modo de emergencia: perdi a ligacao online por instantes, mas continuo activo. Assim que a rede voltar, retomo o cerebro online.';
   }
+  if (/estado|status|saude|health|sistema/i.test(text)) {
+    return 'Modo de emergencia activo. O caminho online admin-ai-proxy/gemini-proxy nao respondeu. Verifica internet, sessao admin e Edge Functions no Supabase.';
+  }
+  if (/corrida|motorista|driver|preco|zona|metric/i.test(text)) {
+    return 'Nao consegui consultar o cerebro online agora. Em emergencia, posso dizer: usa as tabs do Dashboard para corridas, motoristas, precos e metricas ate a Edge Function voltar.';
+  }
+  return 'Kaze/Hermes entrou em fallback de emergencia porque a rota online falhou. Tenta novamente em alguns segundos; a prioridade continua a ser responder pelo cerebro online.';
+}
+
+function summarizeToolResult(toolName: string, resultPayload: any): string {
+  const result = resultPayload?.result ?? resultPayload;
+  if (resultPayload?.success === false || resultPayload?.error) {
+    return `Hermes tentou executar ${toolName}, mas a ferramenta devolveu erro: ${resultPayload?.error || 'erro desconhecido'}.`;
+  }
+  if (result?.message) return result.message;
+  if (result?.url) return `Hermes executou ${toolName}. Resultado: ${result.url}`;
+  if (Array.isArray(result?.rows)) return `Hermes consultou ${toolName} e encontrou ${result.rows.length} registo(s).`;
+  if (typeof result?.count === 'number') return `Hermes executou ${toolName}. Resultado: ${result.count}.`;
+  return `Hermes executou ${toolName} com sucesso.`;
 }
 
 
@@ -287,7 +444,7 @@ export const geminiService = {
   createKazeChat(initialContext?: any) {
     const history: ChatMessage[] = [];
     return {
-      async sendMessage(message: string, currentContext?: any): Promise<{ text: string }> {
+      async sendMessage(message: string, currentContext?: any): Promise<{ text: string; local?: boolean }> {
         history.push({ role: 'user', content: message });
         try {
           // Converter para formato Gemini [{role, parts:[{text}]}]
@@ -306,20 +463,110 @@ export const geminiService = {
           // ⚠️ FIX: Remover a mensagem de utilizador que falhou para não quebrar a ordem user-model-user-model do Gemini
           history.pop();
 
-          const errMsg = err?.message || '';
-          
-          // Se for um erro de rede genérico ou timeout (Failed to fetch, AbortError), usa fallback
-          if (errMsg.includes('Failed to fetch') || errMsg.includes('demasiado a responder') || !errMsg) {
-            const fallbackText = getLocalKazeResponse(message);
-            return { text: fallbackText };
-          }
-
-          // Para todos os outros erros (cota, autenticação, rate limit, erros 500), mostra ao utilizador
-          return { text: `⚠️ ${errMsg}` };
+          // SEMPRE usar fallback local — o Kaze deve responder mesmo quando a Edge Function falha
+          // Erros de rede, auth, rate limit, 500 — todos recebem resposta inteligente local
+          const fallbackText = getLocalKazeResponse(message);
+          return { text: fallbackText, local: true };
         }
       },
       getHistory:   () => [...history],
       clearHistory: () => { history.length = 0; },
+    };
+  },
+
+  createHermesKazeChat(initialContext?: any) {
+    const history: Array<{ role: 'user' | 'ai'; text: string }> = [];
+    let consecutiveFailures = 0;
+
+    return {
+      async sendMessage(message: string, currentContext?: any): Promise<{
+        text: string;
+        route: 'admin-ai-proxy' | 'hermes-tool' | 'gemini-proxy' | 'emergency-local';
+        local?: boolean;
+        toolName?: string;
+        toolArgs?: any;
+        toolResult?: any;
+      }> {
+        const context = {
+          ...(initialContext || {}),
+          ...(currentContext || {}),
+          agent: 'kaze-hermes-core',
+          onlinePriority: true,
+        };
+
+        let lastPrimaryErr: any = null;
+        try {
+          const requestId = crypto.randomUUID();
+          const primary = await callAdminProxy<any>({
+            action: 'sentinel_chat',
+            message,
+            context,
+            history,
+            request_id: requestId,
+          }, 35000);
+
+          if (primary?.type === 'tool_request' && primary.tool_name) {
+            const toolResult = await callAdminProxy<any>({
+              action: 'execute_tool',
+              request_id: requestId,
+              tool_name: primary.tool_name,
+              tool_args: primary.tool_args || {},
+            });
+            const text = summarizeToolResult(primary.tool_name, toolResult);
+            history.push({ role: 'user', text: message });
+            history.push({ role: 'ai', text });
+            consecutiveFailures = 0;
+            return {
+              text,
+              route: 'hermes-tool',
+              toolName: primary.tool_name,
+              toolArgs: primary.tool_args || {},
+              toolResult,
+            };
+          }
+
+          const text = primary?.text || primary?.response || 'Kaze/Hermes online, mas sem texto de resposta.';
+          history.push({ role: 'user', text: message });
+          history.push({ role: 'ai', text });
+          consecutiveFailures = 0;
+          return { text, route: 'admin-ai-proxy' };
+        } catch (primaryErr) {
+          lastPrimaryErr = primaryErr;
+          console.warn('[geminiService.createHermesKazeChat] admin-ai-proxy falhou:', primaryErr);
+        }
+
+        try {
+          const geminiHistory = toGeminiHistory(
+            history.map((item) => ({
+              role: item.role === 'ai' ? 'model' : 'user',
+              content: item.text,
+            })),
+          );
+          const fallback = await callProxy<{ text: string }>('kaze_chat', {
+            message,
+            history: geminiHistory,
+            kazeContext: context,
+          }, 30000);
+          const text = fallback.text || getHermesEmergencyResponse(message);
+          history.push({ role: 'user', text: message });
+          history.push({ role: 'ai', text });
+          consecutiveFailures = 0;
+          return { text, route: 'gemini-proxy' };
+        } catch (fallbackErr: any) {
+          console.warn('[geminiService.createHermesKazeChat] gemini-proxy tambem falhou:', fallbackErr);
+          
+          consecutiveFailures += 1;
+          const text = `Lamento, estou com dificuldades técnicas momentâneas. Tenta novamente em alguns segundos.`;
+          history.push({ role: 'user', text: message });
+          history.push({ role: 'ai', text });
+          return { text, route: 'emergency-local', local: true };
+        }
+      },
+      getHistory: () => [...history],
+      clearHistory: () => {
+        history.length = 0;
+        consecutiveFailures = 0;
+      },
     };
   },
 

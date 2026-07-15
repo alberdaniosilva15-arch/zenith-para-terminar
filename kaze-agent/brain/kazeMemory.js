@@ -61,7 +61,7 @@ function persistSession() {
   fs.writeFileSync(file, JSON.stringify(sessionMemory, null, 2), 'utf8');
 }
 
-// Full-text search em sessões passadas (padrão Hermes)
+// Full-text search em sessões passadas (padrão KazeEdge)
 
 function searchPastSessions(query) {
   if (!fs.existsSync(SESSIONS_DIR)) return [];
@@ -83,7 +83,7 @@ function searchPastSessions(query) {
   return results.slice(0, 5);
 }
 
-// Skill Trust Score (padrão Hermes melhorado)
+// Skill Trust Score (padrão KazeEdge melhorado)
 // confidence = (success_rate * log(uses+1)) * recency_factor
 
 function computeTrustScore(skill) {

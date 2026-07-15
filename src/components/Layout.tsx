@@ -52,11 +52,7 @@ const Layout: React.FC<LayoutProps> = ({
   const isDriver = role === UserRole.DRIVER;
   const isFleetOwner = role === UserRole.FLEET_OWNER;
 
-  const isAdmin = role === UserRole.ADMIN;
-
-  const tabs: TabType[] = isAdmin
-    ? ['home', 'admin', 'profile']
-    : isFleetOwner
+  const tabs: TabType[] = isFleetOwner
     ? ['home', 'profile']
     : isDriver
       ? ['home', 'social', 'rides', 'wallet', 'profile']
@@ -137,11 +133,12 @@ const Layout: React.FC<LayoutProps> = ({
               key={tab}
               onClick={() => navigate(TAB_ROUTES[tab])}
               className={`zr-nav-link ${active ? 'is-active' : ''}`}
+              aria-label={labels[tab]}
+              title={labels[tab]}
             >
               <span className="material-symbols-outlined">
                 {TAB_ICONS[tab]}
               </span>
-              <span>{labels[tab]}</span>
             </button>
           );
         })}

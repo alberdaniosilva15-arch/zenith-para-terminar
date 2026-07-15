@@ -113,6 +113,9 @@ const DriverCopilot: React.FC<DriverCopilotProps> = ({
           <p className="text-[11px] text-white/65 mt-2">
             Procura acima da oferta agora. Excelente momento para reposicionamento inteligente.
           </p>
+          <p className="text-[11px] text-white/45 mt-2">
+            Este modulo e tatico: sugere reposicionamento, mas ainda nao e um chat directo com o Kaze.
+          </p>
         </div>
 
         <div className="w-20 h-20 rounded-full border border-white/15 bg-black/20 flex items-center justify-center shrink-0">

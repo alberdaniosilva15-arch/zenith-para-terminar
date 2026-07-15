@@ -51,16 +51,18 @@ function zenithDevQrPlugin() {
 
 export default defineConfig({
   appType: 'spa',
+  cacheDir: 'node_modules/.vite-app',
   plugins: [react(), zenithDevQrPlugin()],
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },
   },
   server: {
-    host: true,
+    host: '127.0.0.1',
     port: 5173,
+    strictPort: true,
   },
   build: {
-    sourcemap: 'hidden',
+    sourcemap: false,
     cssCodeSplit: true,
     chunkSizeWarningLimit: 800,
     rollupOptions: {

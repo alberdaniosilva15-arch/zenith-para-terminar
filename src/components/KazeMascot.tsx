@@ -7,7 +7,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useRef } from 'react';
-import { geminiService } from '../services/geminiService';
+import { geminiService, getLocalKazeResponse } from '../services/geminiService';
 import { kazeSpeak } from '../lib/kazeVoice';
 import { UserRole, RideStatus } from '../types';
 
@@ -18,8 +18,7 @@ interface KazeMascotProps {
   userName?:   string;
 }
 
-const MASCOT_IMG = '/kaze-avatar.png';
-const MASCOT_FALLBACK = 'https://img.icons8.com/3d-fluency/180/robot-3.png';
+// Ícones Material Symbols usados em vez de imagem mascote
 
 type SupportedKazeGreetingRole = UserRole.PASSENGER | UserRole.DRIVER;
 
@@ -58,12 +57,18 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
   const [voiceEnabled, setVoiceEnabled] = useState(true); // Ativado por defeito no app
 
   const chatRef   = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
+  const liveSessionRef = useRef<{ close: () => void } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll ao adicionar mensagens
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages, isThinking]);
+
+  useEffect(() => () => {
+    liveSessionRef.current?.close();
+    liveSessionRef.current = null;
+  }, []);
 
   // Mostrar mensagem de boas-vindas ao abrir o chat pela primeira vez
   useEffect(() => {
@@ -121,23 +126,31 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
       if (mode === 'explore') {
         const result = await geminiService.exploreLuanda(userText);
         setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
-        if (voiceEnabled) kazeSpeak(result.text);
+        if (voiceEnabled) await kazeSpeak(result.text);
         // FIX: só marcar online se não há mensagem de erro no texto
         setKazeOnline(!result.text.startsWith('⚠️') && !result.text.startsWith('❌'));
       } else {
         if (!chatRef.current) chatRef.current = geminiService.createKazeChat({ rideStatus, role, mode });
         const response = await chatRef.current.sendMessage(userText, { rideStatus, role, mode, time: new Date().toISOString() });
         setMessages(prev => [...prev, { role: 'model', text: response.text }]);
-        if (voiceEnabled) kazeSpeak(response.text);
+        if (voiceEnabled) await kazeSpeak(response.text);
         const isError = response.text.startsWith('⚠️') || response.text.startsWith('❌') || response.text.startsWith('🔒') || response.text.startsWith('⏱️');
-        setKazeOnline(!isError);
+        setKazeOnline(!response.local && !isError);
       }
     } catch (err) {
       console.warn('[KazeMascot] Erro ao enviar:', err);
-      setKazeOnline(false);
+      const errMsg = err instanceof Error ? err.message : '';
+      const isOffline = errMsg.includes('modo local')
+        || errMsg.includes('indisponÃ­vel')
+        || errMsg.includes('indisponível')
+        || errMsg.includes('timeout')
+        || errMsg.includes('Timeout')
+        || errMsg.includes('Falha de ligacao')
+        || errMsg.includes('Falha de ligaÃ§Ã£o');
+      setKazeOnline(!isOffline);
       setMessages(prev => [...prev, {
         role: 'model',
-        text: err instanceof Error ? err.message : '❌ Erro desconhecido. Tenta de novo.',
+        text: isOffline ? getLocalKazeResponse(userText) : (errMsg || 'Erro desconhecido. Tenta de novo.'),
       }]);
     } finally {
       setIsThinking(false);
@@ -147,17 +160,27 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
   const startVoiceMode = async () => {
     setMode('voice');
     setIsLive(false);
+    setVoiceError(null);
+    liveSessionRef.current?.close();
+    liveSessionRef.current = null;
     try {
       const session = await geminiService.connectKazeLive({
         onmessage: () => {},
-        onclose: () => setIsLive(false),
+        onclose: () => {
+          setIsLive(false);
+          liveSessionRef.current = null;
+        },
       });
-      if (session) { setIsLive(true); setVoiceError(null); }
+      if (session) {
+        liveSessionRef.current = session;
+        setIsLive(true);
+        setVoiceError(null);
+      }
       else { setIsLive(false); setVoiceError('Modo de voz temporariamente indisponível.'); }
     } catch (err) {
       console.warn('[KazeMascot] voice:', err);
       setIsLive(false);
-      setVoiceError('Activa a Edge Function gemini-proxy no painel Supabase.');
+      setVoiceError(err instanceof Error ? err.message : 'Falha ao iniciar o modo de voz.');
     }
   };
 
@@ -189,14 +212,14 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
           <div className="zr-header" style={{ padding: '16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, rgba(230,195,100,0.1), transparent)' }}>
             <div className="zr-inline zr-inline--between">
               <div className="zr-inline" style={{ gap: '12px' }}>
-                <div style={{ width: '48px', height: '48px', background: 'var(--surface-3)', borderRadius: '12px', padding: '4px', position: 'relative' }}>
-                  <img src={MASCOT_IMG} alt="Kaze" style={{ width: '100%', height: '100%', objectFit: 'contain' }} onError={(e) => { e.currentTarget.src = MASCOT_FALLBACK; }} />
+                <div style={{ width: '48px', height: '48px', background: 'var(--surface-3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                  <span className="material-symbols-outlined" style={{ color: 'var(--gold)', fontSize: '28px' }}>auto_awesome</span>
                 </div>
                 <div>
                   <h4 className="zr-section-title" style={{ fontSize: '14px', margin: 0 }}>KAZE 2.5</h4>
                   <span className="zr-meta" style={{ color: 'var(--gold)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: 'var(--gold)' }} className="" />
-                    {isDriver ? 'MOTORISTA ONLINE' : 'VIGILANTE ONLINE'}
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: kazeOnline ? '#4ade80' : 'var(--gold)' }} className="" />
+                    {kazeOnline ? (isDriver ? 'MOTORISTA ONLINE' : 'IA CONECTADA') : 'MODO LOCAL'}
                   </span>
                 </div>
               </div>
@@ -229,7 +252,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
               <>
                 {messages.length === 0 && (
                   <div className="zr-empty" style={{ height: '100%', justifyContent: 'center' }}>
-                    <img src={MASCOT_IMG} style={{ width: '80px', opacity: 0.5, marginBottom: '16px' }} alt="Kaze" onError={(e) => { e.currentTarget.src = MASCOT_FALLBACK; }} />
+                    <span className="material-symbols-outlined" style={{ fontSize: '64px', color: 'var(--gold)', opacity: 0.3, marginBottom: '16px' }}>auto_awesome</span>
                     <p className="zr-meta" style={{ textAlign: 'center', maxWidth: '180px' }}>
                       {mode === 'explore' ? 'TRÂNSITO EM TEMPO REAL' : 'ASSISTENTE VIGILANTE PRONTO'}
                     </p>
@@ -255,7 +278,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
                 {isThinking && (
                   <div className="zr-bubble zr-bubble--other" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <div className="zr-loading-dots"><span></span><span></span><span></span></div>
-                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>Analisando Luanda...</span>
+                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>A pensar...</span>
                   </div>
                 )}
               </>
@@ -264,7 +287,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
                 <div style={{ position: 'relative' }}>
                   <div className={`transition-all duration-1000 ${isLive ? '' : ''}`} style={{ position: 'absolute', inset: '-20px', background: 'var(--gold)', borderRadius: '50%', filter: 'blur(30px)', opacity: isLive ? 0.3 : 0.1 }} />
                   <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: 'var(--surface-3)', border: isLive ? '2px solid var(--gold)' : '2px solid transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
-                    <img src={MASCOT_IMG} style={{ width: '80px', transform: isLive ? 'scale(1.1)' : 'scale(0.9)', transition: 'transform 0.5s', opacity: isLive ? 1 : 0.6 }} alt="Kaze" />
+                    <span className="material-symbols-outlined" style={{ fontSize: '56px', color: 'var(--gold)', transform: isLive ? 'scale(1.1)' : 'scale(0.9)', transition: 'transform 0.5s', opacity: isLive ? 1 : 0.6 }}>graphic_eq</span>
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
@@ -315,7 +338,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
           position: 'relative'
         }}
       >
-        <img src={MASCOT_IMG} alt="Kaze Mascot" style={{ width: '32px', height: '32px', objectFit: 'contain', transform: (isOpen || isThinking) ? 'scale(1.1)' : 'none', transition: 'transform 0.3s' }} />
+        <span className="material-symbols-outlined" style={{ fontSize: '28px', color: isOpen ? '#000' : 'var(--gold)', transform: (isOpen || isThinking) ? 'scale(1.1)' : 'none', transition: 'transform 0.3s' }}>{isThinking ? 'graphic_eq' : 'auto_awesome'}</span>
         {kazeOnline === true && (
           <span style={{ position: 'absolute', bottom: '8px', right: '8px', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 8px var(--success)' }} className="" />
         )}
@@ -325,3 +348,4 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
 };
 
 export default KazeMascot;
+

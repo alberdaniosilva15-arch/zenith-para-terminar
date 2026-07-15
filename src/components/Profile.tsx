@@ -1,5 +1,6 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useLocation } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import type { DbUser, DbProfile } from '../types';
 import ZenithScore from './ZenithScore';
@@ -19,6 +20,22 @@ type ProfileSection = 'main' | 'personal' | 'ia-settings' | 'security' | 'zenith
 const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
   const { updateProfile } = useAuth();
   const showToast = useAppStore((s) => s.showToast);
+  const location = useLocation();
+  const emergencyRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (location.state?.scrollTo === 'emergency' && emergencyRef.current) {
+      emergencyRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      emergencyRef.current.style.outline = '2px solid var(--gold)';
+      emergencyRef.current.style.outlineOffset = '4px';
+      setTimeout(() => {
+        if (emergencyRef.current) {
+          emergencyRef.current.style.outline = 'none';
+        }
+      }, 3000);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
 
   const [activeSection, setActiveSection] = useState<ProfileSection>('main');
   const [showReferral,  setShowReferral]  = useState(false);
@@ -72,18 +89,25 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
 
     setEditSaving(true);
     setEditMsg(null);
-    const err = await updateProfile({ 
-      name: editName.trim(), 
-      phone: normalizedPhone || undefined,
-      emergency_contact_phone: normalizedEmergency || undefined,
-    });
-    setEditSaving(false);
-    if (!err) {
-      setEditPhone(normalizedPhone || '');
-      setEditEmergency(normalizedEmergency || '');
+    try {
+      console.log('[Profile] A guardar:', { name: editName?.trim(), phone: normalizedPhone, emergency: normalizedEmergency });
+      const err = await updateProfile({ 
+        name: editName.trim(), 
+        phone: normalizedPhone || undefined,
+        emergency_contact_phone: normalizedEmergency || undefined,
+      });
+      if (!err) {
+        setEditPhone(normalizedPhone || '');
+        setEditEmergency(normalizedEmergency || '');
+      }
+      setEditMsg(err ? { text: err.message, ok: false } : { text: 'Guardado com sucesso!', ok: true });
+    } catch (err: any) {
+      console.error('[Profile] update error:', err);
+      setEditMsg({ text: err.message || 'Erro inesperado ao guardar', ok: false });
+    } finally {
+      setEditSaving(false);
+      setTimeout(() => setEditMsg(null), 3000);
     }
-    setEditMsg(err ? { text: err.message, ok: false } : { text: 'Guardado com sucesso!', ok: true });
-    setTimeout(() => setEditMsg(null), 3000);
   };
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -235,7 +259,7 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
               <input type="tel" value={editPhone} onChange={e => setEditPhone(e.target.value.replace(/[^0-9+]/g, ''))} className="zr-input" style={{ width: '100%' }} />
             </div>
 
-            <div style={{ marginBottom: '24px' }}>
+            <div ref={emergencyRef} style={{ marginBottom: '24px' }}>
               <label className="zr-meta" style={{ display: 'block', marginBottom: '8px' }}>Contacto de Emergência (Telefone)</label>
               <input type="tel" value={editEmergency} onChange={e => setEditEmergency(e.target.value.replace(/[^0-9+]/g, ''))} placeholder="Nº para SOS" className="zr-input" style={{ width: '100%' }} />
             </div>

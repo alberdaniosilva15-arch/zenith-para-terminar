@@ -7,9 +7,42 @@ import { hasRecoveryType } from './lib/authUtils';
 const Login = React.lazy(() => import('./components/Login'));
 const ParentTrackingPage = React.lazy(() => import('./components/ParentTrackingPage'));
 const AuthenticatedApp = React.lazy(() => import('./app/AuthenticatedApp'));
+const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_intent';
+const CRM_ADMIN_ORIGIN = 'http://127.0.0.1:4000';
+
+function sanitizeRedirectTarget(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  if (!candidate.startsWith('/')) return null;
+  if (candidate.startsWith('//')) return null;
+  if (candidate.startsWith('/login')) return null;
+  return candidate;
+}
+
+function readStoredRedirectTarget(): string | null {
+  if (typeof window === 'undefined') return null;
+  return sanitizeRedirectTarget(window.localStorage.getItem(AUTH_REDIRECT_STORAGE_KEY));
+}
+
+function persistRedirectTarget(target: string | null): void {
+  if (typeof window === 'undefined') return;
+  const safeTarget = sanitizeRedirectTarget(target);
+  if (!safeTarget) {
+    window.localStorage.removeItem(AUTH_REDIRECT_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(AUTH_REDIRECT_STORAGE_KEY, safeTarget);
+}
+
+function readRedirectTargetFromSearch(search: string): string | null {
+  const searchParams = new URLSearchParams(search);
+  return sanitizeRedirectTarget(searchParams.get('next'));
+}
+
+
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { dbUser, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -20,7 +53,17 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
     );
   }
 
-  if (!dbUser) return <Navigate to="/login" replace />;
+  if (!dbUser) {
+    const requestedPath = `${location.pathname}${location.search}${location.hash}`;
+    const safeTarget = sanitizeRedirectTarget(requestedPath);
+    if (safeTarget?.startsWith('/admin')) {
+      window.location.replace(`${CRM_ADMIN_ORIGIN}/login?next=${encodeURIComponent(safeTarget)}`);
+      return <FullPageSpinner label="A abrir CRM admin..." />;
+    }
+    persistRedirectTarget(safeTarget);
+    const loginTarget = safeTarget ? `/login?next=${encodeURIComponent(safeTarget)}` : '/login';
+    return <Navigate to={loginTarget} replace />;
+  }
   return <>{children}</>;
 };
 
@@ -105,11 +148,12 @@ function hasSessionResetRequest(pathname: string, search: string): boolean {
 }
 
 function AuthShellRoutes() {
-  const { dbUser, loading, session, signOut } = useAuth();
+  const { dbUser, loading, role, session, signOut } = useAuth();
   const location = useLocation();
 
   const isRecoveryRoute = hasRecoveryType(location.search, location.hash);
   const isSessionResetRoute = hasSessionResetRequest(location.pathname, location.search);
+  const nextTarget = readRedirectTargetFromSearch(location.search) ?? readStoredRedirectTarget();
 
   if (isSessionResetRoute && !isRecoveryRoute) {
     return <SessionResetScreen onSignOut={signOut} />;
@@ -130,7 +174,12 @@ function AuthShellRoutes() {
       <Route
         path="/login"
         element={
-          dbUser && !isRecoveryRoute ? <Navigate to="/" replace /> : (
+          dbUser && !isRecoveryRoute ? (
+            (() => {
+              persistRedirectTarget(null);
+              return <Navigate to={nextTarget ?? '/'} replace />;
+            })()
+          ) : (
             session ? (isRecoveryRoute ? loginScreen : <StuckRegistrationScreen onSignOut={signOut} />) : loginScreen
           )
         }
@@ -176,6 +225,3 @@ const App: React.FC = () => {
 };
 
 export default App;
-
-
-

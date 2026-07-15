@@ -52,7 +52,7 @@ const LocationSearch: React.FC<LocationSearchProps> = ({
   onSelectLocation,
 }) => {
   return (
-    <div className="zr-app" style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'var(--bg)' }}>
+    <div className="zr-app" style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'var(--bg)', paddingTop: '70px' }}>
       <header className="zr-header">
         <div className="zr-inline zr-inline--between">
           <div>

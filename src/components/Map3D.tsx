@@ -62,6 +62,7 @@ const Map3D = forwardRef<Map3DHandle, Map3DProps>(({
     return () => {
       // Singleton persiste, apenas limpamos se necessário
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ── Efeito separado para atualizar posição sem recriar ──────

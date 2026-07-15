@@ -26,8 +26,12 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ userId, onClose })
 
   const handleCopy = () => {
     if (!code) return;
-    navigator.clipboard.writeText(code).catch(() => {});
-    showToast('Código copiado!', 'success');
+    navigator.clipboard.writeText(code)
+      .then(() => showToast('Código copiado!', 'success'))
+      .catch((e) => {
+        console.error('Clipboard error:', e);
+        showToast('Não foi possível copiar', 'error');
+      });
   };
 
   const handleShare = async () => {
@@ -40,8 +44,12 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ userId, onClose })
         console.warn('[ReferralModal] share:', err);
       }
     } else {
-      navigator.clipboard.writeText(text).catch(() => {});
-      showToast('Link copiado para partilhar!', 'success');
+      navigator.clipboard.writeText(text)
+        .then(() => showToast('Link copiado para partilhar!', 'success'))
+        .catch((e) => {
+          console.error('Clipboard error:', e);
+          showToast('Falha ao copiar', 'error');
+        });
     }
   };
 

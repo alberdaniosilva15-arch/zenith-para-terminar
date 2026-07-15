@@ -40,6 +40,7 @@ export default function AdminUsersPanel() {
   const [page, setPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<UserRow | null>(null);
   const [recentRides, setRecentRides] = useState<any[]>([]);
   const [roleDraft, setRoleDraft] = useState<UserRole>(UserRole.PASSENGER);
@@ -77,74 +78,86 @@ export default function AdminUsersPanel() {
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
-    const nowIso = new Date().toISOString();
-    const from = (page - 1) * PAGE_SIZE;
-    const to = from + PAGE_SIZE - 1;
+    setError(null);
+    try {
+      const nowIso = new Date().toISOString();
+      const from = (page - 1) * PAGE_SIZE;
+      const to = from + PAGE_SIZE - 1;
 
-    let query = supabase
-      .from('users')
-      .select('id, email, role, suspended_until, created_at', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(from, to);
+      let query = supabase
+        .from('users')
+        .select('id, email, role, suspended_until, created_at', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .range(from, to);
 
-    if (roleFilter !== 'all') {
-      query = query.eq('role', roleFilter);
-    }
+      if (roleFilter !== 'all') {
+        query = query.eq('role', roleFilter);
+      }
 
-    if (statusFilter === 'active') {
-      query = query.or(`suspended_until.is.null,suspended_until.lte.${nowIso}`);
-    } else if (statusFilter === 'suspended') {
-      query = query.gt('suspended_until', nowIso);
-    }
+      if (statusFilter === 'active') {
+        query = query.or(`suspended_until.is.null,suspended_until.lte.${nowIso}`);
+      } else if (statusFilter === 'suspended') {
+        query = query.gt('suspended_until', nowIso);
+      }
 
-    const { data: userRows, count } = await query;
-    setTotalCount(count ?? 0);
+      const { data: userRows, count, error: queryError } = await query;
+      if (queryError) throw queryError;
 
-    const ids = (userRows ?? []).map((row) => row.id);
-    if (!ids.length) {
-      setUsers([]);
+      setTotalCount(count ?? 0);
+
+      const ids = (userRows ?? []).map((row) => row.id);
+      if (!ids.length) {
+        setUsers([]);
+        setLoading(false);
+        return;
+      }
+
+      const [profilesRes, walletsRes] = await Promise.all([
+        supabase.from('profiles').select('user_id, name, phone, rating, total_rides').in('user_id', ids),
+        supabase.from('wallets').select('user_id, balance').in('user_id', ids),
+      ]);
+
+      if (profilesRes.error) throw profilesRes.error;
+      if (walletsRes.error) throw walletsRes.error;
+
+      const profileMap = new Map(
+        (profilesRes.data ?? []).map((profile) => [
+          profile.user_id,
+          {
+            name: profile.name ?? 'Utilizador Zenith',
+            phone: profile.phone ?? null,
+            rating: Number(profile.rating ?? 0),
+            total_rides: Number(profile.total_rides ?? 0),
+          },
+        ]),
+      );
+      const walletMap = new Map(
+        (walletsRes.data ?? []).map((wallet) => [wallet.user_id, Number(wallet.balance ?? 0)]),
+      );
+
+      const nextUsers = (userRows ?? []).map((row) => {
+        const profile = profileMap.get(row.id);
+        return {
+          id: row.id,
+          email: row.email ?? 'sem-email',
+          role: row.role as UserRole,
+          suspended_until: row.suspended_until ?? null,
+          created_at: row.created_at,
+          name: profile?.name ?? 'Utilizador Zenith',
+          phone: profile?.phone ?? null,
+          rating: profile?.rating ?? 0,
+          total_rides: profile?.total_rides ?? 0,
+          wallet_balance: walletMap.get(row.id) ?? 0,
+        };
+      });
+
+      setUsers(nextUsers);
+    } catch (e: any) {
+      console.error('[AdminUsersPanel.loadUsers]', e);
+      setError(e.message || 'Falha de rede. Verifica a ligação ao servidor.');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const [profilesRes, walletsRes] = await Promise.all([
-      supabase.from('profiles').select('user_id, name, phone, rating, total_rides').in('user_id', ids),
-      supabase.from('wallets').select('user_id, balance').in('user_id', ids),
-    ]);
-
-    const profileMap = new Map(
-      (profilesRes.data ?? []).map((profile) => [
-        profile.user_id,
-        {
-          name: profile.name ?? 'Utilizador Zenith',
-          phone: profile.phone ?? null,
-          rating: Number(profile.rating ?? 0),
-          total_rides: Number(profile.total_rides ?? 0),
-        },
-      ]),
-    );
-    const walletMap = new Map(
-      (walletsRes.data ?? []).map((wallet) => [wallet.user_id, Number(wallet.balance ?? 0)]),
-    );
-
-    const nextUsers = (userRows ?? []).map((row) => {
-      const profile = profileMap.get(row.id);
-      return {
-        id: row.id,
-        email: row.email ?? 'sem-email',
-        role: row.role as UserRole,
-        suspended_until: row.suspended_until ?? null,
-        created_at: row.created_at,
-        name: profile?.name ?? 'Utilizador Zenith',
-        phone: profile?.phone ?? null,
-        rating: profile?.rating ?? 0,
-        total_rides: profile?.total_rides ?? 0,
-        wallet_balance: walletMap.get(row.id) ?? 0,
-      };
-    });
-
-    setUsers(nextUsers);
-    setLoading(false);
   }, [page, roleFilter, statusFilter]);
 
   useEffect(() => {
@@ -173,14 +186,23 @@ export default function AdminUsersPanel() {
   const handleUpdateRole = async () => {
     if (!selectedUser) return;
     setUpdating(true);
-    await supabase.rpc('admin_set_user_role', {
-      p_user_id: selectedUser.id,
-      p_role: roleDraft,
-    });
-    await loadUsers();
-    await loadMetrics();
-    setSelectedUser((prev) => (prev ? { ...prev, role: roleDraft } : null));
-    setUpdating(false);
+    try {
+      const { error } = await supabase.rpc('admin_set_user_role', {
+        p_user_id: selectedUser.id,
+        p_role: roleDraft,
+      });
+
+      if (error) throw error;
+      await loadUsers();
+      await loadMetrics();
+      setSelectedUser((prev) => (prev ? { ...prev, role: roleDraft } : null));
+      setError(null);
+    } catch (err: any) {
+      console.error('[AdminUsersPanel.handleUpdateRole]', err);
+      setError(err.message || 'Nao foi possivel actualizar o role do utilizador.');
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const handleUpdateSuspension = async (clear = false) => {
@@ -191,15 +213,23 @@ export default function AdminUsersPanel() {
       ? null
       : new Date(`${suspendUntilDraft}T23:59:59`).toISOString();
 
-    await supabase.rpc('admin_set_user_suspension', {
-      p_user_id: selectedUser.id,
-      p_suspended_until: suspendIso,
-    });
+    try {
+      const { error } = await supabase.rpc('admin_set_user_suspension', {
+        p_user_id: selectedUser.id,
+        p_suspended_until: suspendIso,
+      });
 
-    await loadUsers();
-    await loadMetrics();
-    setSelectedUser((prev) => (prev ? { ...prev, suspended_until: suspendIso } : null));
-    setUpdating(false);
+      if (error) throw error;
+      await loadUsers();
+      await loadMetrics();
+      setSelectedUser((prev) => (prev ? { ...prev, suspended_until: suspendIso } : null));
+      setError(null);
+    } catch (err: any) {
+      console.error('[AdminUsersPanel.handleUpdateSuspension]', err);
+      setError(err.message || 'Nao foi possivel actualizar a suspensao.');
+    } finally {
+      setUpdating(false);
+    }
   };
 
   const selectedStatus = useMemo(() => {
@@ -260,6 +290,17 @@ export default function AdminUsersPanel() {
 
         {loading ? (
           <div className="p-8 text-center text-sm font-bold text-white/55">A carregar utilizadores...</div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+            <span className="material-symbols-outlined text-5xl text-red-400">cloud_off</span>
+            <p className="text-sm text-red-400 max-w-sm">{error}</p>
+            <button
+              onClick={loadUsers}
+              className="mt-2 px-5 py-2 text-sm rounded border border-white/20 text-white/70 hover:bg-white/10 transition-colors"
+            >
+              Tentar Novamente
+            </button>
+          </div>
         ) : users.length === 0 ? (
           <div className="p-8 text-center text-sm font-bold text-white/55">Nenhum utilizador encontrado.</div>
         ) : (
@@ -347,7 +388,7 @@ export default function AdminUsersPanel() {
               <button
                 onClick={() => void handleUpdateRole()}
                 disabled={updating}
-                className="mt-3 w-full rounded-2xl bg-primary px-4 py-3 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-50"
+                className="mt-3 w-full rounded-2xl bg-primary px-4 py-3 text-[10px] font-black uppercase tracking-widest text-[#000000] disabled:opacity-50"
               >
                 Guardar role
               </button>

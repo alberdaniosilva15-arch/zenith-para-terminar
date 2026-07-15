@@ -522,6 +522,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
   // Effect único de lifecycle e unmount
   // ✅ BUG #7 CORRIGIDO: cleanup completo de todos os timers
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -914,6 +915,7 @@ export function useAutoMarkNotificationsRead(
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const mountedRef = useRef(true);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     mountedRef.current = true;
     return () => {

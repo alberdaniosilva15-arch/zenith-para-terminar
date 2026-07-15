@@ -43,7 +43,10 @@
     font-family: 'Manrope', 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  ::-webkit-scrollbar { width: 0; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(230,195,100,0.15); border-radius: 99px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(230,195,100,0.3); }
 }
 
 @layer components {

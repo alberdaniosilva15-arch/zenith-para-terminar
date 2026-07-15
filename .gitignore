@@ -67,6 +67,7 @@ temp_user.txt
 models.txt
 ports.txt
 error.txt
+error_utf8.txt
 corrigir erros.txt
 src_files.txt
 src_tree.txt
@@ -91,3 +92,44 @@ kaze ideias para meter.txt
 Force Git Commit Resolution.md
 importante para detectar erros.ipynb
 zenith_schema_final.sql
+
+# Scripts de patch one-shot
+replace_*.py
+replace_hermes.py
+
+# SQL solto na raiz (fonte de verdade: supabase/migrations)
+sql_v3.4_setup.sql
+cleanup_tabelas_antigas.sql
+FIX_CANCELAMENTO.sql
+FIX_FINAL_ATOMIC.sql
+FIX_RLS_DEFINITIVO.sql
+FIX_RLS_LOOP.sql
+20260413_fix_auth_trigger.sql
+20260413_h3_and_critical_fixes.sql
+migrations_mobile_features.sql
+verificacao_completa.sql
+verificacao_v4_fix_missing.sql
+verificacao_v4_fix_missing_safe.sql
+verificacao_v4_status.sql
+estas SQL/
+_archive_sql/
+
+# Artefactos pessoais / documentação interna
+resumo_projeto_pausa.txt
+SECURITY_CONTRACTS_AUDIT.md
+guia_configuracao_externa.md
+SUPABASE_SCHEMA_INSTRUCTIONS.md
+implementation_plan.md
+
+# Scripts de teste ad-hoc
+check_db.js
+state_check.js
+test_accept.js
+test_loop.js
+test_rls.js
+
+# Misc
+admin-dev/
+kaze_voice_server.py
+dist-admin/
+KAZE_CORE_BACKUP.md

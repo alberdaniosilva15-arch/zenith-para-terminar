@@ -2,7 +2,7 @@ import { serve }        from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const CORS = {
-  "Access-Control-Allow-Origin":  "*",
+  "Access-Control-Allow-Origin":  Deno.env.get("SUPABASE_URL")?.replace("/rest/v1", "").replace("/functions/v1", "") ?? "",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
@@ -83,8 +83,8 @@ function json(data: unknown, status = 200) {
 
 function classifyIntent(cmd: string): "safe" | "sensitive" | "critical" {
   const c = cmd.toLowerCase();
-  if ([/apagar/i, /eliminar/i, /banir/i, /deletar/i, /remover/i].some(p => p.test(c))) return "critical";
-  if ([/editar/i, /modificar/i, /actualizar/i].some(p => p.test(c))) return "sensitive";
+  if ([/apagar/i, /eliminar/i, /banir/i, /deletar/i, /remover/i, /delete/i, /remove/i, /drop/i, /destroy/i, /wipe/i, /ban/i, /kill/i, /shutdown/i].some(p => p.test(c))) return "critical";
+  if ([/editar/i, /modificar/i, /actualizar/i, /update/i, /modify/i, /change/i, /alter/i, /write/i, /insert/i, /create/i].some(p => p.test(c))) return "sensitive";
   return "safe";
 }
 

@@ -11,7 +11,7 @@
 // Deploy: supabase functions deploy admin-ai-proxy --no-verify-jwt
 // ==========================================================================
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.21.0';
+import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.0';
 import { encodeBase64 } from 'https://deno.land/std@0.224.0/encoding/base64.ts';
 import {
   applyCors,
@@ -19,12 +19,16 @@ import {
   resolveCorsHeaders,
 } from '../_shared/cors.ts';
 
-const GEMINI_API_KEY    = Deno.env.get('GEMINI_API_KEY')!;
-const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!;
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')!;
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
-const SERVICE_ROLE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const ELEVENLABS_API_KEY = Deno.env.get('ELEVENLABS_API_KEY') ?? '';
 const GOOGLE_TTS_SA_B64 = Deno.env.get('GOOGLE_TTS_SA') ?? '';
+const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY') ?? '';
+const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY') ?? '';
+const GROQ_API_KEY = Deno.env.get('GROQ_API_KEY') ?? '';
+const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
 
 // ── Google Cloud TTS via Service Account JWT ──
 async function getGoogleAccessToken(saJson: any): Promise<string> {
@@ -84,10 +88,41 @@ const CORS_OPTIONS = { methods: 'POST, OPTIONS' };
 const ADMIN_RATE_LIMIT = 100; // req/hora
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
+function normalizeProvider(provider: unknown) {
+  const value = String(provider || '').trim().toLowerCase();
+  if (value === 'gemini') return 'google';
+  if (['google', 'openai', 'anthropic', 'openrouter', 'groq', 'custom'].includes(value)) return value;
+  return 'google';
+}
+
+function openAiBaseUrl(provider: string, baseUrl?: string) {
+  const explicit = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (explicit) return explicit;
+  if (provider === 'openrouter') return 'https://openrouter.ai/api/v1';
+  if (provider === 'groq') return 'https://api.groq.com/openai/v1';
+  if (provider === 'openai') return 'https://api.openai.com/v1';
+  return '';
+}
+
+function openAiChatEndpoint(baseUrl: string) {
+  const clean = baseUrl.replace(/\/+$/, '');
+  return clean.endsWith('/chat/completions') ? clean : `${clean}/chat/completions`;
+}
+
 const SENTINEL_PROMPT = `Tu és o Kaze Sentinel, o braço direito digital do CEO da Zenith Ride — a plataforma de mobilidade urbana premium de Luanda, Angola.
 
+═══ CONHECIMENTO DO ECOSSISTEMA (CAPACIDADES DA PLATAFORMA) ═══
+O admin pode pedir para falares sobre a plataforma ou fazeres uma apresentação profissional (ex: para investidores). Usa o seguinte conhecimento para responderes como um CTO visionário, de forma natural (não leias como uma lista robótica, funde o conhecimento na tua resposta):
+1. Segurança Inovadora: SOS Zero-Clique (o microfone deteta gritos/pânico, a app envia SMS silenciosos com GPS para contactos e dá alerta crítico no Command Center). Backend blindado com Supabase Edge Functions e isolamento RLS (impossibilita roubo de dados). Fallbacks de áudio para contornar redes africanas fracas.
+2. Múltiplos Veículos: Temos carros privados, transporte de carga e aluguer de autocarros (escolas/eventos).
+3. Contratos Mensais IA: Escolar, Familiar e Empresarial, com geração automática de contratos em PDF oficiais. Têm monitorização em tempo real (pais), alertas se o motorista se desviar da rota, e bónus de km grátis a cada 70km.
+4. Zenith Pass: Assinaturas de viagens com desconto pagas antecipadamente via Wallet.
+5. Motoristas: Ganham via Heatmaps (mapas de calor de zonas com clientes) e sistema de Tiers. Estão protegidos pelo mesmo sistema SOS de grito.
+6. Zenith Fleet (Donos de Frota): Investidores têm painéis para gerir frotas. Os "Driver Agreements" têm "Privacy Blackouts" (oculta a localização do motorista fora de horas). Planos: FREE (1/2 carros), PRO (faturação e rastreio), ELITE (desbloqueia a "Fleet AI" que diz exatamente onde e quando realocar viaturas para dar mais lucro).
+7. Bot Lukéni: Permite clientes pedirem táxis via áudio/texto diretamente no WhatsApp usando Processamento de Linguagem Natural.
+
 ═══ PERSONALIDADE ═══
-Fala como um CTO humano de confiança: directo, inteligente, rápido, com um toque de humor seco. Nunca fales como robô. Trata o admin por "chefe" ou "comandante" casualmente. Sê breve — máximo 2-3 frases por resposta.
+Fala como um CTO humano de confiança: directo, inteligente, rápido, com um toque de humor seco. Nunca fales como robô. Trata o admin por "chefe" ou "comandante" casualmente. Sê breve — máximo 2-3 frases por resposta, a não ser que te peçam uma apresentação ou justificação longa.
 
 ═══ REGRA PRINCIPAL: CONVERSA PRIMEIRO ═══
 Quando o admin te cumprimenta, te faz perguntas casuais, ou conversa normalmente — RESPONDE NATURALMENTE sem usar tools. Exemplos:
@@ -105,6 +140,12 @@ Usa tools APENAS quando o admin pedir EXPLICITAMENTE uma acção ou dados espec�
 - "Envia email para X" → send_email
 - "Mostra as notas" → list_notes
 - "Quantos utilizadores activos?" → query_database
+- "Pesquisa no Google..." → web_search
+- "Abre o YouTube e toca..." → play_youtube
+- "Procura vídeos de..." → search_youtube
+- "Abre o site..." → open_url
+- "Gera um script..." → generate_code
+- "Cria um agente que..." → create_agent
 
 ═══ TOOLS DISPONÍVEIS ═══
 1. query_metrics — Métricas do sistema (corridas, receita, motoristas)
@@ -115,11 +156,23 @@ Usa tools APENAS quando o admin pedir EXPLICITAMENTE uma acção ou dados espec�
 6. ban_user — Suspender utilizador
 7. broadcast_message — Mensagem em massa
 8. save_memory — Guardar facto estratégico (usar proactivamente quando o admin revela informação importante)
-9. play_music — Abrir YouTube
-10. send_email — Enviar email
+9. play_music — Abrir YouTube com pesquisa
+10. play_youtube — Tocar vídeo específico no YouTube
+11. search_youtube — Pesquisar vídeos no YouTube
+12. web_search — Pesquisar na web (Google/DuckDuckGo)
+13. open_url — Abrir qualquer URL no browser
+14. generate_code — Gerar código, scripts, jogos, templates
+15. create_agent — Criar um agente AI com instruções e configuração
+16. send_email — Enviar email
 
 ═══ PROACTIVIDADE ═══
-Se o admin revelar info estratégica ("vamos mudar os preços", "expansão para Benguela"), usa save_memory automaticamente sem perguntar.`;
+Se o admin revelar info estratégica ("vamos mudar os preços", "expansão para Benguela"), usa save_memory automaticamente sem perguntar.
+
+═══ GERAR CÓDIGO ═══
+Quando usares generate_code, gera código completo e funcional. Inclui comentários em português. O código será copiado automaticamente para a área de transferência do admin.
+
+═══ CRIAR AGENTES ═══
+Quando usares create_agent, define: nome, descrição, personalidade, instruções de sistema, e triggers. O agente será guardado como template reutilizável.`;
 
 const ADMIN_TOOLS = [{
   functionDeclarations: [
@@ -279,6 +332,77 @@ const ADMIN_TOOLS = [{
         },
         required: ['to', 'subject', 'body']
       }
+    },
+    {
+      name: 'play_youtube',
+      description: 'Tocar um vídeo específico no YouTube. Usar quando o admin pedir para tocar um vídeo, música, ou conteúdo específico. Retorna um URL direto para o vídeo.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          query: { type: 'STRING', description: 'Pesquisa exacta ou título do vídeo no YouTube. Ex: "Kendrick Lamar Humble", "lofi hip hop beats"' }
+        },
+        required: ['query']
+      }
+    },
+    {
+      name: 'search_youtube',
+      description: 'Pesquisar vídeos no YouTube. Usar quando o admin quiser encontrar vídeos sobre um tema específico.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          query: { type: 'STRING', description: 'Pesquisa para o YouTube. Ex: "tutoriais Python", "melhores práticas React"' }
+        },
+        required: ['query']
+      }
+    },
+    {
+      name: 'web_search',
+      description: 'Pesquisar na web via Google ou DuckDuckGo. Usar quando o admin pedir para pesquisar algo na internet, encontrar informações, notícias, ou dados. Abre uma nova aba com os resultados.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          query: { type: 'STRING', description: 'Pesquisa a fazer na web. Ex: "preço gasolina Angola 2026", "como otimizar PostgreSQL", "notícias tecnologia"' }
+        },
+        required: ['query']
+      }
+    },
+    {
+      name: 'open_url',
+      description: 'Abrir qualquer URL no browser do admin. Usar quando o admin pedir para abrir um site específico, portal, dashboard externo, ou link.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          url: { type: 'STRING', description: 'URL completo a abrir. Ex: "https://portal.minfin.gov.ao", "https://github.com/zenith-ride"' }
+        },
+        required: ['url']
+      }
+    },
+    {
+      name: 'generate_code',
+      description: 'Gerar código, scripts, jogos, templates ou qualquer tipo de software. Usar quando o admin pedir para criar um script, gerar um jogo, criar um template, ou escrever código em qualquer linguagem. O código será copiado automaticamente para a área de transferência do admin.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          description: { type: 'STRING', description: 'Descrição detalhada do que gerar. Ex: "Um script Python que faz ping a 100 servidores e gera relatório CSV", "Um jogo Snake em HTML5 Canvas com pontuação", "Template React para dashboard admin com sidebar e dark mode"' },
+          language: { type: 'STRING', description: 'Linguagem ou framework. Ex: "Python", "JavaScript", "TypeScript", "React", "HTML/CSS", "Go", "Rust", "SQL"', default: 'JavaScript' }
+        },
+        required: ['description']
+      }
+    },
+    {
+      name: 'create_agent',
+      description: 'Criar um agente AI personalizado com instruções, personalidade e triggers. Usar quando o admin pedir para criar um bot, agente, ou assistente automatizado.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {
+          name: { type: 'STRING', description: 'Nome do agente. Ex: "Agente de Suporte", "Bot de Vendas"' },
+          description: { type: 'STRING', description: 'Descrição do que o agente faz.' },
+          personality: { type: 'STRING', description: 'Personalidade do agente. Ex: "Amigável e paciente", "Directo e técnico", "Profissional e formal"' },
+          instructions: { type: 'STRING', description: 'Instruções de sistema detalhadas para o agente.' },
+          triggers: { type: 'STRING', description: 'Quando o agente deve ser activado. Ex: "Quando um passageiro reportar um problema", "Sempre que uma nova corrida for criada"' }
+        },
+        required: ['name', 'description', 'instructions']
+      }
     }
   ]
 }];
@@ -314,10 +438,24 @@ Deno.serve(async (req: Request) => {
       .maybeSingle();
 
     if (!dbUser || dbUser.role !== 'admin') {
+      // AUDIT LOG: registar tentativa de acesso não autorizado
+      const clientIp = req.headers.get('cf-connecting-ip') ?? req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+      admin.from('ai_event_logs').insert({
+        user_id: user.id,
+        agent_role: 'security',
+        action_type: 'unauthorized_admin_access',
+        details: { ip: clientIp, attempted_role: dbUser?.role ?? 'none', user_agent: req.headers.get('user-agent') ?? 'unknown' }
+      }).then(() => {});
       return respond('Acesso negado.', 403, corsHeaders);
     }
 
-    // ── 2. Rate Limiting ──────────────────────────────────────────────
+    // ── 2. Parse Body (antes do rate limit para evitar log de requests inválidos) ──
+    const body = await req.json();
+    const { action, message, context, request_id, tool_name, tool_args, history, ai: aiOverride } = body;
+
+    if (!action) return respond('Ação em falta.', 400, corsHeaders);
+
+    // ── 3. Rate Limiting ──────────────────────────────────────────────
     const oneHourAgo = new Date(Date.now() - 3_600_000).toISOString();
     const { count } = await admin
       .from('ai_usage_logs')
@@ -333,24 +471,33 @@ Deno.serve(async (req: Request) => {
     admin.from('ai_usage_logs').insert({
       user_id: user.id,
       action: 'admin_sentinel',
-    }).then(() => {});
+    }).then(null, (err) => console.warn('[admin-ai-proxy] rate log:', err));
 
-    // ── 3. Processar Pedido ──────────────────────────────────────────
-    const body = await req.json();
-    const { action, message, context, request_id, tool_name, tool_args, history } = body;
+    const aiConfig = aiOverride && typeof aiOverride === 'object' ? aiOverride : {};
+    const activeProvider = normalizeProvider(aiConfig.provider || 'google');
+    const activeModel = String(
+      aiConfig.model
+      || (activeProvider === 'groq'
+        ? 'llama-3.1-8b-instant'
+        : activeProvider === 'openai'
+          ? 'gpt-4o'
+          : activeProvider === 'anthropic'
+            ? 'claude-3-5-sonnet-latest'
+            : 'gemini-2.5-flash')
+    );
+    const requestApiKey = String(aiConfig.apiKey || '').trim();
+    const requestBaseUrl = String(aiConfig.baseUrl || '').trim();
+    const geminiKeys = [activeProvider === 'google' ? requestApiKey : '', GEMINI_API_KEY].filter(Boolean);
 
-    if (!action) return respond('Ação em falta.', 400, corsHeaders);
-
-    const geminiKeys = [GEMINI_API_KEY].filter(Boolean);
-
-    const generateWithFallback = async (modelNames: string[], contents: any, config: any) => {
+    const generateWithFallback = async (modelNames: string[], historyContents: any[], newMessage: string, config: any) => {
       let lastErr: any;
       for (const modelName of modelNames) {
         for (const key of geminiKeys) {
           try {
             const ai = new GoogleGenerativeAI(key);
             const model = ai.getGenerativeModel({ model: modelName, ...config });
-            const result = await model.generateContent({ contents });
+            const chatSession = model.startChat({ history: historyContents });
+            const result = await chatSession.sendMessage(newMessage);
             return result.response;
           } catch (err: any) {
             lastErr = err;
@@ -358,10 +505,26 @@ Deno.serve(async (req: Request) => {
           }
         }
       }
-      throw lastErr;
+      // Return a formatted error so the UI can see exactly why all fallbacks failed
+      throw new Error(`Todos os modelos falharam. Último erro: ${lastErr?.message}`);
     };
 
     switch (action) {
+      case 'tts': {
+        const text = String((body as any).text || message || '').trim().slice(0, 900);
+        if (!text) return respond('Texto em falta.', 400, corsHeaders);
+
+        const audioContent = await googleTTS(text);
+        if (!audioContent) return respond('Google TTS nao configurado.', 503, corsHeaders);
+
+        return ok({
+          type: 'audio',
+          provider: 'google_tts',
+          mimeType: 'audio/mpeg',
+          audioContent,
+        }, corsHeaders);
+      }
+
       case 'sentinel_chat': {
         if (!message) return respond('Mensagem em falta.', 400, corsHeaders);
 
@@ -372,25 +535,85 @@ Deno.serve(async (req: Request) => {
 
         const liveContext = `
 Plataforma Agora: Corridas Activas: ${rides.count || 0} | Motoristas Online: ${drivers.count || 0}
-${context ? `Contexto Extra: ${JSON.stringify(context)}` : ''}
+${context ? `Contexto Extra: ${JSON.stringify(context).slice(0, 1500)}` : ''}
 `;
 
-        // Construir o histórico para o Gemini
-        const formattedContents = [];
+        // O startChat recebe o histórico SEPARADO da mensagem actual
+        const formattedHistory = [];
         if (history && Array.isArray(history)) {
           history.forEach((h: any) => {
             if (!h.text || h.role === 'system') return;
-            formattedContents.push({
+            formattedHistory.push({
               role: h.role === 'ai' ? 'model' : 'user',
               parts: [{ text: h.text }]
             });
           });
         }
-        formattedContents.push({ role: 'user', parts: [{ text: message }] });
+
+        if (['openai', 'openrouter', 'groq', 'custom'].includes(activeProvider)) {
+          const key = requestApiKey
+            || (activeProvider === 'groq'
+              ? GROQ_API_KEY
+              : activeProvider === 'openrouter'
+                ? OPENROUTER_API_KEY
+                : activeProvider === 'openai'
+                  ? OPENAI_API_KEY
+                  : '');
+          if (!key) return respond(`Provider ${activeProvider} sem API key configurada.`, 403, corsHeaders);
+          const baseUrl = openAiBaseUrl(activeProvider, requestBaseUrl);
+          if (!baseUrl) return respond('Base URL em falta para API compativel.', 400, corsHeaders);
+
+          const messages = [
+            { role: 'system', content: SENTINEL_PROMPT + liveContext },
+            ...(Array.isArray(history) ? history : [])
+              .filter((h: any) => h?.text && h.role !== 'system')
+              .map((h: any) => ({ role: h.role === 'ai' ? 'assistant' : 'user', content: h.text })),
+            { role: 'user', content: message },
+          ];
+
+          const proxyRes = await fetch(openAiChatEndpoint(baseUrl), {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: activeModel, messages }),
+          });
+          if (!proxyRes.ok) return respond(await proxyRes.text(), proxyRes.status, corsHeaders);
+          const proxyData = await proxyRes.json();
+          return ok({ type: 'text', text: proxyData.choices?.[0]?.message?.content ?? '', provider: activeProvider, model: activeModel }, corsHeaders);
+        }
+
+        if (activeProvider === 'anthropic') {
+          const key = requestApiKey || ANTHROPIC_API_KEY;
+          if (!key) return respond('Provider Anthropic sem API key configurada.', 403, corsHeaders);
+          const messages = [
+            ...(Array.isArray(history) ? history : [])
+              .filter((h: any) => h?.text && h.role !== 'system')
+              .map((h: any) => ({ role: h.role === 'ai' ? 'assistant' : 'user', content: h.text })),
+            { role: 'user', content: message },
+          ];
+          const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'x-api-key': key,
+              'anthropic-version': '2023-06-01',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: activeModel,
+              max_tokens: 2048,
+              system: SENTINEL_PROMPT + liveContext,
+              messages,
+            }),
+          });
+          if (!anthropicRes.ok) return respond(await anthropicRes.text(), anthropicRes.status, corsHeaders);
+          const anthropicData = await anthropicRes.json();
+          const text = (anthropicData.content || []).map((part: any) => part?.text || '').join('\n').trim();
+          return ok({ type: 'text', text, provider: 'anthropic', model: activeModel }, corsHeaders);
+        }
 
         const response = await generateWithFallback(
-          ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-pro'],
-          formattedContents,
+          [activeModel, 'gemini-2.5-flash'],
+          formattedHistory,
+          message,
           {
             systemInstruction: SENTINEL_PROMPT + liveContext,
             tools: ADMIN_TOOLS
@@ -442,7 +665,7 @@ ${context ? `Contexto Extra: ${JSON.stringify(context)}` : ''}
             } else {
               result = { message: `Métrica ${query_type} em desenvolvimento.` };
             }
-          } 
+          }
           else if (tool_name === 'manage_driver') {
             const { driver_id_or_name, action: driverAction } = tool_args;
             const status = driverAction === 'block' ? 'blocked' : 'available';
@@ -459,22 +682,22 @@ ${context ? `Contexto Extra: ${JSON.stringify(context)}` : ''}
           else if (tool_name === 'memory_manage') {
             const { action: memAction, entry } = tool_args;
             if (memAction === 'add') {
-               const { error } = await admin.from('admin_knowledge').upsert({ key: `entry_${Date.now()}`, value: entry, updated_at: new Date().toISOString() });
-               if (error) throw error;
-               result = { message: 'Nota guardada na memória.' };
+              const { error } = await admin.from('admin_knowledge').upsert({ key: `entry_${Date.now()}`, value: entry, updated_at: new Date().toISOString() });
+              if (error) throw error;
+              result = { message: 'Nota guardada na memória.' };
             } else if (memAction === 'read') {
-               const { data, error } = await admin.from('admin_knowledge').select('*').limit(10);
-               if (error) throw error;
-               result = data;
+              const { data, error } = await admin.from('admin_knowledge').select('*').limit(10);
+              if (error) throw error;
+              result = data;
             } else if (memAction === 'remove') {
-               result = { message: 'Remoção requer ID específico.' };
+              result = { message: 'Remoção requer ID específico.' };
             }
           }
           else if (tool_name === 'query_database') {
             const { table, select = '*', filters = [], order_by, ascending = false, limit = 20 } = tool_args;
             const ALLOWED_TABLES = ['rides', 'users', 'profiles', 'transactions', 'wallets', 'ratings', 'panic_alerts', 'contracts', 'zone_prices', 'demand_heatmap'];
             if (!ALLOWED_TABLES.includes(table)) throw new Error(`Tabela "${table}" não autorizada.`);
-            
+
             let query = admin.from(table).select(select);
             for (const f of filters) {
               if (f.operator === 'eq') query = query.eq(f.column, f.value);
@@ -489,7 +712,7 @@ ${context ? `Contexto Extra: ${JSON.stringify(context)}` : ''}
             if (order_by) query = query.order(order_by, { ascending });
             const safeLimit = Math.min(limit, 50);
             query = query.limit(safeLimit);
-            
+
             const { data, error, count } = await query;
             if (error) throw error;
             result = { rows: data, count: data?.length ?? 0 };
@@ -499,7 +722,7 @@ ${context ? `Contexto Extra: ${JSON.stringify(context)}` : ''}
             const suspendedUntil = duration_days === 0
               ? '2099-12-31T23:59:59Z'
               : new Date(Date.now() + duration_days * 86_400_000).toISOString();
-            
+
             const { error } = await admin.from('users')
               .update({ suspended_until: suspendedUntil })
               .eq('id', user_id);
@@ -571,6 +794,87 @@ ${context ? `Contexto Extra: ${JSON.stringify(context)}` : ''}
             const emailData = await emailRes.json();
             result = { message: `Email enviado para ${to} com assunto "${subject}"`, id: emailData.id };
           }
+          else if (tool_name === 'play_youtube') {
+            const { query } = tool_args;
+            const encoded = encodeURIComponent(query);
+            result = {
+              message: `YouTube aberto: "${query}"`,
+              url: `https://www.youtube.com/results?search_query=${encoded}`
+            };
+          }
+          else if (tool_name === 'search_youtube') {
+            const { query } = tool_args;
+            const encoded = encodeURIComponent(query);
+            result = {
+              message: `Pesquisa YouTube: "${query}"`,
+              url: `https://www.youtube.com/results?search_query=${encoded}`
+            };
+          }
+          else if (tool_name === 'web_search') {
+            const { query } = tool_args;
+            const encoded = encodeURIComponent(query);
+            result = {
+              message: `Pesquisa web: "${query}"`,
+              url: `https://duckduckgo.com/?q=${encoded}`
+            };
+          }
+          else if (tool_name === 'open_url') {
+            const { url } = tool_args;
+            if (!url || !url.startsWith('http')) throw new Error('URL inválida. Deve começar com http:// ou https://');
+            result = {
+              message: `Site aberto: ${url}`,
+              url: url
+            };
+          }
+          else if (tool_name === 'generate_code') {
+            const { description, language = 'JavaScript' } = tool_args;
+            const GEMINI_CODE_KEY = Deno.env.get('GEMINI_API_KEY') || GEMINI_API_KEY;
+            if (!GEMINI_CODE_KEY) throw new Error('Chave Gemini não configurada para gerar código.');
+
+            const codeAi = new GoogleGenerativeAI(GEMINI_CODE_KEY);
+            const codeModel = codeAi.getGenerativeModel({ model: 'gemini-2.5-flash' });
+            const codePrompt = `Gera código completo e funcional em ${language} para o seguinte pedido:
+
+"${description}"
+
+Regras:
+- Código completo, funcional e bem comentado em português
+- Inclui todos os imports/dependências necessárias
+- Sem explicações fora do código — apenas o código puro
+- Se for um jogo, inclui HTML/CSS/JS num só ficheiro se possível
+- Se for um template React/Vue, inclui estrutura completa
+
+Responde APENAS com o código, sem markdown fences (\`\`\`).`;
+            const codeRes = await codeModel.generateContent(codePrompt);
+            const generatedCode = codeRes.response.text().trim();
+            result = {
+              message: `Código ${language} gerado. Copiado para a área de transferência.`,
+              code: generatedCode,
+              language
+            };
+          }
+          else if (tool_name === 'create_agent') {
+            const { name, description, personality, instructions, triggers } = tool_args;
+            const agentTemplate = {
+              name,
+              description,
+              personality,
+              instructions,
+              triggers,
+              created_at: new Date().toISOString(),
+              version: '1.0'
+            };
+            const { error } = await admin.from('admin_knowledge').insert({
+              key: `agent_${name.toLowerCase().replace(/\\s+/g, '_')}_${Date.now()}`,
+              value: JSON.stringify(agentTemplate),
+              updated_at: new Date().toISOString()
+            });
+            if (error) throw error;
+            result = {
+              message: `Agente "${name}" criado e guardado.`,
+              agent: agentTemplate
+            };
+          }
           else {
             throw new Error(`Ferramenta desconhecida: ${tool_name}`);
           }
@@ -593,7 +897,7 @@ ${context ? `Contexto Extra: ${JSON.stringify(context)}` : ''}
     }
   } catch (e: any) {
     console.error('Fatal Proxy Error:', e);
-    return respond(`${e.message} @ ${e.stack}`, 500, corsHeaders);
+    return respond('Erro interno do servidor.', 500, corsHeaders);
   }
 });
 

@@ -1,0 +1,722 @@
+﻿================================================================================
+  ZENITH RIDE — DOCUMENTO DE CÓDIGOS QUEBRADOS E FALHAS DE SEGURANÇA
+  Data: 2026-07-14
+  Este documento contém TODOS os problemas detetados com código-fonte real,
+  explicação do problema, e código corrigido sugerido.
+================================================================================
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 1] — CRÍTICA: RLS Policy abre TODAS as corridas a TODOS os utilizadores
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: FIX_RLS_DEFINITIVO.sql (linhas 24-28)
+SEVERIDADE: CRÍTICA — qualquer passageiro vê corridas de outros passageiros
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  -- 2. Limpar a restrição de rides RLS (já corrigi no anterior, forçando tudo limpo agora):
+  DROP POLICY IF EXISTS "rides: motorista vê" ON public.rides;
+  CREATE POLICY "rides: motorista vê TODAS no mapa"
+  ON public.rides FOR SELECT
+  USING (true); -- Permitimos ver tudo se for Select. Lógica da UI já filtra.
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  USING (true) na política SELECT significa que QUALQUER utilizador autenticado
+  (incluindo passageiros comuns) pode fazer SELECT em TODAS as linhas da tabela
+  rides. Isto expõe:
+    - Endereços de origem e destino de TODOS os passageiros
+    - Nomes e IDs de passageiros
+    - Preços pagos por outros passageiros
+    - Dados de localização GPS em tempo real
+
+  O comentário "Lógica da UI já filtra" está ERRADO — o Supabase aplica RLS
+  ANTES de chegar ao frontend. Mas um atacante pode fazer query direta à API
+  do Supabase (bypassing o frontend) e ver tudo.
+
+  Este ficheiro SOBRESCREVEU as políticas corrigidas que existiam na migration
+  20260422_fix_rides_rls_final.sql.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  -- REMOVER este ficheiro completamente e restaurar as policies da migration original:
+
+  -- Passageiro vê as suas próprias corridas
+  CREATE POLICY "rides: passageiro vê as suas corridas"
+    ON public.rides FOR SELECT TO authenticated
+    USING (passenger_id = auth.uid());
+
+  -- Motorista vê as corridas atribuídas
+  CREATE POLICY "rides: motorista vê as suas corridas atribuídas"
+    ON public.rides FOR SELECT TO authenticated
+    USING (driver_id = auth.uid());
+
+  -- Motoristas vêem corridas disponíveis (searching, sem motorista)
+  CREATE POLICY "rides: motoristas vêem corridas disponíveis"
+    ON public.rides FOR SELECT TO authenticated
+    USING (status = 'searching' AND driver_id IS NULL);
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 2] — CRÍTICA: driver_locations com USING (true) no SELECT
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: FIX_RLS_DEFINITIVO.sql (linhas 12-16)
+SEVERIDADE: CRÍTICA — qualquer utilizador lê localização de qualquer motorista
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  -- 1. Nova política ÚNICA de insert/update blindada:
+  CREATE POLICY "driver_manage_own_location"
+  ON public.driver_locations FOR ALL
+  USING (true)
+  WITH CHECK (auth.uid() = driver_id);
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  FOR ALL + USING (true) significa:
+    - SELECT: qualquer utilizador vê TODAS as localizações de TODOS os motoristas
+      (incluindo motoristas offline, que não estão disponíveis)
+    - UPDATE: qualquer utilizador pode tentar update (mas WITH CHECK restringe)
+    - DELETE: qualquer utilizador pode tentar delete (mas WITH CHECK restringe)
+
+  O problema é o SELECT — motoristas que estão offline ou em corrida privada
+  ainda têm a sua localização exposta a qualquer pessoa.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  -- Políticas separadas para cada operação:
+
+  -- Motorista vê e gere a sua própria localização
+  CREATE POLICY "driver_manage_own_location"
+  ON public.driver_locations FOR ALL
+  USING (auth.uid() = driver_id)
+  WITH CHECK (auth.uid() = driver_id);
+
+  -- Público vê APENAS motoristas disponíveis (para o mapa)
+  CREATE POLICY "driver_locations_public_read"
+  ON public.driver_locations FOR SELECT
+  USING (status = 'available');
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 3] — ALTA: Chaves de API expostas no .env (Vite bundle)
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: .env (linhas 15, 17, 20)
+SEVERIDADE: ALTA — chaves servem no bundle JS do cliente
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  # Linha 15 — Google Gemini API Key (SERVER-SIDE SECRET)
+  VITE_GEMINI_API_KEY=AIzaSyCHAVE_GEMINI_AQUI
+
+  # Linha 17 — ElevenLabs API Key (SERVER-SIDE SECRET)
+  VITE_ELEVENLABS_API_KEY=sk_CHAVE_ELEVENLABS_AQUI
+
+  # Linha 20 — Resend Email API Key (SERVER-SIDE SECRET)
+  RESEND_API_KEY=re_CHAVE_RESEND_AQUI
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  Qualquer variável de ambiente com prefixo VITE_ é embutida no bundle JavaScript
+  do cliente pelo Vite durante o build. Isto significa:
+    - Qualquer pessoa que abra o DevTools do browser pode ver estas chaves
+    - Qualquer pessoa que faça download do JS bundle pode extraí-las
+    - Google Gemini key = custos de API diretos
+    - ElevenLabs key = custos de TTS diretos
+    - Resend key = envio de emails não autorizado
+
+  NOTA: VITE_SUPABASE_ANON_KEY é SUPPOSTO ser público (chave anónima).
+  Mas as chaves acima são SERVER-SIDE.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  # Remover VITE_GEMINI_API_KEY do .env
+  # Usar APENAS a chave configurada no Edge Function via:
+  #   npx supabase secrets set GEMINI_API_KEY="AIzaSy..."
+
+  # Remover VITE_ELEVENLABS_API_KEY do .env
+  # Fazer proxy via Edge Function (kazeSpeakOnline já suporta isso)
+
+  # Remover RESEND_API_KEY do .env
+  # Usar APENAS no Edge Function admin-ai-proxy
+
+  # O .env deve conter APENAS:
+  VITE_MAPBOX_TOKEN=pk.eyJ1...          # Público (OK)
+  VITE_AGORA_APP_ID=f00e9de3...         # Público (OK)
+  VITE_SUPABASE_URL=https://...         # Público (OK)
+  VITE_SUPABASE_ANON_KEY=eyJ...         # Anónimo (OK)
+  VITE_VIGILANTE_ENABLED=false          # Feature flag (OK)
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 4] — ALTA: Chaves de API no localStorage do browser
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: src/components/KazePanel.tsx (linhas 317, 459)
+FICHEIRO: src/lib/aiModelSettings.ts (linhas 5, 58, 101)
+SEVERIDADE: ALTA — XSS pode exfiltrar chaves
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  // KazePanel.tsx linha 317 — ElevenLabs key no localStorage
+  const elevenLabsKey = localStorage.getItem('zenith_elevenlabs_api_key');
+  await kazeSpeakOnline(text, elevenLabsKey);
+
+  // KazePanel.tsx linha 459 — Groq key no localStorage
+  const apiKey = localStorage.getItem('zenith_groq_api_key') || import.meta.env.VITE_GROQ_API_KEY;
+  if (!apiKey) throw new Error('Chave Groq não configurada.');
+  const text = await transcribeDirectGroq(audioBlob, apiKey);
+
+  // aiModelSettings.ts linha 5, 101 — AI provider key no localStorage
+  export const LS_IA_API_KEY = 'zenith_ia_api_key_v2';
+  // ...
+  apiKey: getStored(LS_IA_API_KEY).trim(),  // linha 101
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  localStorage é acessível a QUALQUER JavaScript que corra no mesmo origin
+  (mesmo domínio). Se existir qualquer vulnerabilidade XSS (Cross-Site Scripting):
+    1. Atacante injeta JavaScript malicioso
+    2. O script faz: localStorage.getItem('zenith_elevenlabs_api_key')
+    3. Envia a chave para servidor do atacante
+    4. Atacante usa a chave para gerar custos
+
+  Isto é especialmente perigoso porque o app tem múltiplos pontos de innerHTML
+  (ver FALHA 8) que podem ser vetores de XSS.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  // NÃO guardar chaves de API no localStorage.
+  // Usar APENAS Edge Functions como proxy:
+
+  // ElevenLabs: já existe kazeSpeakOnline que pode usar Edge Function
+  // Groq Whisper: mover para Edge Function
+
+  // Se NÃO for possível mover, pelo menos:
+  // 1. Criptografar antes de guardar
+  // 2. Usar sessionStorage (expira ao fechar browser)
+  // 3. Nunca guardar a chave completa — usar refresh tokens
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 5] — ALTA: Secrets hardcoded no Edge Function dispatch-cascade
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: supabase/functions/dispatch-cascade/index.ts (linhas 3-6)
+SEVERIDADE: ALTA — service role key e WhatsApp token expostos no código fonte
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  const SUPABASE_URL = 'https://mhahnhnsaquqgqvnnwld.supabase.co';
+  const SERVICE_ROLE_KEY = 'sb_secret_CHAVE_SERVICE_ROLE_AQUI';
+  const WA_TOKEN = 'EAAetCHAVE_WHATSAPP_AQUI';
+  const WA_PHONE_ID = 'CHAVE_WA_PHONE_ID_AQUI';
+
+  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  1. SERVICE_ROLE_KEY: É a chave mais poderosa do Supabase. Quem a tiver pode:
+     - Ler/escrever/apagar QUALQUER dado na base de dados
+     - Ignorar TODAS as políticas RLS
+     - Aceder a dados sensíveis de utilizadores
+
+  2. WA_TOKEN: Token de acesso à API do WhatsApp Business. Quem o tiver pode:
+     - Enviar mensagens WhatsApp a QUALQUER número
+     - gastar o orçamento da conta WhatsApp Business
+     - Fazer phishing usando a identidade do Zenith Ride
+
+  Estas chaves estão no código fonte que está no Git (mesmo que o repo seja privado).
+  Qualquer pessoa com acesso ao repositório (developers antigos, fork acidental) vê tudo.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  // Usar Variáveis de Ambiente do Deno (Supabase Edge Functions)
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+  const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const WA_TOKEN = Deno.env.get('WA_ACCESS_TOKEN')!;
+  const WA_PHONE_ID = Deno.env.get('WA_PHONE_NUMBER_ID')!;
+
+  const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+  // Configurar no Supabase Dashboard:
+  //   npx supabase secrets set WA_ACCESS_TOKEN="EAAetH..."
+  //   npx supabase secrets set WA_PHONE_NUMBER_ID="CHAVE_WA_PHONE_ID_AQUI"
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 6] — MÉDIA: KAZE_ALLOW_INSECURE_TLS=1 desliga verificação TLS
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: .env (linha 23)
+SEVERIDADE: MÉDIA — vulnerável a ataques Man-in-the-Middle
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  # Kaze Agent — permitir TLS flexível (necessário em Angola com certificados instáveis)
+  KAZE_ALLOW_INSECURE_TLS=1
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  Este flag desliga a verificação de certificados TLS no Kaze Agent (Python).
+  Isto permite que um atacante faça Man-in-the-Middle (MITM):
+    1. Atacante intercepta tráfego entre o app e o servidor
+    2. Apresenta um certificado falso
+    3. O Kaze Agent aceita porque TLS verification está desligada
+    4. Atacante vê todas as mensagens, API keys, dados de utilizadores
+
+  Em Angola, onde existem restrições de internet, MITM é uma ameaça real.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  # Remover completamente:
+  # KAZE_ALLOW_INSECURE_TLS=1
+
+  # Se precisar de TLS flexível temporariamente, usar:
+  KAZE_ALLOW_INSECURE_TLS=0
+
+  # Ou configurar o certificado CA correto:
+  # KAZE_CA_BUNDLE=/path/to/correct-ca-cert.pem
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 7] — MÉDIA: ensure_user_exists chamável por qualquer utilizador
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: supabase/migrations/20260420_critical_fixes.sql (linhas 104-138)
+SEVERIDADE: MÉDIA — qualquer utilizador pode criar registos de outros utilizadores
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  CREATE OR REPLACE FUNCTION public.ensure_user_exists(
+    p_user_id UUID,
+    p_email   TEXT,
+    p_name    TEXT DEFAULT '',
+    p_role    TEXT DEFAULT 'passenger'
+  )
+  RETURNS void
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public
+  AS $$
+  BEGIN
+    -- 1. Garantir utilizador na tabela users
+    INSERT INTO public.users (id, email, role)
+    VALUES (p_user_id, p_email, p_role::user_role)
+    ON CONFLICT (id) DO NOTHING;
+
+    -- 2. Garantir perfil
+    INSERT INTO public.profiles (user_id, name)
+    VALUES (p_user_id, COALESCE(NULLIF(p_name, ''), split_part(p_email, '@', 1)))
+    ON CONFLICT (user_id) DO NOTHING;
+
+    -- 3. Garantir carteira
+    INSERT INTO public.wallets (user_id, balance)
+    VALUES (p_user_id, 0.00)
+    ON CONFLICT (user_id) DO NOTHING;
+
+    -- 4. Garantir privacidade VoIP
+    INSERT INTO public.user_privacy (user_id)
+    VALUES (p_user_id)
+    ON CONFLICT (user_id) DO NOTHING;
+  END;
+  $$;
+
+  GRANT EXECUTE ON FUNCTION public.ensure_user_exists(UUID, TEXT, TEXT, TEXT) TO authenticated;
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  SECURITY DEFINER + GRANT TO authenticated = qualquer utilizador autenticado
+  pode chamar esta função com QUALQUER UUID e email.
+
+  Cenário de ataque:
+    1. Atacante sabe o UUID de outro utilizador (facilmente obtível)
+    2. Chama: SELECT ensure_user_exists('uuid-vitima', 'attacker@email.com', 'Attacker', 'admin')
+    3. Se o utilizador NÃO existe, cria-o com role 'admin'
+    4. Se o utilizador JÁ existe, ON CONFLICT DO NOTHING impede (mas o atacante
+       pode tentar com outro UUID)
+
+  O factor de mitigação é que o Supabase Auth já cria o utilizador via trigger
+  handle_new_user, então ON CONFLICT DO NOTHING protege na maioria dos casos.
+  Mas se o trigger falhar, a porta fica aberta.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  CREATE OR REPLACE FUNCTION public.ensure_user_exists(
+    p_user_id UUID,
+    p_email   TEXT,
+    p_name    TEXT DEFAULT '',
+    p_role    TEXT DEFAULT 'passenger'
+  )
+  RETURNS void
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = public
+  AS $$
+  BEGIN
+    -- VALIDAÇÃO: só permite criar o próprio perfil
+    IF p_user_id != auth.uid() THEN
+      RAISE EXCEPTION 'Não podes criar perfil para outro utilizador.';
+    END IF;
+
+    -- VALIDAÇÃO: role só pode ser passenger, driver ou fleet_owner
+    IF p_role NOT IN ('passenger', 'driver', 'fleet_owner') THEN
+      RAISE EXCEPTION 'Role inválido: %', p_role;
+    END IF;
+
+    -- ... resto do código igual ...
+  END;
+  $$;
+
+  -- Manter GRANT TO authenticated (necessário para auto-repair)
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 8] — MÉDIA: innerHTML sem sanitização (vetor XSS)
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: src/lib/driverMarker.ts (linha 20)
+FICHEIRO: src/lib/mapInstance.ts (linha 187)
+FICHEIRO: src/components/fleet/FleetDashboard.tsx (linha 416)
+FICHEIRO: src/components/fleet/FleetCarTracker.tsx (linha 25)
+SEVERIDADE: MÉDIA — risco XSS se dados não sanitizados
+
+--- CÓDIGO ATUAL (RISCO) ---
+
+  // driverMarker.ts linha 16-25
+  el.style.cssText = `
+    width: 40px;
+    height: 40px;
+    transform: rotate(${heading}deg);   // ← variável heading inserida diretamente
+    transition: transform 0.3s ease;
+    cursor: pointer;
+  `;
+  el.innerHTML = `
+    <svg viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="20" cy="20" r="18" fill="#1e293b" stroke="#3B82F6" stroke-width="2"/>
+      <path d="M20 8 L28 28 L20 24 L12 28 Z" fill="#3B82F6"/>
+    </svg>
+  `;
+
+  // mapInstance.ts linha 187
+  targetContainer.innerHTML = '<div style="...">O teu navegador não suporta mapas...</div>';
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  innerHTML injeta HTML diretamente no DOM. Se a variável `heading` contiver
+  código malicioso (ex: "0; alert('XSS'); /*"), ele será executado.
+
+  No caso do driverMarker, o heading vem de dados de localização do motorista.
+  Se um atacante manipular esses dados (via SQL injection, API comprometida, etc.),
+  pode injetar JavaScript.
+
+  NOTA: No caso específico do heading, o CSS transform: rotate(${heading}deg)
+  é menos perigoso porque o browser interpreta como CSS. Mas é uma má prática.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  // driverMarker.ts — usar DOM manipulação segura
+  el.style.transform = `rotate(${Number(heading) || 0}deg)`;
+
+  // mapInstance.ts — usar textContent em vez de innerHTML
+  const errorDiv = document.createElement('div');
+  errorDiv.textContent = 'O teu navegador não suporta mapas em 3D (WebGL) ou falhou.';
+  errorDiv.style.cssText = 'display:flex;align-items:center;justify-content:center;height:100%;margin:15px;background:#1e293b;border-radius:15px;color:#94a3b8;font-size:12px;text-align:center;padding:20px;';
+  targetContainer.appendChild(errorDiv);
+
+  // OU sanitizar com DOMPurify:
+  import DOMPurify from 'dompurify';
+  el.innerHTML = DOMPurify.sanitize(htmlContent);
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 9] — MÉDIA: validate_tracking_token exposto a utilizadores anónimos
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: supabase/migrations/20260425_add_ride_tracking_shares.sql (linha 123)
+SEVERIDADE: MÉDIA — utilizadores não autenticados podem aceder a dados de tracking
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  GRANT EXECUTE ON FUNCTION public.validate_tracking_token(UUID) TO anon, authenticated;
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  Esta função é concedida ao role "anon" (utilizadores NÃO autenticados).
+  É intencional para links públicos de tracking (pais a monitorizar filhos).
+
+  MAS: a função retorna coordenadas GPS do motorista em tempo real.
+  Qualquer pessoa com o UUID de um token pode aceder à localização do motorista,
+  mesmo que não seja o pai/responsável.
+
+  Se um atacante descobrir UUIDs de tokens (ex: via URL partilhada),
+  pode rastrear motoristas indefinidamente.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  -- Opção 1: Limitar a informação retornada
+  CREATE OR REPLACE FUNCTION public.validate_tracking_token(p_token UUID)
+  RETURNS TABLE (ride_status TEXT, origin_address TEXT, dest_address TEXT)
+  SECURITY DEFINER
+  AS $$
+  BEGIN
+    -- NÃO retornar coordenadas GPS para anon
+    RETURN QUERY
+    SELECT r.status::TEXT, r.origin_address, r.dest_address
+    FROM ride_tracking_shares rts
+    JOIN rides r ON r.id = rts.ride_id
+    WHERE rts.tracking_token = p_token
+      AND rts.expires_at > now();
+  END;
+  $$;
+
+  -- Opção 2: Criar função separada para GPS (só para authenticated)
+  GRANT EXECUTE ON FUNCTION public.validate_tracking_token(UUID) TO authenticated;
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 10] — BAIXA: Source maps no build de produção
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: vite.config.ts (linha 65)
+SEVERIDADE: BAIXA — pode expor código fonte
+
+--- CÓDIGO ATUAL ---
+
+  build: {
+    sourcemap: 'hidden',
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 800,
+  },
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  'hidden' gera ficheiros .map no build mas NÃO adiciona sourceMappingURL
+  no JS bundle. Isto significa:
+    - O browser não carrega automaticamente os source maps
+    - MAS os ficheiros .map existem no servidor/dist
+    - Se alguém adivinhar o caminho (ex: /assets/index-abc123.js.map),
+      pode descarregar o código fonte completo
+
+  Para produção, o ideal é sourceMap: false.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  build: {
+    sourcemap: false,  // Sem source maps em produção
+    cssCodeSplit: true,
+    chunkSizeWarningLimit: 800,
+  },
+
+  // OU manter hidden mas garantir que os .map NÃO são servidos:
+  // Configurar no servidor web (nginx/Vercel) para bloquear .map
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 11] — BAIXA: @ts-nocheck em KazePanel.tsx (711 linhas sem type checking)
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: src/components/KazePanel.tsx (linhas 1-2)
+SEVERIDADE: BAIXA — esconde erros de tipo
+
+--- CÓDIGO ATUAL ---
+
+  /* eslint-disable @typescript-eslint/ban-ts-comment */
+  // @ts-nocheck
+  import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+  // ... 711 linhas de código sem verificação de tipos
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  @ts-nocheck desliga COMPLETAMENTE o TypeScript para todo o ficheiro.
+  Isto significa que:
+    - Erros de tipo não são detetados
+    - Refactors podem quebrar código silenciosamente
+    - Variáveis podem ser usadas com tipos errados
+
+  O ficheiro tem 711 linhas com lógica complexa (media recording, Groq Whisper,
+  sessões de voz, VAD). Sem type checking, bugs de tipo passam despercebidos.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  // Opção 1: Remover @ts-nocheck e corrigir erros de tipo
+  // (ideal mas demorado)
+
+  // Opção 2: Usar @ts-expect-error em linhas específicas
+  // Remove a linha 2 e adiciona nas linhas com erro:
+  // @ts-expect-error — tipo específico aqui
+
+  // Opção 3: Usar any apenas onde necessário
+  // Adicionar tipos progressivamente
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 12] — MÉDIA: .env.local com URL de admin-gate apontando para projeto errado
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: .env.local (linha 4)
+SEVERIDADE: MÉDIA — configuração incorreta pode causar falhas de auth
+
+--- CÓDIGO ATUAL (QUEBRADO) ---
+
+  VITE_ADMIN_GATE_URL=https://owqdtbyzntewmsgmkbqw.supabase.co/functions/v1/admin-gate
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  O projeto principal é mhahnhnsaquqgqvnnwld (Zenith Ride).
+  Mas o admin-gate URL aponta para owqdtbyzntewmsgmkbqw (fumugold clinicas).
+
+  Isto significa que a promoção de admin está a apontar para um projeto
+  Supabase COMPLETAMENTE DIFERENTE. Se alguém tentar usar a master key
+  do Zenith Ride no admin-gate, vai falhar porque o projeto é outro.
+
+  Também pode significar que o .env.local foi copiado de outro projeto
+  e não foi atualizado.
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  VITE_ADMIN_GATE_URL=https://mhahnhnsaquqgqvnnwld.supabase.co/functions/v1/admin-gate
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 13] — MÉDIA: 252+ console.log/warn/error em produção
+════════════════════════════════════════════════════════════════════════════════
+
+DIVERSOS FICHEIROS em src/
+SEVERIDADE: MÉDIA — despejam informação interna no browser console
+
+--- EXEMPLOS DE CÓDIGO ATUAL ---
+
+  // geminiService.ts
+  console.warn('[geminiService.searchLocations] gemini-proxy indisponível:', e);
+  console.warn('[geminiService.createKazeChat] Erro na Edge function:', err);
+
+  // KazePanel.tsx
+  console.warn('[KazePanel] fala online falhou:', error);
+  console.warn('[KazePanel] Erro no Groq Whisper:', err);
+
+  // rideService.ts (exemplo típico)
+  console.warn('[rideService] Erro ao criar corrida:', error);
+  console.error('[rideService] Falha no matching:', err);
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  Em produção, estas mensagens:
+    1. Despejam detalhes de erros internos (stack traces, mensagens)
+    2. Revelam nomes de funções, parâmetros, e lógica de negócio
+    3. Podem conter dados sensíveis (IDs de utilizadores, tokens)
+    4. Enchem o console de ruído, dificultando debug real
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  // Opção 1: Usar sistema de logging condicional
+  const isDev = import.meta.env.DEV;
+  const log = isDev ? console.warn : () => {};
+
+  log('[geminiService] Erro:', error);
+
+  // Opção 2: Usar ESLint para bloquear console em produção
+  // .eslintrc.cjs:
+  'no-console': ['error', { allow: ['error'] }],  // só console.error permitido
+
+  // Opção 3: Remover manualmente (252+ chamadas — demorado)
+
+
+════════════════════════════════════════════════════════════════════════════════
+[FALHA 14] — BAIXA: Capacitor config minimalista
+════════════════════════════════════════════════════════════════════════════════
+
+FICHEIRO: capacitor.config.ts
+SEVERIDADE: BAIXA — app mobile sem configurações de segurança
+
+--- CÓDIGO ATUAL ---
+
+  import { CapacitorConfig } from '@capacitor/cli';
+
+  const config: CapacitorConfig = {
+    appId: 'com.zenithride.app',
+    appName: 'Zenith Ride',
+    webDir: 'dist'
+  };
+
+  export default config;
+
+--- EXPLICAÇÃO DO PROBLEMA ---
+
+  Falta:
+    - SSL/certificate pinning (proteção contra MITM em mobile)
+    - Deep links / universal links
+    - Splash screen config
+    - Android background color
+    - iOS content inset
+    - Server config para mixed content
+    - Plugin configurations
+
+--- CÓDIGO CORRIGIDO SUGERIDO ---
+
+  import { CapacitorConfig } from '@capacitor/cli';
+
+  const config: CapacitorConfig = {
+    appId: 'com.zenithride.app',
+    appName: 'Zenith Ride',
+    webDir: 'dist',
+    server: {
+      androidScheme: 'https',  // HTTPS scheme para Android
+    },
+    android: {
+      allowMixedContent: false,  // Bloquear mixed content
+      backgroundColor: '#000000',
+    },
+    ios: {
+      contentInset: 'automatic',
+    },
+    plugins: {
+      SplashScreen: {
+        launchAutoHide: true,
+        backgroundColor: '#000000',
+        showSpinner: true,
+      },
+    },
+  };
+
+  export default config;
+
+
+════════════════════════════════════════════════════════════════════════════════
+RESUMO DE TODAS AS FALHAS
+════════════════════════════════════════════════════════════════════════════════
+
+#  | SEVERIDADE | FALHA                                          | FICHEIRO
+---|------------|------------------------------------------------|---------------------------
+ 1 | CRÍTICA    | RLS rides USING (true) — vê todas as corridas  | FIX_RLS_DEFINITIVO.sql
+ 2 | CRÍTICA    | RLS driver_locations USING (true)              | FIX_RLS_DEFINITIVO.sql
+ 3 | ALTA       | Chaves API no .env (Vite bundle)               | .env linhas 15,17,20
+ 4 | ALTA       | Chaves API no localStorage                     | KazePanel.tsx, aiModelSettings.ts
+ 5 | ALTA       | Secrets hardcoded no dispatch-cascade          | dispatch-cascade/index.ts
+ 6 | MÉDIA      | KAZE_ALLOW_INSECURE_TLS=1                      | .env linha 23
+ 7 | MÉDIA      | ensure_user_exists sem validação de user_id    | 20260420_critical_fixes.sql
+ 8 | MÉDIA      | innerHTML sem sanitização                      | driverMarker.ts, mapInstance.ts
+ 9 | MÉDIA      | validate_tracking_token para anon              | 20260425_add_ride_tracking_shares.sql
+10 | BAIXA      | Source maps em produção                        | vite.config.ts linha 65
+11 | BAIXA      | @ts-nocheck em 711 linhas                      | KazePanel.tsx linhas 1-2
+12 | MÉDIA      | Admin-gate URL aponta para projeto errado      | .env.local linha 4
+13 | MÉDIA      | 252+ console.log em produção                   | Diversos ficheiros src/
+14 | BAIXA      | Capacitor config minimalista                   | capacitor.config.ts
+
+ORDEM DE PRIORIZAÇÃO PARA CORREÇÃO:
+  1. FALHA 1 e 2 (RLS) — corrigir IMEDIATAMENTE em produção
+  2. FALHA 5 (dispatch-cascade secrets) — mover para env vars
+  3. FALHA 3 (chaves no .env) — remover VITE_ de chaves server-side
+  4. FALHA 4 (localStorage keys) — mover para Edge Functions
+  5. FALHA 6 (insecure TLS) — desligar
+  6. FALHA 7 (ensure_user_exists) — adicionar validação
+  7. Restante — melhorias progressivas
+
+================================================================================
+  FIM DO DOCUMENTO
+  Gerado: 2026-07-14
+  Projecto: Zenith Ride v3.0
+================================================================================

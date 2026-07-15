@@ -21,10 +21,7 @@ const TX_LABELS: Record<string, string> = {
   ride_payment: 'Pagamento de corrida', ride_earning: 'Ganho de corrida',
   top_up: 'Carregamento', refund: 'Reembolso', bonus: 'Bónus', withdrawal: 'Levantamento',
 };
-const TX_ICONS: Record<string, string> = {
-  ride_payment: '🏍️', ride_earning: '💰', top_up: '➕',
-  refund: '↩️', bonus: '⭐', withdrawal: '🏦',
-};
+
 
 const Wallet: React.FC<WalletProps> = ({ userId }) => {
   const { role, profile } = useAuth();
@@ -59,6 +56,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
   const [zenithPayToken, setZenithPayToken] = useState<string | null>(null);
   const [zenithPayCopied, setZenithPayCopied] = useState(false);
   const [zenithPayQrDataUrl, setZenithPayQrDataUrl] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [zenithPayQrError, setZenithPayQrError] = useState(false);
 
   const zenithPayUri = zenithPayToken ? `zenithpay://session/${zenithPayToken}` : '';
@@ -175,21 +173,30 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
   const handleWithdrawClick   = () => { setWithdrawAmount(''); setWithdrawError(''); setShowWithdrawModal(true); };
   
   const handleWithdrawConfirm = async () => {
+    if (!wallet) { setWithdrawError('Carteira indisponível. Recarrega a página.'); return; }
     const amount = Number(withdrawAmount);
     if (!Number.isFinite(amount) || amount < 500)    { setWithdrawError('Montante mínimo: 500 Kz'); return; }
     if (amount > 500000)                              { setWithdrawError('Montante máximo: 500.000 Kz'); return; }
-    if (wallet && amount > wallet.balance)            { setWithdrawError('Saldo insuficiente.'); return; }
+    if (amount > wallet.balance)                      { setWithdrawError('Saldo insuficiente.'); return; }
     
     setWithdrawLoading(true);
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) {
+      let token: string | null = null;
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+      if (!refreshError && refreshData?.session?.access_token) {
+        token = refreshData.session.access_token;
+      } else {
+        const { data: fb } = await supabase.auth.getSession();
+        token = fb?.session?.access_token ?? null;
+      }
+
+      if (!token) {
         throw new Error('Sessão expirada. Faz login novamente.');
       }
 
       const res = await fetch(edgeFunctionUrl('multicaixa-pay'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session.access_token}` },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
         body: JSON.stringify({ action: 'withdrawal', amount_kz: amount }),
       });
 
@@ -197,7 +204,10 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
         throw new Error('Resposta inválida do servidor.');
       }
 
-      const data = await res.json().catch(() => null) as { success?: boolean; message?: string } | null;
+      const data = await res.json().catch((e) => {
+        console.error('[Wallet] erro JSON:', e);
+        return null;
+      }) as { success?: boolean; message?: string } | null;
       if (!res.ok || !data?.success) {
         throw new Error(data?.message ?? 'Falha no processamento.');
       }

@@ -156,29 +156,60 @@ const Contract: React.FC = () => {
     e.preventDefault();
     if (!dbUser?.id || !form.title || !form.address) { setSaveError('Preenche o nome e a morada.'); return; }
     setSaving(true); setSaveError(null);
-    // Geocodificar o endereço de destino
-    const coords = await mapService.geocodeAddress(form.address);
-    const dest_lat = coords?.lat ?? -8.836;
-    const dest_lng = coords?.lng ?? 13.234;
+    try {
+      const coords = await mapService.geocodeAddress(form.address);
+      const dest_lat = coords?.lat ?? -8.836;
+      const dest_lng = coords?.lng ?? 13.234;
 
-    const { error } = await supabase.from('contracts').insert({
-      user_id: dbUser.id,
-      contract_type: activeContractType,
-      title: form.title, address: form.address,
-      dest_lat, dest_lng,
-      time_start: form.time_start, time_end: form.time_end,
-      parent_monitoring: form.parent_monitoring,
-      route_deviation_alert: form.route_deviation_alert,
-      max_deviation_km: form.max_deviation_km,
-      contact_name: form.contact_name || null,
-      contact_phone: form.contact_phone || null,
-      active: true, km_accumulated: 0, bonus_kz: 0,
-    });
-    setSaving(false);
-    if (error) { setSaveError('Erro ao guardar. Tenta de novo.'); return; }
-    setShowAddForm(false);
-    setForm({ title: '', address: '', time_start: '07:30', time_end: '13:00', parent_monitoring: true, route_deviation_alert: true, max_deviation_km: 2, contact_name: '', contact_phone: '' });
-    loadData();
+      const insertPayload = {
+        user_id: dbUser.id,
+        contract_type: activeContractType,
+        title: form.title, address: form.address,
+        dest_lat, dest_lng,
+        time_start: form.time_start, time_end: form.time_end,
+        parent_monitoring: form.parent_monitoring,
+        route_deviation_alert: form.route_deviation_alert,
+        max_deviation_km: form.max_deviation_km,
+        contact_name: form.contact_name || null,
+        contact_phone: form.contact_phone || null,
+        active: true, km_accumulated: 0, bonus_kz: 0,
+      };
+
+      const { data: inserted, error } = await supabase.from('contracts').insert(insertPayload).select().maybeSingle();
+
+      if (error) {
+        console.error('[Contract] Insert falhou:', error);
+        setSaveError(`Erro: ${error.message || 'Tabela indisponivel. Contacta o suporte.'}`);
+        return;
+      }
+
+      // Adicionar contrato ao estado local imediatamente para o dono ver
+      if (inserted) {
+        setContracts(prev => [inserted as Contract, ...prev]);
+      } else {
+        // Fallback: criar objecto local com os dados do formulário
+        const localContract = {
+          ...insertPayload,
+          id: crypto.randomUUID(),
+          created_at: new Date().toISOString(),
+          monthly_credit_kz: null,
+          credit_remaining_kz: null,
+          discount_pct: null,
+          payment_status: null,
+        } as unknown as Contract;
+        setContracts(prev => [localContract, ...prev]);
+      }
+
+      setShowAddForm(false);
+      setForm({ title: '', address: '', time_start: '07:30', time_end: '13:00', parent_monitoring: true, route_deviation_alert: true, max_deviation_km: 2, contact_name: '', contact_phone: '' });
+      // Sincronizar em background (pode falhar por RLS sem impacto)
+      loadData().catch(err => console.warn('[Contract] Background sync falhou:', err));
+      showToast('Contrato criado com sucesso!', 'success');
+    } catch (err: any) {
+      setSaveError(`Erro inesperado: ${err?.message || 'Verifica a ligacao.'}`);
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Deactivate contract ──────────────────────────────────────────────────

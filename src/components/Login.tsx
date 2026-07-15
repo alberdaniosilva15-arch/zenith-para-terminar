@@ -3,7 +3,7 @@
 // Design: Vantablack & Gold · Supabase Auth real
 // =============================================================================
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { UserRole } from '../types';
@@ -14,6 +14,31 @@ type Screen = 'signin' | 'signup' | 'forgot' | 'reset';
 const RECOVERY_PATH = '/login?type=recovery';
 const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
 const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
+const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_intent';
+const CRM_ADMIN_ORIGIN = 'http://127.0.0.1:4000';
+
+function sanitizeRedirectTarget(candidate: string | null | undefined): string | null {
+  if (!candidate) return null;
+  if (!candidate.startsWith('/')) return null;
+  if (candidate.startsWith('//')) return null;
+  if (candidate.startsWith('/login')) return null;
+  return candidate;
+}
+
+function readRedirectTarget(): string | null {
+  if (typeof window === 'undefined') return null;
+  const fromSearch = sanitizeRedirectTarget(new URLSearchParams(window.location.search).get('next'));
+  const fromStorage = sanitizeRedirectTarget(window.localStorage.getItem(AUTH_REDIRECT_STORAGE_KEY));
+  return fromSearch ?? fromStorage;
+}
+
+function buildAuthRedirectUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const nextTarget = readRedirectTarget();
+  return nextTarget
+    ? `${window.location.origin}/login?next=${encodeURIComponent(nextTarget)}`
+    : `${window.location.origin}/login`;
+}
 
 const Login: React.FC = () => {
   const { signIn, signUp, signInWithGoogle } = useAuth();
@@ -72,6 +97,14 @@ const Login: React.FC = () => {
       setError(null);
       setSuccess('Sessao anterior terminada neste dispositivo. Ja podes entrar noutra conta.');
     }
+    const nextTarget = sanitizeRedirectTarget(searchParams.get('next'));
+    if (nextTarget) {
+      window.localStorage.setItem(AUTH_REDIRECT_STORAGE_KEY, nextTarget);
+      if (nextTarget.startsWith('/admin')) {
+        window.location.replace(`${CRM_ADMIN_ORIGIN}/login?next=${encodeURIComponent(nextTarget)}`);
+        return;
+      }
+    }
 
     syncRecoveryState();
     window.addEventListener('hashchange', syncRecoveryState);
@@ -83,9 +116,20 @@ const Login: React.FC = () => {
     };
   }, []);
 
+  // Rate limit client-side: 5 tentativas falhadas bloqueia por 5 minutos
+  const loginAttempts = useRef<{ count: number; blockedUntil: number }>({ count: 0, blockedUntil: 0 });
+
   const handleSignIn = async () => {
     if (!email || !password) {
       setError('Preenche email e palavra-passe.');
+      return;
+    }
+
+    // Verificar rate limit
+    const now = Date.now();
+    if (now < loginAttempts.current.blockedUntil) {
+      const remaining = Math.ceil((loginAttempts.current.blockedUntil - now) / 1000);
+      setError(`Demasiadas tentativas falhadas. Aguarda ${remaining} segundos.`);
       return;
     }
 
@@ -96,7 +140,16 @@ const Login: React.FC = () => {
     setLoading(false);
 
     if (err) {
-      setError(err.message);
+      loginAttempts.current.count += 1;
+      if (loginAttempts.current.count >= 5) {
+        loginAttempts.current.blockedUntil = Date.now() + 5 * 60 * 1000; // 5 minutos
+        loginAttempts.current.count = 0;
+        setError('Demasiadas tentativas falhadas. Conta bloqueada temporariamente (5 minutos).');
+      } else {
+        setError(err.message);
+      }
+    } else {
+      loginAttempts.current.count = 0; // Reset no sucesso
     }
   };
 
@@ -113,7 +166,7 @@ const Login: React.FC = () => {
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: { emailRedirectTo: window.location.origin },
+        options: { emailRedirectTo: buildAuthRedirectUrl() },
       });
 
       if (error) {
@@ -191,7 +244,7 @@ const Login: React.FC = () => {
   const handleGoogleAuth = async (targetRole: UserRole) => {
     setLoading(true);
     clearFeedback();
-    const err = await signInWithGoogle(targetRole);
+    const err = await signInWithGoogle(targetRole, readRedirectTarget() ?? undefined);
     setLoading(false);
 
     if (err) {
@@ -242,7 +295,7 @@ const Login: React.FC = () => {
         email,
         options: {
           data: { name, role: 'passenger' },
-          emailRedirectTo: window.location.origin,
+          emailRedirectTo: buildAuthRedirectUrl(),
         },
       });
 

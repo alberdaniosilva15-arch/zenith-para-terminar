@@ -56,13 +56,13 @@ const POLICIES = {
   'music.playMusic': {
     check: () => ({ allowed: true }),
   },
-  'hermes.execute': {
+  'kazeEdge.execute': {
     check: (args) => {
       if (!args.task || String(args.task).trim().length < 3) {
-        return { blocked: true, reason: 'Task Hermes demasiado curta.' };
+        return { blocked: true, reason: 'Task KazeEdge demasiado curta.' };
       }
       if (String(args.task).length > 4_000) {
-        return { blocked: true, reason: 'Task Hermes demasiado longa.' };
+        return { blocked: true, reason: 'Task KazeEdge demasiado longa.' };
       }
       return { allowed: true };
     },

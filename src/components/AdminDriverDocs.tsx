@@ -104,13 +104,20 @@ export function AdminDriverDocs() {
   const handleSentinelAnalysis = async (docId: string) => {
     try {
       setLoading(true);
-      const { data: session } = await supabase.auth.getSession();
+      let token: string | undefined;
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+      if (!refreshError && refreshData?.session?.access_token) {
+        token = refreshData.session.access_token;
+      } else {
+        const { data: fb } = await supabase.auth.getSession();
+        token = fb?.session?.access_token;
+      }
       
       const res = await fetch(`${ENV.SUPABASE_URL}/functions/v1/sentinel-vision`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.session?.access_token}`
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ documentId: docId })
       });

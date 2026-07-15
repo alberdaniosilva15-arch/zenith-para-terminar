@@ -23,8 +23,14 @@ function timeoutAfter<T>(promise: Promise<T>, timeoutMs: number, label: string):
 async function fetchRidePredictionsViaRest(userId: string): Promise<RidePrediction[]> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
   const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-  const { data: { session } } = await supabase.auth.getSession();
-  const accessToken = session?.access_token;
+  let accessToken: string | undefined;
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+  if (!refreshError && refreshData?.session?.access_token) {
+    accessToken = refreshData.session.access_token;
+  } else {
+    const { data: fb } = await supabase.auth.getSession();
+    accessToken = fb?.session?.access_token;
+  }
 
   if (!supabaseUrl || !supabaseAnonKey || !accessToken) {
     throw new Error('Fallback REST indisponivel para ride_predictions.');
@@ -129,6 +135,19 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept, onSched
 
       let data: RidePrediction[] | null = null;
       try {
+        // SECURITY CHECK: Verify if user has ACTUAL completed rides to avoid showing DB fallback mock data
+        const { count: realRidesCount } = await supabase
+          .from('rides')
+          .select('id', { count: 'exact', head: true })
+          .eq('passenger_id', userId)
+          .eq('status', 'completed');
+
+        if (!realRidesCount || realRidesCount < 2) {
+          setSuggestions([]);
+          setLoading(false);
+          return;
+        }
+
         const queryPromise = supabase
           .from('ride_predictions')
           .select('*')
@@ -222,7 +241,9 @@ const KazePreditivo: React.FC<KazePreditivoProps> = ({ userId, onAccept, onSched
     })();
   }, []);
 
-  if (loading || suggestions.length === 0 || !topSuggestion) {
+  const hasRealData = suggestions.some(s => s.prediction.frequency >= 3);
+
+  if (loading || suggestions.length === 0 || !topSuggestion || !hasRealData) {
     return null;
   }
 

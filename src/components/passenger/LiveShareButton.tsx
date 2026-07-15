@@ -11,6 +11,7 @@
 
 import React, { useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { useAppStore } from '../../store/useAppStore';
 
 interface LiveShareButtonProps {
   rideId: string;
@@ -32,6 +33,7 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
   const [loading, setLoading]     = useState(false);
   const [shared,  setShared]      = useState(false);
   const [link,    setLink]        = useState<string | null>(null);
+  const showToast = useAppStore(s => s.showToast);
 
   const handleShare = async () => {
     if (shared && link) {
@@ -98,7 +100,12 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
       openWhatsApp(message);
       } else {
         // Copiar para clipboard
-        navigator.clipboard.writeText(shareLink).catch(() => {});
+        navigator.clipboard.writeText(shareLink)
+          .then(() => showToast('Link copiado!', 'success'))
+          .catch((e) => {
+            console.error('Erro ao copiar', e);
+            showToast('Falha ao copiar', 'error');
+          });
       }
   };
 
@@ -115,7 +122,9 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
       );
       if (emergencyPhone) openWhatsApp(message);
       else if (navigator.share) {
-        navigator.share({ title: 'A minha localização', url: mapLink }).catch(() => {});
+        navigator.share({ title: 'A minha localização', url: mapLink }).catch((e) => {
+          console.warn('Share location failed', e);
+        });
       }
     }, () => {
       // Sem GPS — copiar link de WhatsApp genérico
@@ -168,7 +177,14 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
         <div
           className="zr-alert-box"
           style={{ marginTop: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(34,197,94,0.1)', borderColor: 'rgba(34,197,94,0.3)' }}
-          onClick={() => navigator.clipboard.writeText(link).catch(() => {})}
+          onClick={() => {
+            navigator.clipboard.writeText(link)
+              .then(() => showToast('Link copiado!', 'success'))
+              .catch((e) => {
+                console.error('Erro ao copiar', e);
+                showToast('Falha ao copiar', 'error');
+              });
+          }}
         >
           <span className="material-symbols-outlined" style={{ color: '#22c55e' }}>link</span>
           <div style={{ flex: 1, minWidth: 0 }}>

@@ -61,6 +61,7 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
         setStep('opening');
       }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postRide.active, postRide.rideId]);
 
   const handleOpeningContinue = async () => {

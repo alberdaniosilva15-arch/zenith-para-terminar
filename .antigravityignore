@@ -1,0 +1,30 @@
+# Ignorar pastas pesadas
+node_modules/
+.npm-cache/
+graphify-out/
+.git/
+dist/
+dist-codex-check/
+android/
+video do logotipo/
+preview_html/
+OpenJarvis-main/
+zenith-crm-saas/
+.qodo/
+.continue/
+
+# Ignorar ficheiros grandes específicos
+graph.json
+package-lock.json
+*.mp4
+*.png
+*.jpg
+*.zip
+*.ipynb
+*.sql
+*.json
+!package.json
+
+# Ignorar TUDO o que for maior que 1MB (regra de segurança)
+# O Antigravity não tem uma regra de tamanho nativa no ignore, 
+# mas ao listar extensões pesadas ajudamos.

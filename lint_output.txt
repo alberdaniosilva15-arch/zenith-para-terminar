@@ -1,0 +1,434 @@
+﻿
+> zenith-ride@3.0.0 lint
+> eslint . --ext ts,tsx --report-unused-disable-directives
+
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\App.tsx
+    6:10  warning  'UserRole' is defined but never used            @typescript-eslint/no-unused-vars
+   42:10  warning  'redirectToCrmAdmin' is defined but never used  @typescript-eslint/no-unused-vars
+  160:28  warning  'role' is assigned a value but never used       @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\admin\AdminApp.tsx
+  9:1  error  Use "@ts-expect-error" instead of "@ts-ignore", as "@ts-ignore" will do nothing if the following line is error-free  @typescript-eslint/ban-ts-comment
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\app\AuthenticatedApp.tsx
+  8:1  warning  Imports "TabType" are only used as type  @typescript-eslint/consistent-type-imports
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\AdminDashboard.tsx
+  4:1  warning  Imports "AutonomousCommand" are only used as type  @typescript-eslint/consistent-type-imports
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\AgoraCall.tsx
+   16:1   warning  Imports "IAgoraRTCClient" and "IMicrophoneAudioTrack" are only used as type  @typescript-eslint/consistent-type-imports
+  133:37  warning  Unexpected any. Specify a different type                                     @typescript-eslint/no-explicit-any
+  137:26  warning  Unexpected any. Specify a different type                                     @typescript-eslint/no-explicit-any
+  153:17  warning  Unexpected any. Specify a different type                                     @typescript-eslint/no-explicit-any
+  177:46  warning  Unexpected any. Specify a different type                                     @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\AvailableRidesList.tsx
+  48:3  warning  'pendingNotifCount' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\Contract.tsx
+  147:19  warning  Unexpected any. Specify a different type            @typescript-eslint/no-explicit-any
+  181:9   warning  Unexpected console statement                        no-console
+  208:19  warning  Unexpected any. Specify a different type            @typescript-eslint/no-explicit-any
+  436:10  warning  'trackingToken' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  470:50  warning  Unexpected any. Specify a different type            @typescript-eslint/no-explicit-any
+  484:7   warning  Unexpected console statement                        no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\DriverDocumentsForm.tsx
+  93:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  94:7   warning  Unexpected console statement              no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\DriverHome.tsx
+   59:10  warning  'availableRides' is assigned a value but never used                                                                                                                                                                                                                @typescript-eslint/no-unused-vars
+  136:36  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                           @typescript-eslint/no-explicit-any
+  156:35  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                           @typescript-eslint/no-explicit-any
+  178:19  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                           @typescript-eslint/no-explicit-any
+  299:50  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                           @typescript-eslint/no-explicit-any
+  356:6   warning  React Hook useCallback has a missing dependency: 'profile?.emergency_contact_phone'. Either include it or remove the dependency array                                                                                                                              react-hooks/exhaustive-deps
+  519:9   warning  Unexpected console statement                                                                                                                                                                                                                                       no-console
+  531:17  warning  The ref value 'timersRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'timersRef.current' to a variable inside the effect, and use that variable in the cleanup function  react-hooks/exhaustive-deps
+  876:42  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                           @typescript-eslint/no-explicit-any
+  922:17  warning  The ref value 'timersRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'timersRef.current' to a variable inside the effect, and use that variable in the cleanup function  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\ErrorBoundary.tsx
+  23:5  warning  Unexpected console statement  no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\EscolarMonitor.tsx
+  43:25   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  51:34   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  81:146  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\KazeCreditsBadge.tsx
+  12:52  warning  'rideId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\KazeMascot.tsx
+   51:100  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  261:46   warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\KazePreditivo.tsx
+  219:9   warning  'handleDismiss' is assigned a value but never used                       @typescript-eslint/no-unused-vars
+  249:39  warning  'index' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\Layout.tsx
+  3:1  warning  Imports "TabType" are only used as type  @typescript-eslint/consistent-type-imports
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\LocationSearchPanel.tsx
+   71:10  warning  'selectedDest' is assigned a value but never used                                                          @typescript-eslint/no-unused-vars
+  148:6   warning  React Hook useEffect has a missing dependency: 'mapRef'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  192:65  warning  Unexpected any. Specify a different type                                                                   @typescript-eslint/no-explicit-any
+  204:65  warning  Unexpected any. Specify a different type                                                                   @typescript-eslint/no-explicit-any
+  299:19  warning  Unexpected any. Specify a different type                                                                   @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\Login.tsx
+  157:17  warning  Unexpected any. Specify a different type           @typescript-eslint/no-explicit-any
+  183:17  warning  Unexpected any. Specify a different type           @typescript-eslint/no-explicit-any
+  217:17  warning  Unexpected any. Specify a different type           @typescript-eslint/no-explicit-any
+  288:17  warning  Unexpected any. Specify a different type           @typescript-eslint/no-explicit-any
+  295:9   warning  'handleSubmit' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\Map3D.tsx
+   2:1  warning  All imports in the declaration are only used as types. Use `import type`                                                                                                                                                                                                       @typescript-eslint/consistent-type-imports
+  65:6  warning  React Hook useEffect has missing dependencies: 'center', 'onMapReady', 'pitch', 'token', and 'zoom'. Either include them or remove the dependency array. If 'onMapReady' changes too often, find the parent component that defines it and wrap that definition in useCallback  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\PanicButton.tsx
+  23:3  warning  'counterpartyLabel' is assigned a value but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\PassengerHome.tsx
+   16:8   warning  'AuctionList' is defined but never used                                      @typescript-eslint/no-unused-vars
+   30:7   warning  'ZonePriceMap' is assigned a value but never used                            @typescript-eslint/no-unused-vars
+   58:7   warning  'AgoraCall' is assigned a value but never used                               @typescript-eslint/no-unused-vars
+   95:32  warning  'dataSaver' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+  125:10  warning  'extraDropAddress' is assigned a value but never used                        @typescript-eslint/no-unused-vars
+  126:10  warning  'extraDropCoords' is assigned a value but never used                         @typescript-eslint/no-unused-vars
+  402:16  warning  'err' is defined but never used                                              @typescript-eslint/no-unused-vars
+  441:7   warning  Unexpected console statement                                                 no-console
+  465:7   warning  Unexpected console statement                                                 no-console
+  489:7   warning  Unexpected console statement                                                 no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\PostRideReview.tsx
+    4:1   warning  Imports "RideReceiptData" are only used as type                                                                                                                                                                                                                                                                                                                          @typescript-eslint/consistent-type-imports
+   64:6   warning  React Hook useEffect has missing dependencies: 'postRide.distanceKm', 'postRide.driverName', 'postRide.durationMin', and 'postRide.priceKz'. Either include them or remove the dependency array. If 'setKazeText' needs the current value of 'postRide.driverName', you can also switch to useReducer instead of useState and read 'postRide.driverName' in the reducer  react-hooks/exhaustive-deps
+  166:14  warning  'e' is defined but never used                                                                                                                                                                                                                                                                                                                                            @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\Profile.tsx
+  144:14  warning  'err' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\ReferralModal.tsx
+  32:9   warning  Unexpected console statement  no-console
+  50:11  warning  Unexpected console statement  no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\RideTalk.tsx
+   51:10  warning  'rowToMsg' is defined but never used                                    @typescript-eslint/no-unused-vars
+   51:22  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+   64:71  warning  'role' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+   94:9   warning  Unexpected console statement                                            no-console
+  102:48  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  103:24  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  113:32  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  116:22  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  137:34  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  153:34  warning  Unexpected any. Specify a different type                                @typescript-eslint/no-explicit-any
+  203:7   warning  Unexpected console statement                                            no-console
+  222:18  warning  Unexpected console statement                                            no-console
+  240:26  warning  Unexpected console statement                                            no-console
+  251:7   warning  Unexpected console statement                                            no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\RidesHistory.tsx
+  105:6  warning  React Hook useEffect has a missing dependency: 'rides'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\SocialFeed.tsx
+   19:11  warning  'profile' is assigned a value but never used  @typescript-eslint/no-unused-vars
+   66:44  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+   68:24  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+   78:32  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+   84:38  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  109:34  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  133:34  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+  138:34  warning  Unexpected any. Specify a different type      @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\Wallet.tsx
+   24:7   warning  'TX_ICONS' is assigned a value but never used          @typescript-eslint/no-unused-vars
+   62:10  warning  'zenithPayQrError' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  144:7   warning  Unexpected console statement                           no-console
+  209:9   warning  Unexpected console statement                           no-console
+  219:19  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  423:66  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\ZenithScore.tsx
+  53:6  warning  React Hook useEffect has a missing dependency: 'loadScore'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\AdminSOSPanel.tsx
+   57:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   58:7   warning  Unexpected console statement              no-console
+  111:7   warning  Unexpected console statement              no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\AdminServicesPanel.tsx
+   97:66  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  106:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  107:7   warning  Unexpected console statement              no-console
+  158:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  159:7   warning  Unexpected console statement              no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\AdminUsersPanel.tsx
+   45:50  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  155:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  156:7   warning  Unexpected console statement              no-console
+  200:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  201:7   warning  Unexpected console statement              no-console
+  227:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  228:7   warning  Unexpected console statement              no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\tabs\KazeAITab.tsx
+    5:1   warning  All imports in the declaration are only used as types. Use `import type`                                                                                     @typescript-eslint/consistent-type-imports
+   10:38  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+   35:48  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+   48:33  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  112:21  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  116:11  warning  Unexpected console statement                                                                                                                                 no-console
+  128:21  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  133:11  warning  Unexpected console statement                                                                                                                                 no-console
+  172:19  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  192:42  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  192:79  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  222:36  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  224:23  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  228:26  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  229:23  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  242:35  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  307:6   warning  React Hook useEffect has missing dependencies: 'startAudioFallbackListening' and 'stopListeningSession'. Either include them or remove the dependency array  react-hooks/exhaustive-deps
+  314:49  error    Empty block statement                                                                                                                                        no-empty
+  328:17  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  343:24  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+  363:54  error    Empty block statement                                                                                                                                        no-empty
+  376:54  error    Empty block statement                                                                                                                                        no-empty
+  390:17  warning  Unexpected any. Specify a different type                                                                                                                     @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\tabs\LiveMapTab.tsx
+  146:36  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                             @typescript-eslint/no-explicit-any
+  148:7   warning  Unexpected console statement                                                                                                                                                                                                                                         no-console
+  177:18  warning  The ref value 'markersRef.current' will likely have changed by the time this effect cleanup function runs. If this ref points to a node rendered by React, copy 'markersRef.current' to a variable inside the effect, and use that variable in the cleanup function  react-hooks/exhaustive-deps
+  181:6   warning  React Hook useEffect has a missing dependency: 'mapStyle'. Either include it or remove the dependency array                                                                                                                                                          react-hooks/exhaustive-deps
+  274:19  warning  Unexpected any. Specify a different type                                                                                                                                                                                                                             @typescript-eslint/no-explicit-any
+  275:9   warning  Unexpected console statement                                                                                                                                                                                                                                         no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\tabs\MarketFinanceTab.tsx
+  67:17  warning  Unexpected any. Specify a different type                                                                          @typescript-eslint/no-explicit-any
+  68:7   warning  Unexpected console statement                                                                                      no-console
+  77:6   warning  React Hook useEffect has a missing dependency: 'fetchFinances'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\tabs\SettingsTab.tsx
+   52:11  error    Empty block statement                     no-empty
+  119:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  169:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\tabs\UsersTab.tsx
+   87:17  warning  Unexpected any. Specify a different type                                                                       @typescript-eslint/no-explicit-any
+   88:7   warning  Unexpected console statement                                                                                   no-console
+  106:6   warning  React Hook useEffect has a missing dependency: 'fetchUsers'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\admin\tabs\ZonePricingTab.tsx
+    1:27  warning  'useEffect' is defined but never used     @typescript-eslint/no-unused-vars
+    1:38  warning  'useMemo' is defined but never used       @typescript-eslint/no-unused-vars
+  117:30  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\driver\IncomingRidePopup.tsx
+   2:1   warning  All imports in the declaration are only used as types. Use `import type`  @typescript-eslint/consistent-type-imports
+  39:29  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  39:82  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  78:27  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  78:80  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\passenger\ActiveRideCard.tsx
+  11:1  warning  Imports "RideState" are only used as type  @typescript-eslint/consistent-type-imports
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\passenger\AuctionList.tsx
+  2:1  warning  All imports in the declaration are only used as types. Use `import type`  @typescript-eslint/consistent-type-imports
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\passenger\AuctionScreen.tsx
+  30:7  warning  'RouteRow' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\passenger\LiveShareButton.tsx
+  106:13  warning  Unexpected console statement  no-console
+  184:17  warning  Unexpected console statement  no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\passenger\LocationSearch.tsx
+  2:1  warning  All imports in the declaration are only used as types. Use `import type`  @typescript-eslint/consistent-type-imports
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\components\passenger\RideRequestForm.tsx
+  295:10  warning  'MetricBlock' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\contexts\AuthContext.tsx
+  283:9   warning  Unexpected console statement              no-console
+  345:11  warning  Unexpected console statement              no-console
+  383:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  452:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  456:11  warning  Unexpected console statement              no-console
+  460:11  warning  Unexpected console statement              no-console
+  482:7   warning  Unexpected console statement              no-console
+  485:9   warning  Unexpected console statement              no-console
+  486:38  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  487:47  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  489:11  warning  Unexpected console statement              no-console
+  524:7   warning  Unexpected console statement              no-console
+  558:9   warning  Unexpected console statement              no-console
+  563:11  warning  Unexpected console statement              no-console
+  628:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  679:7   warning  Unexpected console statement              no-console
+  762:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  763:34  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\hooks\usePassengerGPS.ts
+  47:6  warning  React Hook useEffect has missing dependencies: 'existingPickupCoords' and 'onPickupDetected'. Either include them or remove the dependency array. If 'onPickupDetected' changes too often, find the parent component that defines it and wrap that definition in useCallback  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\hooks\useRide.ts
+   14:23  warning  'INITIAL_RIDE' is defined but never used                                                                          @typescript-eslint/no-unused-vars
+   14:37  warning  'INITIAL_AUCTION' is defined but never used                                                                       @typescript-eslint/no-unused-vars
+   14:54  warning  'INITIAL_POST_RIDE' is defined but never used                                                                     @typescript-eslint/no-unused-vars
+   48:19  warning  'role' is assigned a value but never used                                                                         @typescript-eslint/no-unused-vars
+  115:13  warning  Unexpected console statement                                                                                      no-console
+  233:45  warning  Unexpected any. Specify a different type                                                                          @typescript-eslint/no-explicit-any
+  243:42  warning  Unexpected any. Specify a different type                                                                          @typescript-eslint/no-explicit-any
+  313:14  warning  'err' is defined but never used                                                                                   @typescript-eslint/no-unused-vars
+  462:6   warning  React Hook useCallback has a missing dependency: 'ride.rideId'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\lib\aiModelSettings.ts
+  69:11  error  Empty block statement  no-empty
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\lib\kazeAudioCapture.ts
+    9:44  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  127:10  warning  'webSpeechTranscribe' is defined but never used        @typescript-eslint/no-unused-vars
+  129:42  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  129:79  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  145:36  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  150:35  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  176:16  warning  'listenWithWindowsFallback' is defined but never used  @typescript-eslint/no-unused-vars
+  242:18  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  246:52  error    Empty block statement                                  no-empty
+  252:16  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+  257:32  warning  Unexpected any. Specify a different type               @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\lib\kazeVoice.ts
+   10:71  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   11:73  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  229:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  237:21  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  245:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\lib\logger.ts
+   8:29  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  20:3   warning  Unexpected console statement              no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\lib\mapInstance.ts
+   85:25  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  104:44  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  125:27  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  185:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\lib\nativeEmergency.ts
+  26:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  26:59  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  34:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\lib\screamDetector.ts
+   22:20  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   81:34  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   81:71  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+   89:36  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  101:47  warning  'e' is defined but never used             @typescript-eslint/no-unused-vars
+  101:50  error    Empty block statement                     no-empty
+  106:41  warning  'e' is defined but never used             @typescript-eslint/no-unused-vars
+  106:44  error    Empty block statement                     no-empty
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\map\mapRoutingLayer.ts
+   4:1   warning  All imports in the declaration are only used as types. Use `import type`  @typescript-eslint/consistent-type-imports
+  82:11  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  94:15  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  95:27  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+  96:20  warning  Unexpected any. Specify a different type                                  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\services\geminiService.ts
+  143:33  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  144:39  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  204:15  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  230:7   warning  Unexpected console statement              no-console
+  241:14  warning  'err' is defined but never used           @typescript-eslint/no-unused-vars
+  241:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  303:35  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  306:59  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  319:23  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  355:17  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  356:7   warning  Unexpected console statement              no-console
+  365:22  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  416:42  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  426:19  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  433:35  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\services\mapService.ts
+  174:42  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  218:43  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  218:51  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  227:53  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\services\pdfService.ts
+  460:77  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+  466:30  warning  Unexpected any. Specify a different type  @typescript-eslint/no-explicit-any
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\services\premiumService.ts
+   72:5   warning  Unexpected console statement  no-console
+  238:7   warning  Unexpected console statement  no-console
+  283:7   warning  Unexpected console statement  no-console
+  296:7   warning  Unexpected console statement  no-console
+  343:7   warning  Unexpected console statement  no-console
+  358:7   warning  Unexpected console statement  no-console
+  374:7   warning  Unexpected console statement  no-console
+  426:7   warning  Unexpected console statement  no-console
+  449:18  warning  Unexpected console statement  no-console
+  465:7   warning  Unexpected console statement  no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\services\referralService.ts
+   51:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+  102:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\src\services\rideService.ts
+   180:11   warning  Unexpected console statement  no-console
+   218:9    warning  Unexpected console statement  no-console
+   222:9    warning  Unexpected console statement  no-console
+   256:11   warning  Unexpected console statement  no-console
+   297:9    warning  Unexpected console statement  no-console
+   301:9    warning  Unexpected console statement  no-console
+   432:11   warning  Unexpected console statement  no-console
+   449:9    warning  Unexpected console statement  no-console
+   474:9    warning  Unexpected console statement  no-console
+   483:7    warning  Unexpected console statement  no-console
+   487:7    warning  Unexpected console statement  no-console
+   589:9    warning  Unexpected console statement  no-console
+   606:7    warning  Unexpected console statement  no-console
+   620:9    warning  Unexpected console statement  no-console
+   656:7    warning  Unexpected console statement  no-console
+   739:82   warning  Unexpected console statement  no-console
+   742:123  warning  Unexpected console statement  no-console
+   748:7    warning  Unexpected console statement  no-console
+   868:9    warning  Unexpected console statement  no-console
+   876:7    warning  Unexpected console statement  no-console
+   897:20   warning  Unexpected console statement  no-console
+   901:7    warning  Unexpected console statement  no-console
+   912:20   warning  Unexpected console statement  no-console
+   914:21   warning  Unexpected console statement  no-console
+   927:20   warning  Unexpected console statement  no-console
+   929:21   warning  Unexpected console statement  no-console
+   943:9    warning  Unexpected console statement  no-console
+   948:7    warning  Unexpected console statement  no-console
+   997:13   warning  Unexpected console statement  no-console
+  1002:9    warning  Unexpected console statement  no-console
+  1142:7    warning  Unexpected console statement  no-console
+  1154:20   warning  Unexpected console statement  no-console
+
+C:\Users\Ariane Marcelino\Videos\nunca mexer\zenith-ride-final-v3\mudamos para aqui\zenith-ride-build\vite.config.ts
+  17:29  warning  `import()` type annotations are forbidden  @typescript-eslint/consistent-type-imports
+  41:11  warning  Unexpected console statement               no-console
+  43:11  warning  Unexpected console statement               no-console
+
+Ô£û 302 problems (9 errors, 293 warnings)
+  0 errors and 12 warnings potentially fixable with the `--fix` option.
+

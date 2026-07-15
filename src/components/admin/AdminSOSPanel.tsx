@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { useAppStore } from '../../store/useAppStore';
 import type { PanicAlertRecord } from '../../types';
 
 interface AdminSOSPanelProps {
@@ -14,7 +15,9 @@ interface AlertRow extends PanicAlertRecord {
 export default function AdminSOSPanel({ onActiveCountChange }: AdminSOSPanelProps) {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const showToast = useAppStore((state) => state.showToast);
 
   const enrichAudioUrls = useCallback(async (rows: AlertRow[]) => {
     return Promise.all(rows.map(async (row) => {
@@ -35,25 +38,28 @@ export default function AdminSOSPanel({ onActiveCountChange }: AdminSOSPanelProp
 
   const loadAlerts = useCallback(async () => {
     setLoading(true);
+    setError(null);
 
-    const { data, error } = await supabase
-      .from('panic_alerts')
-      .select(`
-        *,
-        profiles:user_id(name, phone)
-      `)
-      .order('created_at', { ascending: false })
-      .limit(50);
+    try {
+      const { data, error } = await supabase
+        .from('panic_alerts')
+        .select(`
+          *,
+          profiles:user_id(name, phone)
+        `)
+        .order('created_at', { ascending: false })
+        .limit(50);
 
-    if (error) {
-      console.error('[AdminSOSPanel]', error);
+      if (error) throw error;
+
+      const rows = await enrichAudioUrls((data ?? []) as AlertRow[]);
+      setAlerts(rows);
+    } catch (e: any) {
+      console.error('[AdminSOSPanel.loadAlerts]', e);
+      setError(e.message || 'Falha ao carregar alertas de pânico.');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const rows = await enrichAudioUrls((data ?? []) as AlertRow[]);
-    setAlerts(rows);
-    setLoading(false);
   }, [enrichAudioUrls]);
 
   useEffect(() => {
@@ -102,7 +108,10 @@ export default function AdminSOSPanel({ onActiveCountChange }: AdminSOSPanelProp
       .eq('id', alertId);
 
     if (error) {
-      console.error('[AdminSOSPanel.handleStatusChange]', error);
+      console.error('[AdminSOSPanel.handleStatusChange] FALHA CRÍTICA:', error);
+      showToast('Falha crítica ao atualizar alerta SOS. O estado NÃO foi alterado.', 'error');
+      setUpdatingId(null);
+      return;
     }
 
     setUpdatingId(null);
@@ -126,6 +135,19 @@ export default function AdminSOSPanel({ onActiveCountChange }: AdminSOSPanelProp
           </div>
         </div>
       </div>
+
+      {error && (
+        <div className="flex items-center gap-3 p-4 bg-red-500/20 border border-red-500 rounded-lg mb-4">
+          <span className="material-symbols-outlined text-red-400">emergency</span>
+          <div className="flex-1">
+            <p className="text-red-400 font-semibold text-sm">Sistema SOS Indisponível</p>
+            <p className="text-red-400/70 text-xs mt-1">{error}</p>
+          </div>
+          <button onClick={loadAlerts} className="text-xs px-3 py-1 border border-red-400 text-red-400 rounded hover:bg-red-400/10">
+            Reconectar
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 text-center text-sm font-bold text-white/60">

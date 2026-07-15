@@ -413,7 +413,10 @@ function createWhiteCarMarkerElement() {
   el.style.display = 'flex';
   el.style.alignItems = 'center';
   el.style.justifyContent = 'center';
-  el.innerHTML = '<span style="font-size:18px;">🚗</span>';
+  const span = document.createElement('span');
+  span.textContent = '🚗';
+  span.style.fontSize = '18px';
+  el.appendChild(span);
   return el;
 }
 

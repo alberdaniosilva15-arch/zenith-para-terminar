@@ -30,6 +30,7 @@ interface DriverOption {
 export default function AdminServicesPanel() {
   const [bookings, setBookings] = useState<PremiumBookingRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [serviceFilter, setServiceFilter] = useState<ServiceFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [driverOptions, setDriverOptions] = useState<DriverOption[]>([]);
@@ -41,60 +42,73 @@ export default function AdminServicesPanel() {
 
   const loadServices = useCallback(async () => {
     setLoading(true);
+    setError(null);
 
-    let query = supabase
-      .from('premium_bookings')
-      .select('id, user_id, driver_id, service_type, status, pickup_address, dest_address, scheduled_at, price_kz, notify_me, notes, created_at')
-      .order('created_at', { ascending: false })
-      .limit(80);
+    try {
+      let query = supabase
+        .from('premium_bookings')
+        .select('id, user_id, driver_id, service_type, status, pickup_address, dest_address, scheduled_at, price_kz, notify_me, notes, created_at')
+        .order('created_at', { ascending: false })
+        .limit(80);
 
-    if (serviceFilter !== 'all') {
-      query = query.eq('service_type', serviceFilter);
+      if (serviceFilter !== 'all') {
+        query = query.eq('service_type', serviceFilter);
+      }
+      if (statusFilter !== 'all') {
+        query = query.eq('status', statusFilter);
+      }
+
+      const [bookingsRes, driversRes, taxiRes] = await Promise.all([
+        query,
+        supabase.from('driver_documents').select('driver_id, profiles:driver_id(name, rating)').eq('status', 'approved'),
+        supabase
+          .from('rides')
+          .select('price_kz')
+          .eq('status', 'completed')
+          .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
+      ]);
+
+      if (bookingsRes.error) throw bookingsRes.error;
+      if (driversRes.error) throw driversRes.error;
+      if (taxiRes.error) throw taxiRes.error;
+
+      const premiumRows = (bookingsRes.data ?? []) as PremiumBookingRow[];
+      const ids = Array.from(new Set([
+        ...premiumRows.map((booking) => booking.user_id),
+        ...premiumRows.map((booking) => booking.driver_id).filter((value): value is string => !!value),
+      ]));
+
+      if (ids.length > 0) {
+        const { data: profiles, error: profErr } = await supabase
+          .from('profiles')
+          .select('user_id, name')
+          .in('user_id', ids);
+
+        if (profErr) throw profErr;
+
+        const profileMap = Object.fromEntries((profiles ?? []).map((profile) => [profile.user_id, profile.name ?? 'Utilizador Zenith']));
+        setUserNames(profileMap);
+        setDriverNames(profileMap);
+      } else {
+        setUserNames({});
+        setDriverNames({});
+      }
+
+      const approvedDrivers = (driversRes.data ?? []).map((item: any) => ({
+        id: item.driver_id,
+        name: item.profiles?.name ?? 'Motorista Zenith',
+        rating: Number(item.profiles?.rating ?? 0),
+      })) as DriverOption[];
+
+      setBookings(premiumRows);
+      setDriverOptions(approvedDrivers);
+      setTaxiRevenue((taxiRes.data ?? []).reduce((sum, row) => sum + Number(row.price_kz ?? 0), 0));
+    } catch (e: any) {
+      console.error('[AdminServicesPanel.loadServices]', e);
+      setError(e.message || 'Falha de rede. Verifica a ligação ao servidor.');
+    } finally {
+      setLoading(false);
     }
-    if (statusFilter !== 'all') {
-      query = query.eq('status', statusFilter);
-    }
-
-    const [{ data: bookingRows }, { data: driverDocs }, { data: taxiRows }] = await Promise.all([
-      query,
-      supabase.from('driver_documents').select('driver_id, profiles:driver_id(name, rating)').eq('status', 'approved'),
-      supabase
-        .from('rides')
-        .select('price_kz')
-        .eq('status', 'completed')
-        .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()),
-    ]);
-
-    const premiumRows = (bookingRows ?? []) as PremiumBookingRow[];
-    const ids = Array.from(new Set([
-      ...premiumRows.map((booking) => booking.user_id),
-      ...premiumRows.map((booking) => booking.driver_id).filter((value): value is string => !!value),
-    ]));
-
-    if (ids.length > 0) {
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('user_id, name')
-        .in('user_id', ids);
-
-      const profileMap = Object.fromEntries((profiles ?? []).map((profile) => [profile.user_id, profile.name ?? 'Utilizador Zenith']));
-      setUserNames(profileMap);
-      setDriverNames(profileMap);
-    } else {
-      setUserNames({});
-      setDriverNames({});
-    }
-
-    const approvedDrivers = (driverDocs ?? []).map((item: any) => ({
-      id: item.driver_id,
-      name: item.profiles?.name ?? 'Motorista Zenith',
-      rating: Number(item.profiles?.rating ?? 0),
-    })) as DriverOption[];
-
-    setBookings(premiumRows);
-    setDriverOptions(approvedDrivers);
-    setTaxiRevenue((taxiRows ?? []).reduce((sum, row) => sum + Number(row.price_kz ?? 0), 0));
-    setLoading(false);
   }, [serviceFilter, statusFilter]);
 
   useEffect(() => {
@@ -129,17 +143,24 @@ export default function AdminServicesPanel() {
     if (!driverId) return;
 
     setUpdating(bookingId);
-    await supabase
-      .from('premium_bookings')
-      .update({
-        driver_id: driverId,
-        status: 'confirmed',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', bookingId);
+    try {
+      const { error } = await supabase
+        .from('premium_bookings')
+        .update({
+          driver_id: driverId,
+          status: 'confirmed',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', bookingId);
 
-    await loadServices();
-    setUpdating(null);
+      if (error) throw error;
+      await loadServices();
+    } catch (err: any) {
+      console.error('[AdminServicesPanel.handleAssignDriver]', err);
+      setError(err.message || 'Nao foi possivel atribuir o motorista.');
+    } finally {
+      setUpdating(null);
+    }
   };
 
   return (
@@ -198,11 +219,11 @@ export default function AdminServicesPanel() {
           className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
         >
           <option value="all">Todos os estados</option>
-          <option value="pending">Pending</option>
-          <option value="confirmed">Confirmed</option>
-          <option value="in_progress">In progress</option>
-          <option value="completed">Completed</option>
-          <option value="cancelled">Cancelled</option>
+          <option value="pending">Pendente</option>
+          <option value="confirmed">Confirmado</option>
+          <option value="in_progress">Em curso</option>
+          <option value="completed">Concluído</option>
+          <option value="cancelled">Cancelado</option>
         </select>
       </div>
 
@@ -210,6 +231,17 @@ export default function AdminServicesPanel() {
         {loading ? (
           <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 text-center text-sm font-bold text-white/55">
             A carregar reservas premium...
+          </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+            <span className="material-symbols-outlined text-5xl text-red-400">cloud_off</span>
+            <p className="text-sm text-red-400 max-w-sm">{error}</p>
+            <button
+              onClick={loadServices}
+              className="mt-2 px-5 py-2 text-sm rounded border border-white/20 text-white/70 hover:bg-white/10 transition-colors"
+            >
+              Tentar Novamente
+            </button>
           </div>
         ) : bookings.length === 0 ? (
           <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 text-center text-sm font-bold text-white/55">
