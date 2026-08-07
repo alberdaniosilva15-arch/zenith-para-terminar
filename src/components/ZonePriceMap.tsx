@@ -11,7 +11,8 @@
 //   OU mostrar dentro do PassengerHome quando o passageiro selecciona destino.
 // =============================================================================
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 import { zonePriceService, ZONE_COLORS } from '../services/zonePrice';
 import type { ZonePrice } from '../types';
 
@@ -25,6 +26,9 @@ const ZonePriceMap: React.FC<{
   const [prices,       setPrices]       = useState<ZonePrice[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [originFilter, setOriginFilter] = useState<string>(highlightOrigin ?? 'Centro');
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useAutoScroll(scrollRef, 0.5);
 
   useEffect(() => {
     zonePriceService.getAllPrices().then(p => {
@@ -74,21 +78,39 @@ const ZonePriceMap: React.FC<{
           {!compact && (
             <p className="zr-label" style={{ marginBottom: '8px' }}>Estou em</p>
           )}
-          <div className="zr-scroll-x">
-            {ALL_ZONES.map(zone => {
-              const active = originFilter === zone;
-              return (
-                <button
-                  key={zone}
-                  onClick={() => setOriginFilter(zone)}
-                  className={`zr-tab ${active ? 'is-active' : ''}`}
-                >
-                  {zone}
-                </button>
-              );
-            })}
+          <div className="zr-scroll-hint">
+            <div className="zr-scroll-x" ref={scrollRef}>
+              {ALL_ZONES.map(zone => {
+                const active = originFilter === zone;
+                return (
+                  <button
+                    key={zone}
+                    onClick={() => setOriginFilter(zone)}
+                    className={`zr-tab ${active ? 'is-active' : ''}`}
+                  >
+                    {zone}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
+
+        {/* ── Recomendacao Dinamica ─────────────────────────────────────────────── */}
+        {!compact && (() => {
+          const recommended = filteredPrices[0];
+          if (!recommended) return null;
+          return (
+            <div className="zr-card zr-card--soft" style={{ marginBottom: 16 }}>
+              <p className="zr-kicker">Recomendamos</p>
+              <p className="zr-section-title">{originFilter} &rarr; {recommended.zone}</p>
+              <p className="zr-copy">Distância ~{recommended.distance_km} km &middot; Preço fixo garantido</p>
+              <p style={{ fontSize: 28, fontWeight: 900, color: 'var(--gold)', marginTop: 8 }}>
+                {recommended.price_kz.toLocaleString('pt-AO')} Kz
+              </p>
+            </div>
+          );
+        })()}
 
         {/* ── Grid de preços ─────────────────────────────────────────────── */}
         {filteredPrices.length === 0 ? (

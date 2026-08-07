@@ -36,10 +36,10 @@ export const ReferralModal: React.FC<ReferralModalProps> = ({ userId, onClose })
 
   const handleShare = async () => {
     if (!code) return;
-    const text = `🚀 Usa o meu código *${code}* na Zenith Ride e ganha 500 Kz de bónus na primeira corrida! Descarrega em https://zenithride.ao`;
+    const text = `Usa o meu código *${code}* na Zenith Ride e ganha 500 Kz de bónus na primeira corrida! Descarrega em https://zenithride.ao`;
     if (navigator.share) {
       try {
-        await navigator.share({ title: 'Zenith Ride — Bónus de 500 Kz', text });
+        await navigator.share({ title: 'Zenith Ride: Bónus de 500 Kz', text });
       } catch (err) {
         console.warn('[ReferralModal] share:', err);
       }

@@ -4,6 +4,7 @@
 // ✅ Toast de erro em todas as acções
 // ✅ subscribeToRide + subscribeToDriverLocation robustos
 // ✅ Cleanup correcto em todos os casos
+// ✅ SECURITY FIX: RPCs usam auth.uid() — sem params client-controlled
 // =============================================================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -76,7 +77,8 @@ export function useRide(): UseRideReturn {
   useEffect(() => {
     if (!dbUser?.id) return;
     (async () => {
-      const active = await rideService.getActiveRide(dbUser.id);
+      // SECURITY: get_active_ride usa auth.uid() internamente
+      const active = await rideService.getActiveRide();
       if (active) {
         applyDbRideRef.current(active);
         subscribeToRideRef.current(active.id, active.driver_id ?? undefined);
@@ -273,8 +275,6 @@ export function useRide(): UseRideReturn {
 
         if (updated.status === RideStatus.COMPLETED) {
           // Capturar a referência ANTES do timeout para evitar cancelar subscriptions futuras.
-          // Se uma nova corrida começar nos próximos 5s, unsubRef.current já foi anulado
-          // e o timeout apenas chama a limpeza da corrida terminada.
           const completedUnsub = unsubRef.current;
           unsubRef.current = null;
           setTimeout(() => {
@@ -376,11 +376,12 @@ export function useRide(): UseRideReturn {
   }, [dbUser?.id, auction.selectedDriver, resetAuction, showToast, clearRideDetails]);
 
   // ── cancelRide ────────────────────────────────────────────────────────────
+  // SECURITY: cancel_ride_safe usa auth.uid() internamente — sem p_user_id
   const cancelRide = useCallback(async (reason?: string) => {
-    if (!dbUser?.id || !ride.rideId) return;
+    if (!ride.rideId) return;
     setLoading(true);
     try {
-      const err = await rideService.cancelRide(ride.rideId, dbUser.id, reason);
+      const err = await rideService.cancelRide(ride.rideId, undefined, reason);
       if (err) { showToast(err.message, 'error'); return; }
       driverLocUnsub.current?.(); driverLocUnsub.current = null;
       unsubRef.current?.(); unsubRef.current = null;
@@ -391,14 +392,14 @@ export function useRide(): UseRideReturn {
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, ride.rideId, resetRide, resetAuction, showToast, clearRideDetails]);
+  }, [ride.rideId, resetRide, resetAuction, showToast, clearRideDetails]);
 
   // ── acceptRide ────────────────────────────────────────────────────────────
+  // SECURITY: accept_ride_atomic usa auth.uid() internamente — sem p_driver_id
   const acceptRide = useCallback(async (rideId: string) => {
-    if (!dbUser?.id) return;
     setLoading(true);
     try {
-      const { data, error: e } = await rideService.acceptRide(rideId, dbUser.id);
+      const { data, error: e } = await rideService.acceptRide(rideId, '');
       if (e || !data) {
         const msg = e?.message ?? 'Corrida já aceite por outro motorista.';
         setError(e ?? { code: 'accept_fail', message: msg });
@@ -410,14 +411,14 @@ export function useRide(): UseRideReturn {
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, showToast]);
+  }, [showToast]);
 
   // ── confirmRide ───────────────────────────────────────────────────────────
+  // SECURITY: confirm_pickup usa auth.uid() internamente
   const confirmRide = useCallback(async (rideId: string) => {
-    if (!dbUser?.id) return;
     setLoading(true);
     try {
-      const { data, error: e } = await rideService.driverConfirmRide(rideId, dbUser.id);
+      const { data, error: e } = await rideService.driverConfirmRide(rideId);
       if (e || !data) {
         showToast(e?.message ?? 'Erro ao confirmar.', 'error');
         return;
@@ -427,13 +428,13 @@ export function useRide(): UseRideReturn {
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, showToast]);
+  }, [showToast]);
 
   // ── declineRide ───────────────────────────────────────────────────────────
+  // SECURITY: decline_ride_atomic usa auth.uid() internamente — sem p_driver_id
   const declineRide = useCallback(async (rideId: string) => {
-    if (!dbUser?.id) return;
     try {
-      const err = await rideService.driverDeclineRide(rideId, dbUser.id);
+      const err = await rideService.driverDeclineRide(rideId);
       if (err) { showToast(err.message, 'error'); return; }
       driverLocUnsub.current?.(); driverLocUnsub.current = null;
       unsubRef.current?.(); unsubRef.current = null;
@@ -443,14 +444,15 @@ export function useRide(): UseRideReturn {
       console.warn('[useRide] operação:', err);
       showToast('Erro ao recusar corrida.', 'error');
     }
-  }, [dbUser?.id, resetRide, showToast, clearRideDetails]);
+  }, [resetRide, showToast, clearRideDetails]);
 
   // ── advanceStatus ─────────────────────────────────────────────────────────
+  // SECURITY: usa RPCs (confirm_pickup/start_ride/complete_ride) com auth.uid()
   const advanceStatus = useCallback(async (status: RideStatus) => {
-    if (!dbUser?.id || !ride.rideId) return;
+    if (!ride.rideId) return;
     setLoading(true);
     try {
-      const { data, error: e } = await rideService.updateRideStatus(ride.rideId, status, dbUser.id);
+      const { data, error: e } = await rideService.updateRideStatus(ride.rideId, status);
       if (e || !data) {
         showToast(e?.message ?? 'Erro ao avançar estado.', 'error');
         return;
@@ -459,7 +461,7 @@ export function useRide(): UseRideReturn {
     } finally {
       setLoading(false);
     }
-  }, [dbUser?.id, showToast, ride.rideId]);
+  }, [showToast, ride.rideId]);
 
   // ── submitReview ──────────────────────────────────────────────────────────
   const submitReview = useCallback(async (score: number, comment?: string) => {

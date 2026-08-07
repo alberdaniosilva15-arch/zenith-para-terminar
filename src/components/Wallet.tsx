@@ -11,6 +11,9 @@ import { useAuth } from '../contexts/AuthContext';
 import type { DbWallet, DbTransaction } from '../types';
 import { UserRole } from '../types';
 import ZenithPayPartners from './MotoGoPayPartners';
+import DriverRecharge from './driver/DriverRecharge';
+
+const ZENITHPAY_ENABLED = false;
 import { useAppStore } from '../store/useAppStore';
 
 interface WalletProps { userId: string; }
@@ -49,6 +52,14 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
 
   // Toast System
   const showToast = useAppStore(s => s.showToast);
+
+  // Crédito operacional do motorista
+  const [driverWallet, setDriverWallet] = useState<{
+    cash_balance: number;
+    operational_credit: number;
+    status: string;
+  } | null>(null);
+  const [showRecharge, setShowRecharge] = useState(false);
 
   // v3.0: tabs da carteira
   const [walletTab, setWalletTab] = useState<'transactions' | 'partners' | 'advance'>('transactions');
@@ -138,12 +149,28 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
         setTransactions(prev => pageNum === 0 ? txRes.data as DbTransaction[] : [...prev, ...txRes.data as DbTransaction[]]);
         setHasMore(txRes.data.length === PAGE_SIZE);
       }
+
+      // Carregar crédito operacional do motorista
+      if (isDriver && pageNum === 0) {
+        try {
+          const { data: dwData } = await supabase.rpc('get_driver_wallet_status');
+          if (dwData?.has_wallet) {
+            setDriverWallet({
+              cash_balance: dwData.cash_balance ?? 0,
+              operational_credit: dwData.operational_credit ?? 0,
+              status: dwData.status ?? 'active',
+            });
+          }
+        } catch (e) {
+          console.warn('[Wallet] driver wallet load:', e);
+        }
+      }
     } catch (err) {
       console.error('[Wallet.loadData] Erro ao carregar dados:', err);
     } finally {
       if (pageNum === 0) setLoading(false); else setLoadingMore(false);
     }
-  }, [userId]);
+  }, [userId, isDriver]);
 
   useEffect(() => { loadData(0); }, [loadData]);
   useEffect(() => {
@@ -246,12 +273,71 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
       </header>
 
       <div style={{ padding: '14px' }}>
+        {/* Card de Crédito Operacional (apenas motoristas) */}
+        {isDriver && (
+          <section className="zr-card" style={{
+            marginBottom: '16px',
+            border: (driverWallet?.operational_credit ?? 0) <= 0 ? '1px solid var(--danger)' : '1px solid var(--primary)',
+            position: 'relative',
+            overflow: 'hidden',
+          }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: '8px' }}>
+              <p className="zr-kicker" style={{ color: (driverWallet?.operational_credit ?? 0) <= 0 ? 'var(--danger-soft)' : 'var(--gold-soft)' }}>
+                Crédito Operacional
+              </p>
+              {driverWallet?.status === 'blocked' && (
+                <span className="text-red-400 text-xs font-bold uppercase">Bloqueado</span>
+              )}
+            </div>
+            <h2 className="zr-balance" style={{ marginBottom: '8px', color: (driverWallet?.operational_credit ?? 0) <= 0 ? 'var(--danger)' : undefined }}>
+              {(driverWallet?.operational_credit ?? 0).toLocaleString('pt-AO', { minimumFractionDigits: 0 })}
+              <span style={{ fontSize: '16px', opacity: 0.4 }}> Kz</span>
+            </h2>
+            <p className="zr-meta" style={{ marginBottom: '16px' }}>
+              Limite de faturação restante
+            </p>
+
+            {/* Barra de progresso */}
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ height: '6px', background: 'var(--surface-3)', borderRadius: '3px', overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%',
+                  width: `${Math.min(100, Math.max(0, ((driverWallet?.operational_credit ?? 0) / 45000) * 100))}%`,
+                  background: (driverWallet?.operational_credit ?? 0) <= 0 ? 'var(--danger)' : 'var(--primary)',
+                  transition: 'width 0.3s ease',
+                }} />
+              </div>
+              <div className="flex justify-between" style={{ marginTop: '4px' }}>
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>0 Kz</span>
+                <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>45.000 Kz</span>
+              </div>
+            </div>
+
+            {driverWallet?.operational_credit !== undefined && driverWallet.operational_credit <= 0 && (
+              <div className="zr-alert-box zr-alert-box--danger" style={{ marginBottom: '16px' }}>
+                <div className="zr-alert-content">
+                  <p style={{ fontSize: '12px' }}>O teu crédito operacional terminou. Recarrega para continuar a receber corridas.</p>
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={() => setShowRecharge(true)}
+              className="zr-button"
+              style={{ width: '100%' }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '16px', marginRight: '4px' }}>add_card</span>
+              RECARREGAR CRÉDITO
+            </button>
+          </section>
+        )}
+
         {/* Card de saldo */}
         <section className={`zr-card ${isDriver ? 'zr-card--danger' : 'zr-card--hero'}`} style={{ marginBottom: '24px', position: 'relative', overflow: 'hidden' }}>
           <p className="zr-kicker" style={{ color: isDriver ? 'var(--danger-soft)' : 'var(--gold-soft)' }}>
             {isDriver ? 'Lucro Líquido' : 'Saldo Zenith'}
           </p>
-          <h2 className="zr-balance" style={{ fontSize: '48px', marginBottom: '8px' }}>
+          <h2 className="zr-balance" style={{ marginBottom: '8px' }}>
             {balance.toLocaleString('pt-AO', { minimumFractionDigits: 2 })}
             <span style={{ fontSize: '16px', opacity: 0.4 }}> Kz</span>
           </h2>
@@ -374,7 +460,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
         )}
 
         {/* Modal ZenithPay NFC/QR */}
-        {showZenithPay && (
+        {ZENITHPAY_ENABLED && showZenithPay && (
           <div className="zr-modal is-open">
             <div className="zr-modal-card animate-in fade-in zoom-in-95" style={{ animationDuration: '200ms' }}>
               <div className="zr-modal-head">
@@ -494,6 +580,17 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
           </div>
         )}
       </div>
+
+      {/* Modal de Recarga do Motorista */}
+      {showRecharge && (
+        <DriverRecharge
+          onClose={() => setShowRecharge(false)}
+          onSuccess={() => {
+            setShowRecharge(false);
+            loadData(0);
+          }}
+        />
+      )}
 
     </div>
   );

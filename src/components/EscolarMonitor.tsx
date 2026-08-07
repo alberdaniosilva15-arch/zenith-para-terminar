@@ -150,7 +150,7 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
   const shareWhatsApp = () => {
     if (!trackingUrl) return;
     const msg = encodeURIComponent(
-      `🚗 Podes acompanhar a corrida escolar de "${contractTitle}" em tempo real:\n${trackingUrl}\n\nLink válido por 12 horas. — Zenith Ride`
+      `Podes acompanhar a corrida escolar de "${contractTitle}" em tempo real:\n${trackingUrl}\n\nLink válido por 12 horas. — Zenith Ride`
     );
     window.open(`https://wa.me/?text=${msg}`, '_blank');
   };
@@ -163,7 +163,7 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
           <button onClick={() => setShowForm(true)} className="zr-card" style={{ width: '100%', textAlign: 'left', padding: '16px' }}>
             <div className="zr-inline" style={{ gap: '16px' }}>
               <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: 'var(--surface-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '24px' }}>
-                🛡️
+                <span className="material-symbols-outlined">shield</span>
               </div>
               <div>
                 <strong style={{ display: 'block' }}>Partilhar com pais</strong>
@@ -223,9 +223,9 @@ const EscolarMonitor: React.FC<EscolarMonitorProps> = ({
         <div className="zr-alert-box zr-alert-box--info" style={{ marginBottom: '16px' }}>
           <div className="zr-inline" style={{ gap: '8px' }}>
             <span style={{ fontSize: '16px' }}>
-              {activeRide.status === RideStatus.IN_PROGRESS ? '🚗' :
-               activeRide.status === RideStatus.PICKING_UP ? '📍' :
-               activeRide.status === RideStatus.COMPLETED ? '✅' : '⏳'}
+              {activeRide.status === RideStatus.IN_PROGRESS ? <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>directions_car</span> :
+               activeRide.status === RideStatus.PICKING_UP ? <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> :
+               activeRide.status === RideStatus.COMPLETED ? <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>check_circle</span> : <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>hourglass_empty</span>}
             </span>
             <p style={{ fontSize: '12px', fontWeight: 'bold' }}>
               {activeRide.status === RideStatus.PICKING_UP  ? 'Motorista a caminho da escola' :

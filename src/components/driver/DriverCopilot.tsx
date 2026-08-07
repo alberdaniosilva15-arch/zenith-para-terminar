@@ -108,7 +108,7 @@ const DriverCopilot: React.FC<DriverCopilotProps> = ({
         <div>
           <p className="text-[9px] uppercase tracking-[0.22em] text-primary/80 font-black">Driver Copilot</p>
           <p className="text-sm font-black mt-2">
-            📍 Vai {suggestion.distanceKm.toFixed(1)} km para {zoneLabel} {'->'} +{suggestion.chanceLift}% chance de corrida
+            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> Vai {suggestion.distanceKm.toFixed(1)} km para {zoneLabel} {'->'} +{suggestion.chanceLift}% chance de corrida
           </p>
           <p className="text-[11px] text-white/65 mt-2">
             Procura acima da oferta agora. Excelente momento para reposicionamento inteligente.
@@ -118,12 +118,12 @@ const DriverCopilot: React.FC<DriverCopilotProps> = ({
           </p>
         </div>
 
-        <div className="w-20 h-20 rounded-full border border-white/15 bg-black/20 flex items-center justify-center shrink-0">
+        <div className="w-20 h-20 rounded-full border border-white/15 bg-surface-2 flex items-center justify-center shrink-0">
           <div
             className="text-3xl transition-transform duration-300"
             style={{ transform: `rotate(${suggestion.angle}deg)` }}
           >
-            ➜
+            <span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>arrow_forward</span>
           </div>
         </div>
       </div>

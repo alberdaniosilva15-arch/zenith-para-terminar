@@ -300,7 +300,7 @@ export const LiveMapTab: React.FC = () => {
         </div>
       )}
 
-      <div className="absolute top-6 right-6 w-64 bg-[#050505]/90 backdrop-blur-md border border-primary/15 rounded-lg shadow-[0_20px_40px_rgba(0,0,0,0.8)] p-lg z-10">
+      <div className="absolute top-6 right-6 w-64 bg-[#050505]/90 border border-primary/15 rounded-lg shadow-[0_20px_40px_rgba(0,0,0,0.8)] p-lg z-10">
         <div className="font-headline-lg text-on-surface mb-md">Camadas do Mapa</div>
         <div className="flex flex-col gap-sm">
           {[
@@ -325,11 +325,11 @@ export const LiveMapTab: React.FC = () => {
       </div>
 
       <div className="absolute bottom-6 left-6 right-6 flex justify-between items-end z-10 pointer-events-none">
-        <div className="bg-[#050505]/90 backdrop-blur-md border border-primary/15 px-6 py-3 rounded pointer-events-auto">
+        <div className="bg-[#050505]/90 border border-primary/15 px-6 py-3 rounded pointer-events-auto">
           <div className="font-label-sm text-on-surface-variant uppercase mb-1">Sector Actual</div>
           <div className="font-headline-xl text-primary tracking-tight font-bold">LUANDA \ GLOBAL</div>
         </div>
-        <div className="bg-[#050505]/90 backdrop-blur-md border border-primary/15 px-6 py-3 rounded pointer-events-auto flex items-center gap-4">
+        <div className="bg-[#050505]/90 border border-primary/15 px-6 py-3 rounded pointer-events-auto flex items-center gap-4">
           <div>
             <div className="font-label-sm text-on-surface-variant uppercase mb-1">Estado da Frota</div>
             <div className="font-body-sm text-on-surface">{driverCount} motoristas online</div>

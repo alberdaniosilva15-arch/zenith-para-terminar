@@ -35,10 +35,10 @@ const SCORE_COLORS: Record<ScoreLabel, { bar: string; badgeBg: string; text: str
 };
 
 const BANK_PARTNERS = [
-  { name: 'BCA', logo: '🏦', benefit: 'Microcrédito até 2.000.000 Kz' },
-  { name: 'BFA', logo: '🏦', benefit: 'Crédito automóvel preferencial' },
-  { name: 'BAI', logo: '🏦', benefit: 'Conta poupança sem comissões' },
-  { name: 'ENSA', logo: '🛡️', benefit: 'Seguro com prémio reduzido 20%' },
+  { name: 'BCA', logo: 'account_balance', benefit: 'Microcrédito até 2.000.000 Kz' },
+  { name: 'BFA', logo: 'account_balance', benefit: 'Crédito automóvel preferencial' },
+  { name: 'BAI', logo: 'account_balance', benefit: 'Conta poupança sem comissões' },
+  { name: 'ENSA', logo: 'shield', benefit: 'Seguro com prémio reduzido 20%' },
 ];
 
 const ZenithScore: React.FC<ZenithScoreProps> = ({ driverId }) => {
@@ -157,7 +157,7 @@ const ZenithScore: React.FC<ZenithScoreProps> = ({ driverId }) => {
           <div className="zr-bank-head zr-inline zr-inline--between" style={{ alignItems: 'flex-start' }}>
             <div>
               <p className="zr-kicker">Zenith Score</p>
-              <h2 className="zr-balance" style={{ fontSize: '48px', margin: '4px 0' }}>{scoreData.score}</h2>
+              <h2 className="zr-balance" style={{ margin: '4px 0' }}>{scoreData.score}</h2>
               <p className="zr-meta" style={{ opacity: 0.6 }}>de 1000 pontos</p>
             </div>
             <div style={{ padding: '6px 12px', borderRadius: '16px', background: colors.badgeBg, color: colors.text, fontSize: '10px', fontWeight: 'bold', textTransform: 'uppercase' }}>
@@ -204,7 +204,7 @@ const ZenithScore: React.FC<ZenithScoreProps> = ({ driverId }) => {
                 <div key={partner.name} className="zr-list-item" style={{ opacity: isLocked ? 0.4 : 1, filter: isLocked ? 'grayscale(1)' : 'none' }}>
                   <div className="zr-inline" style={{ gap: '12px' }}>
                     <div style={{ width: '40px', height: '40px', background: 'var(--surface-3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
-                      {partner.logo}
+                      <span className="material-symbols-outlined" style={{fontSize:'inherit'}}>{partner.logo}</span>
                     </div>
                     <div>
                       <strong style={{ display: 'block' }}>{partner.name}</strong>

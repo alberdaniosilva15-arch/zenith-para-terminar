@@ -71,7 +71,7 @@ const AuctionScreen: React.FC<AuctionScreenProps> = ({
               <div style={{ width: '34px' }}></div>
               <div style={{ flex: 1 }}>
                 <span className="zr-chip zr-chip--muted">
-                  {routeInfo.isReal ? '🛣️' : '📏'} {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
+                  {routeInfo.isReal ? <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>route</span> : <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>straighten</span>} {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
                 </span>
               </div>
             </div>

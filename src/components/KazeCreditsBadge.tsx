@@ -95,7 +95,7 @@ export default function KazeCreditsBadge({ userId, rideId, className = '' }: Kaz
         className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-black uppercase tracking-wider ${palette} ${className}`.trim()}
         style={visualRemaining <= 2 ? { animation: 'zenith-kaze-shake 0.45s linear infinite' } : undefined}
       >
-        <span>🤖</span>
+        <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>smart_toy</span>
         <span>{visualRemaining}/{MAX_CHAT_MESSAGES} msgs</span>
       </div>
     </>

@@ -77,7 +77,7 @@ const FleetUpgradeModal: React.FC<FleetUpgradeModalProps> = ({ fleetId, onClose,
             <p className="text-[9px] uppercase tracking-[0.22em] text-primary/70 font-black">Zenith Fleet</p>
             <h3 className="text-lg font-black mt-1">Upgrade do plano</h3>
           </div>
-          <button onClick={onClose} className="w-9 h-9 rounded-full bg-white/5 text-white/60">×</button>
+          <button onClick={onClose} className="w-9 h-9 rounded-full bg-surface-container text-white/60">×</button>
         </div>
 
         <div className="grid gap-3">
@@ -86,7 +86,7 @@ const FleetUpgradeModal: React.FC<FleetUpgradeModalProps> = ({ fleetId, onClose,
               key={key}
               onClick={() => setPlan(key)}
               className={`rounded-[1.5rem] border p-4 text-left ${
-                plan === key ? 'border-primary bg-primary/10' : 'border-white/10 bg-white/5'
+                plan === key ? 'border-primary bg-primary/10' : 'border-white/10 bg-surface-container'
               }`}
             >
               <div className="flex items-center justify-between gap-3">
@@ -113,7 +113,7 @@ const FleetUpgradeModal: React.FC<FleetUpgradeModalProps> = ({ fleetId, onClose,
           </button>
           <button
             onClick={onClose}
-            className="flex-1 py-3 rounded-2xl bg-white/5 border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest"
+            className="flex-1 py-3 rounded-2xl bg-surface-container border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest"
           >
             Fechar
           </button>

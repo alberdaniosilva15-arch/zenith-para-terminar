@@ -90,7 +90,7 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
       <section className="zr-card zr-card--success zr-pulse">
         <div className="zr-inline zr-inline--between">
           <div>
-            <p className="zr-kicker" style={{color: 'white'}}>🎉 Parabéns!</p>
+            <p className="zr-kicker" style={{color: 'white'}}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>celebration</span> Parabéns!</p>
             <h2 className="zr-section-title" style={{color: 'white'}}>5 km GRÁTIS!</h2>
             <p className="zr-copy" style={{color: 'white'}}>Chegaste aos {Math.round(perk.km_total ?? 0)} km. A viagem fica por nossa conta!</p>
           </div>

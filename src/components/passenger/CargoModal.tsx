@@ -98,7 +98,7 @@ export default function CargoModal({
               Visual premium, arranque controlado. Capturamos a procura antes da operação entrar em tempo real.
             </p>
           </div>
-          <button onClick={onClose} className="h-10 w-10 rounded-full bg-white/5 text-white/55">
+          <button onClick={onClose} className="h-10 w-10 rounded-full bg-surface-container text-white/55">
             x
           </button>
         </div>
@@ -112,7 +112,7 @@ export default function CargoModal({
 
           <section className="space-y-3">
             <SectionTitle title="1. Tipo de carga" />
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {[
                 { id: 'light', label: 'Leve <50kg' },
                 { id: 'medium', label: 'Media 50-200kg' },
@@ -131,7 +131,7 @@ export default function CargoModal({
 
           <section className="space-y-3">
             <SectionTitle title="2. Ajudantes" />
-            <label className="flex items-center justify-between rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4">
+            <label className="flex items-center justify-between rounded-[1.5rem] border border-white/10 bg-surface-container px-4 py-4">
               <div>
                 <p className="text-sm font-black text-white">Precisa de ajudantes?</p>
                 <p className="text-[10px] font-bold text-white/50">Cada ajudante acrescenta custo operacional fixo</p>
@@ -139,7 +139,7 @@ export default function CargoModal({
               <button
                 type="button"
                 onClick={() => setNeedsHelpers((value) => !value)}
-                className={`h-8 w-14 rounded-full transition-all ${needsHelpers ? 'bg-[#E6C364]' : 'bg-white/10'}`}
+                className={`h-8 w-14 rounded-full transition-all ${needsHelpers ? 'bg-[#E6C364]' : 'bg-surface-2'}`}
               >
                 <span
                   className={`block h-6 w-6 rounded-full bg-white transition-all ${needsHelpers ? 'translate-x-7' : 'translate-x-1'}`}
@@ -147,7 +147,7 @@ export default function CargoModal({
               </button>
             </label>
             {needsHelpers && (
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                 {[1, 2, 3].map((count) => (
                   <OptionCard key={count} active={helperCount === count} onClick={() => setHelperCount(count)}>
                     {count} ajudante{count === 1 ? '' : 's'}
@@ -163,13 +163,13 @@ export default function CargoModal({
               value={pickupAddress}
               onChange={(event) => setPickupAddress(event.target.value)}
               placeholder="Local de recolha"
-              className="w-full rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+              className="w-full rounded-[1.5rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
             />
             <input
               value={destAddress}
               onChange={(event) => setDestAddress(event.target.value)}
               placeholder="Destino"
-              className="w-full rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+              className="w-full rounded-[1.5rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
             />
           </section>
 
@@ -183,7 +183,7 @@ export default function CargoModal({
                 Express +30%
               </OptionCard>
             </div>
-            <div className="rounded-[1.75rem] border border-white/10 bg-white/5 px-4 py-4">
+            <div className="rounded-[1.75rem] border border-white/10 bg-surface-container px-4 py-4">
               <div className="flex items-center justify-between">
                 <p className="text-sm font-black text-white">Peso estimado</p>
                 <p className="text-sm font-black text-[#E6C364]">{weightKg} kg</p>
@@ -227,7 +227,7 @@ export default function CargoModal({
             value={instructions}
             onChange={(event) => setInstructions(event.target.value)}
             placeholder="Instruções especiais, acesso ao edifício, fragilidade, contacto na entrega..."
-            className="min-h-[110px] w-full rounded-[1.75rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+            className="min-h-[110px] w-full rounded-[1.75rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
           />
         </div>
 
@@ -267,7 +267,7 @@ function OptionCard({
     <button
       onClick={onClick}
       className={`rounded-[1.5rem] border px-4 py-4 text-left text-sm font-black transition-all ${
-        active ? 'border-[#E6C364]/35 bg-[#E6C364]/10 text-[#E6C364]' : 'border-white/10 bg-white/5 text-white'
+        active ? 'border-[#E6C364]/35 bg-[#E6C364]/10 text-[#E6C364]' : 'border-white/10 bg-surface-container text-white'
       }`}
     >
       {children}

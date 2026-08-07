@@ -36,9 +36,9 @@ const CAT_LABELS: Record<Category, string> = {
 };
 
 const TYPE_ICONS: Record<string, string> = {
-  status: '💬',
-  alert:  '🚨',
-  event:  '📍',
+  status: 'chat',
+  alert:  'warning',
+  event:  'location_on',
 };
 
 const TYPE_COLORS: Record<string, string> = {
@@ -201,7 +201,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
 
     if (error) {
       console.error('[RideTalk] Erro ao enviar:', error.message);
-      showToast('❌ Não foi possível enviar a mensagem. Verifica a tua ligação e tenta de novo.', 'error');
+      showToast('Não foi possível enviar a mensagem. Verifica a tua ligação e tenta de novo.', 'error');
     } else {
       setNewMessage('');
     }
@@ -281,7 +281,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
         const msg = name === 'NotAllowedError'
           ? 'Permissão de microfone negada. Vai às definições do browser e permite o microfone.'
           : 'Microfone não disponível. Verifica se está ligado.';
-        showToast(`🎙️ ${msg}`, 'error');
+        showToast(`${msg}`, 'error');
       }
     } else {
       mediaRecorderRef.current?.stop();
@@ -307,7 +307,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
       <div className="zr-header" style={{ padding: '16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, var(--surface-2), transparent)' }}>
         <div className="zr-inline zr-inline--between">
           <div className="zr-inline" style={{ gap: '12px' }}>
-            <span style={{ fontSize: '24px' }}>📻</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '24px', verticalAlign: 'middle' }}>radio</span>
             <h3 className="zr-section-title" style={{ fontSize: '14px', margin: 0 }}>RideTalk · {zone}</h3>
           </div>
           <div className="zr-inline" style={{ gap: '4px' }}>
@@ -329,7 +329,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
                 className={`zr-tab ${activeCat === cat ? 'is-active' : ''}`}
                 style={{ fontSize: '10px', padding: '6px 12px' }}
               >
-                {cat === 'alert' ? '🚨 ' : cat === 'event' ? '📍 ' : cat === 'status' ? '💬 ' : '📻 '}
+                {cat === 'alert' ? <span className="material-symbols-outlined" style={{fontSize:'12px',verticalAlign:'middle'}}>warning</span> : cat === 'event' ? <span className="material-symbols-outlined" style={{fontSize:'12px',verticalAlign:'middle'}}>location_on</span> : cat === 'status' ? <span className="material-symbols-outlined" style={{fontSize:'12px',verticalAlign:'middle'}}>chat</span> : <span className="material-symbols-outlined" style={{fontSize:'12px',verticalAlign:'middle'}}>radio</span>}
                 {CAT_LABELS[cat]}
                 {counts > 0 && <span style={{ marginLeft: '4px', opacity: 0.7 }}>({counts})</span>}
               </button>
@@ -344,7 +344,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
           <div className="zr-loading-dots" style={{ alignSelf: 'center', margin: '32px 0' }}><span></span><span></span><span></span></div>
         ) : filtered.length === 0 ? (
           <div className="zr-empty" style={{ margin: '32px 0' }}>
-            <span style={{ fontSize: '32px', marginBottom: '8px' }}>{activeCat === 'alert' ? '🚨' : activeCat === 'event' ? '📍' : '📻'}</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '32px', marginBottom: '8px' }}>{activeCat === 'alert' ? 'warning' : activeCat === 'event' ? 'location_on' : 'radio'}</span>
             <p className="zr-copy">{activeCat === 'all' ? 'Nenhuma publicação ainda' : `Sem ${CAT_LABELS[activeCat].toLowerCase()}s na zona ${zone}`}</p>
           </div>
         ) : (
@@ -357,10 +357,10 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
                   </div>
                   <strong style={{ fontSize: '12px' }}>{msg.senderName}</strong>
                   <span className={`zr-chip ${TYPE_COLORS[msg.type] ?? 'zr-chip--info'}`} style={{ fontSize: '8px', padding: '2px 6px' }}>
-                    {TYPE_ICONS[msg.type]} {msg.type === 'alert' ? 'Alerta' : msg.type === 'event' ? 'Evento' : 'Status'}
+                    <span className="material-symbols-outlined" style={{fontSize:'10px',verticalAlign:'middle'}}>{TYPE_ICONS[msg.type]}</span> {msg.type === 'alert' ? 'Alerta' : msg.type === 'event' ? 'Evento' : 'Status'}
                   </span>
                   {msg.zone && msg.zone !== 'Geral' && (
-                    <span className="zr-meta" style={{ fontSize: '10px' }}>📍 {msg.zone}</span>
+                    <span className="zr-meta" style={{ fontSize: '10px' }}><span className="material-symbols-outlined" style={{fontSize:'10px',verticalAlign:'middle'}}>location_on</span> {msg.zone}</span>
                   )}
                 </div>
                 <span className="zr-meta" style={{ fontSize: '10px' }}>{timeAgo(msg.timestamp)}</span>
@@ -369,7 +369,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
               <p className="zr-copy" style={{ fontSize: '12px', marginBottom: '12px' }}>{msg.text}</p>
 
               <button onClick={() => handleConfirm(msg)} className="zr-icon-button" style={{ fontSize: '12px', color: 'var(--gold-soft)', display: 'inline-flex', gap: '4px', width: 'auto', padding: '4px 8px', height: 'auto', borderRadius: '16px' }}>
-                👍 Confirmar · {msg.confirmations}
+                <span className="material-symbols-outlined" style={{fontSize:'12px',verticalAlign:'middle'}}>thumb_up</span> Confirmar · {msg.confirmations}
               </button>
             </div>
           ))
@@ -386,14 +386,14 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
               className={`zr-chip ${activeCat === t ? (t === 'alert' ? 'zr-chip--danger' : t === 'event' ? 'zr-chip--gold' : 'zr-chip--info') : ''}`}
               style={{ fontSize: '10px', padding: '4px 12px', border: activeCat !== t ? '1px solid var(--surface-3)' : 'none' }}
             >
-              {TYPE_ICONS[t]} {CAT_LABELS[t]}
+              <span className="material-symbols-outlined" style={{fontSize:'10px',verticalAlign:'middle'}}>{TYPE_ICONS[t]}</span> {CAT_LABELS[t]}
             </button>
           ))}
         </div>
 
         <div className="zr-inline" style={{ gap: '12px' }}>
           <button onClick={handleVoiceRecord} className={`zr-icon-button ${isRecording ? 'animate-pulse' : ''}`} style={{ backgroundColor: isRecording ? 'var(--danger)' : 'var(--surface-3)', color: isRecording ? '#fff' : 'inherit' }}>
-            {isRecording ? '⏹️' : '🎙️'}
+            {isRecording ? <span className="material-symbols-outlined">stop</span> : <span className="material-symbols-outlined">mic</span>}
           </button>
 
           <input
@@ -401,7 +401,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
             value={newMessage}
             onChange={e => setNewMessage(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={activeCat === 'alert' ? '🚨 Reportar alerta de trânsito...' : activeCat === 'event' ? '📍 Partilhar evento...' : '💬 Partilhar status...'}
+            placeholder={activeCat === 'alert' ? 'Reportar alerta de trânsito...' : activeCat === 'event' ? 'Partilhar evento...' : 'Partilhar status...'}
             className="zr-input"
             style={{ flex: 1 }}
           />

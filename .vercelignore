@@ -1,0 +1,9 @@
+# Ficheiros de segredos — NUNCA enviar para a Vercel
+.env
+.env.*
+.env.local
+.env.example
+minhas-chaves-secretas/
+*.pem
+*.key
+*.p12

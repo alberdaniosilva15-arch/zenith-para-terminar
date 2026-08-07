@@ -115,7 +115,7 @@ export function DriverDocumentsForm({ driverId, onClose, onSuccess }: Props) {
 
           {aiFeedback && (
             <div className="mb-4 bg-red-500/10 border border-red-500/30 rounded-xl p-3">
-              <p className="text-[10px] font-black text-red-400 uppercase tracking-widest mb-1">❌ Inscrição Recusada (IA)</p>
+              <p className="text-[10px] font-black text-red-400 uppercase tracking-widest mb-1"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>cancel</span> Inscrição Recusada (IA)</p>
               <p className="text-xs text-red-200">{aiFeedback}</p>
             </div>
           )}

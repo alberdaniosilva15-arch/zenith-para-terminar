@@ -200,7 +200,7 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         className="flex items-center gap-3 golden-gradient px-6 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-glow gold-box-glow active:scale-95 luxury-transition w-full justify-center"
       >
         <span className="material-symbols-outlined" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1" }}>call</span>
-        📞 Ligar para {peerName ?? 'o utilizador'}
+        Ligar para {peerName ?? 'o utilizador'}
       </button>
     );
   }

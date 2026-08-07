@@ -145,7 +145,7 @@ const Contract: React.FC = () => {
       setSuccessId(contract.id);
       setTimeout(() => setSuccessId(null), 4000);
     } catch (err: any) {
-      showToast(`❌ ${err?.message ?? 'Erro ao agendar corrida. Tenta de novo.'}`, 'error');
+      showToast(`${err?.message ?? 'Erro ao agendar corrida. Tenta de novo.'}`, 'error');
     } finally {
       setScheduling(null);
     }
@@ -252,14 +252,14 @@ const Contract: React.FC = () => {
             className={`zr-chip ${activeTab === 'contracts' ? 'zr-chip--gold' : ''}`}
             style={{ flex: 1, justifyContent: 'center' }}
           >
-            📋 Contratos
+            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>description</span> Contratos
           </button>
           <button
             onClick={() => setActiveTab('pass')}
             className={`zr-chip ${activeTab === 'pass' ? 'zr-chip--gold' : ''}`}
             style={{ flex: 1, justifyContent: 'center' }}
           >
-            🎫 Zenith Pass
+            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>confirmation_number</span> Zenith Pass
           </button>
         </div>
       </header>
@@ -278,10 +278,10 @@ const Contract: React.FC = () => {
                 <div className="zr-inline zr-inline--between" style={{ marginBottom: '8px' }}>
                   <div className="zr-inline" style={{ gap: '8px' }}>
                     <span className="material-symbols-outlined" style={{ color: 'var(--gold)' }}>emoji_events</span>
-                    <strong style={{ color: 'var(--gold)' }}>Bónus Fidelidade — 70 km</strong>
+                    <strong style={{ color: 'var(--gold)' }}>Bónus Fidelidade: 70 km</strong>
                   </div>
                   {kmBonus.free_km_available > 0 && (
-                    <span className="zr-chip zr-chip--gold">🎁 {kmBonus.free_km_available.toFixed(0)} km GRÁTIS</span>
+                    <span className="zr-chip zr-chip--gold"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>redeem</span> {kmBonus.free_km_available.toFixed(0)} km GRÁTIS</span>
                   )}
                 </div>
                 <div className="zr-progress" style={{ margin: '12px 0' }}>
@@ -457,7 +457,7 @@ const ContractCard: React.FC<{
       setTrackingToken(data.public_token);
 
       const msg = encodeURIComponent(
-        `🚗 *Zenith Ride — Rastreio em tempo real*\n\nPodes acompanhar a localização em tempo real aqui:\n${link}\n\n_O link expira em 8 horas._`
+        `*Zenith Ride, rastreio em tempo real*\n\nPodes acompanhar a localização em tempo real aqui:\n${link}\n\n_O link expira em 8 horas._`
       );
       window.open(`https://wa.me/?text=${msg}`, '_blank');
     } finally {
@@ -508,7 +508,7 @@ const ContractCard: React.FC<{
           <div>
             <p className="zr-kicker" style={{ margin: 0 }}>{CONTRACT_LABELS[c.contract_type]}</p>
             <h3 className="zr-section-title" style={{ fontSize: '18px', margin: 0 }}>{c.title}</h3>
-            <p className="zr-meta" style={{ color: 'var(--gold)', marginTop: '4px' }}>📍 {c.address}</p>
+            <p className="zr-meta" style={{ color: 'var(--gold)', marginTop: '4px' }}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> {c.address}</p>
           </div>
         </div>
         <button onClick={onDeactivate} className="zr-icon-button" style={{ color: 'var(--danger-soft)' }}>
@@ -536,7 +536,7 @@ const ContractCard: React.FC<{
           </div>
           <div style={{ textAlign: 'right' }}>
             <span className={`zr-chip ${c.payment_status === 'active' ? 'zr-chip--gold' : c.payment_status === 'expired' ? 'zr-chip--danger' : 'zr-chip--muted'}`}>
-              {c.payment_status === 'active' ? '✅ Pago' : c.payment_status === 'expired' ? '❌ Expirado' : '⏳ Pendente'}
+              {c.payment_status === 'active' ? <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>check_circle</span> Pago</> : c.payment_status === 'expired' ? <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>cancel</span> Expirado</> : <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>hourglass_empty</span> Pendente</>}
             </span>
             <p style={{ margin: '4px 0 0', fontSize: 9, color: 'rgba(255,255,255,0.4)' }}>
               -{c.discount_pct ?? 25}% desconto
@@ -571,7 +571,7 @@ const ContractCard: React.FC<{
 
           <button onClick={generateTrackingLink} disabled={sharingLink} className="zr-button zr-button--block" style={{ backgroundColor: '#25D366', color: '#fff' }}>
             <span className="material-symbols-outlined" style={{ marginRight: '8px' }}>share</span>
-            {sharingLink ? 'A gerar...' : '📍 Partilhar Rastreio via WhatsApp'}
+            {sharingLink ? 'A gerar...' : <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> Partilhar Rastreio via WhatsApp</>}
           </button>
 
           {showMonitor && (
@@ -670,7 +670,7 @@ const ZenithPassSection: React.FC<{
         pass_expires_at: expiresAt.toISOString(),
       }).eq('user_id', userId);
 
-      showToast(`🎫 Zenith Pass activado! ${PASS_RIDES} corridas disponíveis.`, 'success');
+      showToast(`Zenith Pass activado! ${PASS_RIDES} corridas disponíveis.`, 'success');
       onRefresh();
     } catch {
       showToast('Erro ao comprar Pass. Tenta de novo.', 'error');
@@ -686,7 +686,7 @@ const ZenithPassSection: React.FC<{
         <div className="zr-alert-box zr-alert-box--success" style={{ marginBottom: 16 }}>
           <div className="zr-inline zr-inline--between">
             <div className="zr-inline" style={{ gap: 8 }}>
-              <span style={{ fontSize: 24 }}>🎫</span>
+              <span className="material-symbols-outlined" style={{ fontSize: 24 }}>confirmation_number</span>
               <div>
                 <strong style={{ color: 'var(--gold)' }}>Zenith Pass Activo</strong>
                 <p className="zr-meta" style={{ margin: 0 }}>
@@ -712,7 +712,7 @@ const ZenithPassSection: React.FC<{
       {/* Buy Card */}
       <div className="zr-card" style={{ background: 'linear-gradient(135deg, rgba(230,195,100,0.08), rgba(230,195,100,0.02))' }}>
         <div style={{ textAlign: 'center', marginBottom: 16 }}>
-          <span style={{ fontSize: 48 }}>🎫</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 48 }}>confirmation_number</span>
           <h3 className="zr-section-title" style={{ margin: '8px 0 4px' }}>Zenith Pass</h3>
           <p className="zr-meta">Pacote de {PASS_RIDES} corridas com desconto de 20%</p>
         </div>
@@ -736,7 +736,7 @@ const ZenithPassSection: React.FC<{
           className="zr-button zr-button--block"
           style={{ fontSize: 14 }}
         >
-          {buying ? 'A processar...' : passActive ? '✅ Pass Activo' : `Comprar Zenith Pass — ${passPrice.toLocaleString()} Kz`}
+          {buying ? 'A processar...' : passActive ? <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>check_circle</span> Pass Activo</> : `Comprar Zenith Pass: ${passPrice.toLocaleString()} Kz`}
         </button>
       </div>
     </div>

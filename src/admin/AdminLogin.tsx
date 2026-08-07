@@ -4,7 +4,7 @@ import { ShieldCheck, Sparkles } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
 
-const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_intent';
+const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_target';
 
 function sanitizeRedirectTarget(candidate: string | null | undefined): string | null {
   if (!candidate) return null;

@@ -28,7 +28,7 @@ const AuctionList: React.FC<AuctionListProps> = ({
   if (auction.error) {
     return (
       <div className="m-4 bg-primary/8 border border-primary/20 rounded-[2rem] p-6 text-center">
-        <p className="text-2xl mb-2">🔍</p>
+        <span className="material-symbols-outlined text-2xl mb-2">search</span>
         <p className="font-black text-on-surface text-sm">{auction.error}</p>
         <button onClick={onCancelAuction} className="mt-4 text-[10px] font-black text-primary/80 uppercase tracking-widest">
           Voltar
@@ -75,7 +75,7 @@ const DriverAuctionCard: React.FC<{
       </div>
       <div>
         <strong style={{ display: 'block' }}>
-          {driver.driver_name} {driver.is_elite && '⚡'}
+          {driver.driver_name} {driver.is_elite && <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>bolt</span>}
         </strong>
         <span className="zr-copy">
           ⭐ {driver.rating.toFixed(1)} - {driver.total_rides} corridas - {driver.level}

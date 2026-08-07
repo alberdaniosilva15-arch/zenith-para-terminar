@@ -253,7 +253,7 @@ export default function AdminUsersPanel() {
             setPage(1);
             setRoleFilter(event.target.value as RoleFilter);
           }}
-          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
+          className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
         >
           <option value="all">Todos os roles</option>
           <option value="passenger">Passageiro</option>
@@ -268,7 +268,7 @@ export default function AdminUsersPanel() {
             setPage(1);
             setStatusFilter(event.target.value as StatusFilter);
           }}
-          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
+          className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
         >
           <option value="all">Todos os estados</option>
           <option value="active">Activos</option>
@@ -276,8 +276,8 @@ export default function AdminUsersPanel() {
         </select>
       </div>
 
-      <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-white/5">
-        <div className="grid grid-cols-[1.1fr_1.1fr_0.8fr_0.7fr_0.8fr_0.8fr_0.8fr_0.6fr] gap-3 border-b border-white/10 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white/45">
+      <div className="overflow-hidden rounded-[2rem] border border-white/10 bg-surface-container">
+        <div className="grid grid-cols-1 md:grid-cols-[1.1fr_1.1fr_0.8fr_0.7fr_0.8fr_0.8fr_0.8fr_0.6fr] gap-3 border-b border-white/10 px-4 py-3 text-[9px] font-black uppercase tracking-widest text-white/45">
           <span>Nome</span>
           <span>Email</span>
           <span>Role</span>
@@ -296,7 +296,7 @@ export default function AdminUsersPanel() {
             <p className="text-sm text-red-400 max-w-sm">{error}</p>
             <button
               onClick={loadUsers}
-              className="mt-2 px-5 py-2 text-sm rounded border border-white/20 text-white/70 hover:bg-white/10 transition-colors"
+              className="mt-2 px-5 py-2 text-sm rounded border border-white/20 text-white/70 hover:bg-surface-2 transition-colors"
             >
               Tentar Novamente
             </button>
@@ -309,7 +309,7 @@ export default function AdminUsersPanel() {
             return (
               <div
                 key={user.id}
-                className="grid grid-cols-[1.1fr_1.1fr_0.8fr_0.7fr_0.8fr_0.8fr_0.8fr_0.6fr] gap-3 border-b border-white/5 px-4 py-4 text-[11px] text-white last:border-0"
+                className="grid grid-cols-1 md:grid-cols-[1.1fr_1.1fr_0.8fr_0.7fr_0.8fr_0.8fr_0.8fr_0.6fr] gap-3 border-b border-white/5 px-4 py-4 text-[11px] text-white last:border-0"
               >
                 <div>
                   <p className="font-black">{user.name}</p>
@@ -343,14 +343,14 @@ export default function AdminUsersPanel() {
           <button
             onClick={() => setPage((value) => Math.max(1, value - 1))}
             disabled={page === 1}
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-35"
+            className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-35"
           >
             Anterior
           </button>
           <button
             onClick={() => setPage((value) => Math.min(totalPages, value + 1))}
             disabled={page >= totalPages}
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-35"
+            className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white disabled:opacity-35"
           >
             Seguinte
           </button>
@@ -367,18 +367,18 @@ export default function AdminUsersPanel() {
                 {selectedUser.email} · Wallet {Math.round(selectedUser.wallet_balance).toLocaleString('pt-AO')} Kz
               </p>
             </div>
-            <button onClick={() => setSelectedUser(null)} className="rounded-full bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white/70">
+            <button onClick={() => setSelectedUser(null)} className="rounded-full bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white/70">
               Fechar
             </button>
           </div>
 
           <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+            <div className="rounded-[1.5rem] border border-white/10 bg-surface-container p-4">
               <p className="text-[9px] font-black uppercase tracking-widest text-white/45">Role manual</p>
               <select
                 value={roleDraft}
                 onChange={(event) => setRoleDraft(event.target.value as UserRole)}
-                className="mt-3 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-bold text-white outline-none"
+                className="mt-3 w-full rounded-2xl border border-white/10 bg-surface-2 px-4 py-3 text-sm font-bold text-white outline-none"
               >
                 <option value="passenger">Passageiro</option>
                 <option value="driver">Motorista</option>
@@ -394,14 +394,14 @@ export default function AdminUsersPanel() {
               </button>
             </div>
 
-            <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+            <div className="rounded-[1.5rem] border border-white/10 bg-surface-container p-4">
               <p className="text-[9px] font-black uppercase tracking-widest text-white/45">Estado da conta</p>
               <p className="mt-3 text-sm font-black">{selectedStatus}</p>
               <input
                 type="date"
                 value={suspendUntilDraft}
                 onChange={(event) => setSuspendUntilDraft(event.target.value)}
-                className="mt-3 w-full rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-bold text-white outline-none"
+                className="mt-3 w-full rounded-2xl border border-white/10 bg-surface-2 px-4 py-3 text-sm font-bold text-white outline-none"
               />
               <div className="mt-3 flex gap-2">
                 <button
@@ -422,14 +422,14 @@ export default function AdminUsersPanel() {
             </div>
           </div>
 
-          <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-white/5 p-4">
+          <div className="mt-5 rounded-[1.5rem] border border-white/10 bg-surface-container p-4">
             <p className="text-[9px] font-black uppercase tracking-widest text-white/45">Histórico de corridas</p>
             <div className="mt-4 space-y-3">
               {recentRides.length === 0 ? (
                 <p className="text-sm font-bold text-white/45">Sem corridas recentes para este utilizador.</p>
               ) : (
                 recentRides.map((ride) => (
-                  <div key={ride.id} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+                  <div key={ride.id} className="rounded-2xl border border-white/10 bg-surface-2 px-4 py-3">
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-black text-white">{ride.origin_address} {'->'} {ride.dest_address}</p>
                       <p className="text-sm font-black text-primary">{Math.round(Number(ride.price_kz ?? 0)).toLocaleString('pt-AO')} Kz</p>
@@ -450,7 +450,7 @@ export default function AdminUsersPanel() {
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4 text-white">
+    <div className="rounded-[1.5rem] border border-white/10 bg-surface-container p-4 text-white">
       <p className="text-[9px] font-black uppercase tracking-widest text-white/45">{label}</p>
       <p className="mt-2 text-2xl font-black">{value}</p>
     </div>

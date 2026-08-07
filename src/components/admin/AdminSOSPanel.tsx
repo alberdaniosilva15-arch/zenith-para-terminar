@@ -150,11 +150,11 @@ export default function AdminSOSPanel({ onActiveCountChange }: AdminSOSPanelProp
       )}
 
       {loading ? (
-        <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 text-center text-sm font-bold text-white/60">
+        <div className="rounded-[2rem] border border-white/10 bg-surface-container p-8 text-center text-sm font-bold text-white/60">
           A carregar alertas SOS...
         </div>
       ) : alerts.length === 0 ? (
-        <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 text-center text-sm font-bold text-white/60">
+        <div className="rounded-[2rem] border border-white/10 bg-surface-container p-8 text-center text-sm font-bold text-white/60">
           Nenhum alerta de pânico registado.
         </div>
       ) : (
@@ -173,7 +173,7 @@ export default function AdminSOSPanel({ onActiveCountChange }: AdminSOSPanelProp
                 className={`rounded-[2rem] border p-5 ${
                   alert.status === 'active'
                     ? 'border-red-500/25 bg-[#140608]'
-                    : 'border-white/10 bg-white/5'
+                    : 'border-white/10 bg-surface-container'
                 }`}
               >
                 <div className="flex flex-wrap items-start justify-between gap-4">

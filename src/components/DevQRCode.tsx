@@ -69,9 +69,9 @@ const DevQRCode: React.FC = () => {
     <>
       <button
         onClick={() => void loadQrCode()}
-        className="fixed right-4 bottom-24 z-[90] px-4 py-3 rounded-2xl bg-[#0A0A0A]/90 text-white border border-white/10 shadow-2xl backdrop-blur-md text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
+        className="fixed right-4 bottom-24 z-[90] px-4 py-3 rounded-2xl bg-[#0A0A0A]/90 text-white border border-white/10 shadow-2xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all"
       >
-        📱 QR Code
+        <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>smartphone</span> QR Code
       </button>
 
       {open && (
@@ -84,7 +84,7 @@ const DevQRCode: React.FC = () => {
               </div>
               <button
                 onClick={() => setOpen(false)}
-                className="w-9 h-9 rounded-full bg-white/5 text-white/60 hover:bg-white/10 transition-all"
+                className="w-9 h-9 rounded-full bg-surface-container text-white/60 hover:bg-surface-2 transition-all"
               >
                 ×
               </button>
@@ -105,7 +105,7 @@ const DevQRCode: React.FC = () => {
               )}
             </div>
 
-            <div className="mt-5 rounded-[1.5rem] bg-white/5 border border-white/8 p-4">
+            <div className="mt-5 rounded-[1.5rem] bg-surface-container border border-white/8 p-4">
               <p className="text-[9px] font-black uppercase tracking-widest text-white/40 mb-2">Link actual</p>
               <p className="text-[11px] font-mono text-white/80 break-all">{shareUrl}</p>
             </div>
@@ -121,7 +121,7 @@ const DevQRCode: React.FC = () => {
                 href={shareUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="flex-1 py-3 rounded-2xl bg-white/5 border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest text-center active:scale-95 transition-all"
+                className="flex-1 py-3 rounded-2xl bg-surface-container border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest text-center active:scale-95 transition-all"
               >
                 Abrir
               </a>

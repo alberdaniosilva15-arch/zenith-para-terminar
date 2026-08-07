@@ -1,0 +1,84 @@
+﻿
+> zenith_schema_final.sq
+l:125:CREATE TABLE IF 
+NOT EXISTS 
+public.driver_locations 
+(
+  zenith_schema_final.sq
+l:126:  driver_id  UUID 
+PRIMARY KEY REFERENCES 
+public.users(id) ON 
+DELETE CASCADE,
+  zenith_schema_final.sq
+l:127:  location   
+GEOGRAPHY(POINT, 4326) 
+NOT NULL,
+  zenith_schema_final.sq
+l:128:  heading    
+NUMERIC(5,2),
+  zenith_schema_final.sq
+l:129:  status     
+driver_status NOT NULL 
+DEFAULT 'offline',
+  zenith_schema_final.sq
+l:130:  updated_at 
+TIMESTAMPTZ NOT NULL 
+DEFAULT NOW()
+  zenith_schema_final.sq
+l:131:);
+  zenith_schema_final.sq
+l:132:
+  zenith_schema_final.sq
+l:133:-- 2.5 Corridas
+  zenith_schema_final.sq
+l:134:-- CORRIGIDO: 
+payment_processed 
+adicionado
+  zenith_schema_final.sq
+l:135:CREATE TABLE IF 
+NOT EXISTS public.rides 
+(
+  zenith_schema_final.sq
+l:136:  id              
+  UUID PRIMARY KEY 
+DEFAULT 
+uuid_generate_v4(),
+  zenith_schema_final.sq
+l:137:  passenger_id    
+  UUID NOT NULL 
+REFERENCES 
+public.users(id),
+  zenith_schema_final.sq
+l:138:  driver_id       
+  UUID REFERENCES 
+public.users(id),
+  zenith_schema_final.sq
+l:139:  origin_address  
+  TEXT NOT NULL,
+  zenith_schema_final.sq
+l:140:  origin_lat      
+  DOUBLE PRECISION NOT 
+NULL,
+  zenith_schema_final.sq
+l:141:  origin_lng      
+  DOUBLE PRECISION NOT 
+NULL,
+  zenith_schema_final.sq
+l:142:  origin_geo      
+  GEOGRAPHY(POINT, 
+4326) GENERATED ALWAYS 
+AS (
+  zenith_schema_final.sq
+l:143:                  
+    ST_SetSRID(ST_MakePo
+int(origin_lng, 
+origin_lat), 
+4326)::geography
+  zenith_schema_final.sq
+l:144:                  
+  ) STORED,
+  zenith_schema_final.sq
+l:145:  dest_address    
+  TEXT NOT NULL,
+
+

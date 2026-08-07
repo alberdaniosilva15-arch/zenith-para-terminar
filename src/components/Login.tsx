@@ -7,23 +7,15 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../lib/supabase';
 import { UserRole } from '../types';
-import { hasRecoveryType } from '../lib/authUtils';
+import { hasRecoveryType, sanitizeRedirectTarget } from '../lib/authUtils';
 
 type Screen = 'signin' | 'signup' | 'forgot' | 'reset';
 
 const RECOVERY_PATH = '/login?type=recovery';
 const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
 const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
-const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_intent';
-const CRM_ADMIN_ORIGIN = 'http://127.0.0.1:4000';
-
-function sanitizeRedirectTarget(candidate: string | null | undefined): string | null {
-  if (!candidate) return null;
-  if (!candidate.startsWith('/')) return null;
-  if (candidate.startsWith('//')) return null;
-  if (candidate.startsWith('/login')) return null;
-  return candidate;
-}
+const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_target';
+const CRM_ADMIN_ORIGIN = import.meta.env.VITE_CRM_ADMIN_ORIGIN ?? 'http://127.0.0.1:4000';
 
 function readRedirectTarget(): string | null {
   if (typeof window === 'undefined') return null;

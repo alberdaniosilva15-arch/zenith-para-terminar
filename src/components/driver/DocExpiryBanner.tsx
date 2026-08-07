@@ -105,7 +105,7 @@ export default function DocExpiryBanner({ driverId, onOpenDocuments }: DocExpiry
         </div>
         <button
           onClick={onOpenDocuments}
-          className="rounded-full bg-white/10 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white transition-all hover:bg-white/15"
+          className="rounded-full bg-surface-2 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white transition-all hover:bg-white/15"
         >
           Atualizar documentos
         </button>

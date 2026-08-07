@@ -188,7 +188,7 @@ export default function DriverTierCard({ driverId }: DriverTierCardProps) {
           <span>Progresso para o próximo tier</span>
           <span>{tierState.progressPct}%</span>
         </div>
-        <div className="h-3 overflow-hidden rounded-full bg-white/10">
+        <div className="h-3 overflow-hidden rounded-full bg-surface-2">
           <div
             className="h-full rounded-full"
             style={{
@@ -210,7 +210,7 @@ export default function DriverTierCard({ driverId }: DriverTierCardProps) {
 
       <div className="mt-5 grid gap-2">
         {tierState.currentTier.benefits.map((benefit) => (
-          <div key={benefit} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-[11px] font-bold text-white/75">
+          <div key={benefit} className="rounded-2xl border border-white/10 bg-surface-container px-4 py-3 text-[11px] font-bold text-white/75">
             {benefit}
           </div>
         ))}

@@ -13,7 +13,7 @@
 // ✅ H3-3: getDriversH3 — novo método público com expansão dinâmica
 // =============================================================================
 
-import { latLngToCell, gridDisk } from 'h3-js';
+import { latLngToCell, gridDisk, cellToLatLng } from 'h3-js';
 import { haversineMeters } from '../lib/geo';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { edgeFunctionUrl, supabase } from '../lib/supabase';
@@ -107,23 +107,32 @@ interface RideUpdateResult { data: DbRide | null; error: AppError | null; }
 const rideRateTracker = new Map<string, number[]>();
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureCleanupRunning() {
+  if (cleanupTimer) return;
+  cleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [id, tsList] of rideRateTracker.entries()) {
+      const valid = tsList.filter(ts => now - ts < 60_000);
+      if (valid.length === 0) rideRateTracker.delete(id);
+      else rideRateTracker.set(id, valid);
+    }
+    if (rideRateTracker.size === 0 && cleanupTimer) {
+      clearInterval(cleanupTimer);
+      cleanupTimer = null;
+    }
+  }, 60_000);
+}
+
 function checkRideRateLimit(userId: string): boolean {
+  ensureCleanupRunning();
   const now        = Date.now();
   const timestamps = (rideRateTracker.get(userId) ?? []).filter(ts => now - ts < 60_000);
   if (timestamps.length >= 5) return false;
   rideRateTracker.set(userId, [...timestamps, now]);
   return true;
 }
-
-// Cleanup periódico para evitar memory leak (M5)
-setInterval(() => {
-  const now = Date.now();
-  for (const [id, tsList] of rideRateTracker.entries()) {
-    const valid = tsList.filter(ts => now - ts < 60_000);
-    if (valid.length === 0) rideRateTracker.delete(id);
-    else rideRateTracker.set(id, valid);
-  }
-}, 60_000);
 
 function isUuid(value: string): boolean {
   return UUID_REGEX.test(value);
@@ -306,54 +315,36 @@ class RideService {
     return this._fallbackFindDrivers(pickupCoords);
   }
 
-  // ── FIX 3: _fallbackFindDrivers com Haversine (distâncias reais) ──────────
+  // ── FIX 3: _fallbackFindDrivers com RPC e H3 (Sem expor localização exata) ─
   private async _fallbackFindDrivers(pickupCoords: LatLng): Promise<AuctionDriver[]> {
     try {
-      const { data: locations } = await supabase
-        .from('driver_locations')
-        .select('driver_id, heading, status, location, updated_at')
-        .eq('status', 'available')
-        .order('updated_at', { ascending: false })
-        .limit(50);
+      // 1) Usar o RPC blindado: devolve h3_index em vez das coordenadas reais.
+      // E ignora necessidade de confirmar estado na tabela 'rides' (bloqueado por RLS)
+      const { data: availableDrivers, error } = await supabase.rpc('get_available_drivers');
+      if (error || !availableDrivers || availableDrivers.length === 0) return [];
 
-      if (!locations || locations.length === 0) return [];
+      const topLocations = availableDrivers.slice(0, 50);
+      const driverIds = topLocations.map((d: any) => d.driver_id);
 
-      const driverIds = locations.map((d: { driver_id: string }) => d.driver_id);
-      const { data: activeRides } = await supabase
-        .from('rides')
-        .select('driver_id')
-        .in('driver_id', driverIds)
-        .in('status', [RideStatus.ACCEPTED, RideStatus.PICKING_UP, RideStatus.IN_PROGRESS]);
-
-      const busyDriverIds = new Set(
-        (activeRides ?? [])
-          .map((ride: { driver_id: string | null }) => ride.driver_id)
-          .filter((driverId): driverId is string => !!driverId),
-      );
-
-      const availableLocations = locations.filter(
-        (loc: { driver_id: string }) => !busyDriverIds.has(loc.driver_id),
-      );
-      if (availableLocations.length === 0) return [];
-
+      // 2) Obter os perfis públicos
       const { data: profiles } = await supabase
         .from('profiles')
         .select('user_id, name, avatar_url, rating, total_rides, level')
-        .in('user_id', availableLocations.map((d: { driver_id: string }) => d.driver_id));
+        .in('user_id', driverIds);
 
-      return (profiles ?? []).map((p: {
-        user_id: string; name: string; avatar_url: string | null;
-        rating: number; total_rides: number; level: string;
-      }) => {
-        const loc = availableLocations.find((l: { driver_id: string }) => l.driver_id === p.user_id);
+      return (profiles ?? []).map((p: any) => {
+        const loc = topLocations.find((l: any) => l.driver_id === p.user_id);
+        let distance_m = 3000; // fallback padrão
 
-        // FIX 3: calcular distância real se tiver coordenadas
-        let distance_m = 3000; // fallback quando sem coords
-        if (loc?.location) {
-          const coords = parseSupabasePoint(loc.location);
-          if (coords) distance_m = haversineMeters(pickupCoords.lat, pickupCoords.lng, coords.lat, coords.lng);
+        // 3) Reverter H3 Hex para coordenadas de Centro de Hexágono
+        if (loc?.h3_index_res9) {
+          try {
+            const [lat, lng] = cellToLatLng(loc.h3_index_res9);
+            distance_m = haversineMeters(pickupCoords.lat, pickupCoords.lng, lat, lng);
+          } catch (e) {
+            console.warn('[H3] Célula inválida', e);
+          }
         }
-
         return {
           driver_id:    p.user_id,
           driver_name:  p.name,
@@ -364,11 +355,10 @@ class RideService {
           distance_m:   Math.round(distance_m),
           eta_min:      Math.ceil(distance_m / 400),
           heading:      loc?.heading ?? null,
-          zenith_score: 500,
+          zenith_score: 500, // O fallback básico mantido
           is_elite:     false,
         };
       }).sort((a, b) => a.distance_m - b.distance_m);
-
     } catch (err) {
       console.warn('[rideService._fallbackFindDrivers] Falha total no fallback:', err);
       return [];
@@ -554,35 +544,46 @@ class RideService {
     }
   }
 
-  async driverConfirmRide(rideId: string, driverId: string): Promise<RideUpdateResult> {
+  async driverConfirmRide(rideId: string): Promise<RideUpdateResult> {
     try {
-      const { data, error } = await supabase.from('rides')
-        .update({
-          driver_confirmed: true,
-          status:    RideStatus.PICKING_UP,
-          pickup_at: new Date().toISOString(),
-        })
-        .eq('id', rideId)
-        .eq('driver_id', driverId)
-        .eq('driver_confirmed', false)
-        .select().single();
+      const { data, error } = await supabase.rpc('confirm_pickup', {
+        p_ride_id: rideId,
+      });
 
-      if (error) return { data: null, error: { code: error.code, message: 'Erro ao confirmar corrida.' } };
-      return { data: data as DbRide, error: null };
+      if (error) {
+        console.error('[rideService.driverConfirmRide] RPC error:', error.message);
+        return { data: null, error: { code: error.code ?? 'confirm_failed', message: 'Erro ao confirmar corrida.' } };
+      }
+
+      const result = data as { success: boolean; reason?: string; new_status?: string } | null;
+      if (!result?.success) {
+        const reason = result?.reason ?? 'unknown';
+        const messages: Record<string, string> = {
+          not_your_ride: 'Esta corrida não te está atribuída.',
+          invalid_status: 'Estado da corrida não permite confirmação.',
+          not_authenticated: 'Precisas de fazer login.',
+          not_a_driver: 'Apenas motoristas podem confirmar.',
+        };
+        return { data: null, error: { code: reason, message: messages[reason] ?? 'Não foi possível confirmar.' } };
+      }
+
+      // Ler a corrida actualizada
+      const { data: ride, error: readErr } = await supabase
+        .from('rides').select('*').eq('id', rideId).single();
+
+      if (readErr || !ride) return { data: null, error: { code: 'read_fail', message: 'Confirmado, mas erro ao ler dados.' } };
+      return { data: ride as DbRide, error: null };
     } catch (err) {
       console.warn('[rideService.driverConfirmRide] Falha:', err);
       return { data: null, error: { code: 'unknown', message: 'Erro ao confirmar.' } };
     }
   }
 
-  // ── FIX 2: driverDeclineRide — RPC atómica (sem race condition) ────────────
-  // Antes: UPDATE directo sem verificar se outro driver já aceitou entretanto.
-  // Agora: RPC decline_ride_atomic com FOR UPDATE NOWAIT.
-  async driverDeclineRide(rideId: string, driverId: string): Promise<AppError | null> {
+  // ── driverDeclineRide — RPC atómica usa auth.uid() ────────────────────────
+  async driverDeclineRide(rideId: string): Promise<AppError | null> {
     try {
       const { data, error } = await supabase.rpc('decline_ride_atomic', {
-        p_ride_id:   rideId,
-        p_driver_id: driverId,
+        p_ride_id: rideId,
       });
 
       if (error) {
@@ -608,12 +609,11 @@ class RideService {
     }
   }
 
-  // ── acceptRide (atómico — mantido) ────────────────────────────────────────
-  async acceptRide(rideId: string, driverId: string): Promise<RideUpdateResult> {
+  // ── acceptRide (atómico — usa auth.uid() no servidor) ──────────────────────
+  async acceptRide(rideId: string, _driverId?: string): Promise<RideUpdateResult> {
     try {
       const { data, error } = await supabase.rpc('accept_ride_atomic', {
-        p_ride_id:   rideId,
-        p_driver_id: driverId,
+        p_ride_id: rideId,
       });
 
       if (error) {
@@ -659,91 +659,85 @@ class RideService {
   }
 
   // ── updateRideStatus ───────────────────────────────────────────────────────
-  async updateRideStatus(rideId: string, status: RideStatus, actorId: string): Promise<RideUpdateResult> {
-    const driverOnlyStates = [RideStatus.PICKING_UP, RideStatus.IN_PROGRESS, RideStatus.COMPLETED];
-    const tsField: Partial<Record<RideStatus, string>> = {
-      [RideStatus.PICKING_UP]:  'pickup_at',
-      [RideStatus.IN_PROGRESS]: 'started_at',
-      [RideStatus.COMPLETED]:   'completed_at',
-      [RideStatus.CANCELLED]:   'cancelled_at',
-    };
-
-    const payload: Record<string, unknown> = { status };
-    const f = tsField[status];
-    if (f) payload[f] = new Date().toISOString();
-
+  // Agora usa RPCs em vez de UPDATE directo — auth.uid() garante autorização
+  async updateRideStatus(rideId: string, status: RideStatus): Promise<RideUpdateResult> {
     try {
-      if (!isUuid(actorId)) {
-        return { data: null, error: { code: 'invalid_actor', message: 'Sessão inválida para actualizar a corrida.' } };
+      type RpcResult = { success: boolean; reason?: string; ride_id?: string };
+      let rpcResult: RpcResult | undefined;
+
+      switch (status) {
+        case RideStatus.PICKING_UP: {
+          const { data, error } = await supabase.rpc('confirm_pickup', { p_ride_id: rideId });
+          if (error) return { data: null, error: { code: error.code ?? 'confirm_pickup_failed', message: 'Erro ao confirmar recolha.' } };
+          rpcResult = data as RpcResult;
+          break;
+        }
+        case RideStatus.IN_PROGRESS: {
+          const { data, error } = await supabase.rpc('start_ride', { p_ride_id: rideId });
+          if (error) return { data: null, error: { code: error.code ?? 'start_ride_failed', message: 'Erro ao iniciar corrida.' } };
+          rpcResult = data as RpcResult;
+          break;
+        }
+        case RideStatus.COMPLETED: {
+          const { data, error } = await supabase.rpc('complete_ride', { p_ride_id: rideId });
+          if (error) return { data: null, error: { code: error.code ?? 'complete_ride_failed', message: 'Erro ao terminar corrida.' } };
+          rpcResult = data as RpcResult;
+          break;
+        }
       }
 
-      let query = supabase.from('rides').update(payload).eq('id', rideId);
-      if (driverOnlyStates.includes(status)) {
-        query = query.eq('driver_id', actorId);
-      } else {
-        query = query.or(`driver_id.eq.${actorId},passenger_id.eq.${actorId}`);
+      if (rpcResult === undefined) {
+        return { data: null, error: { code: 'invalid_status', message: 'Estado não suportado via updateRideStatus.' } };
       }
 
-      const { data, error } = await query.select().single();
-      if (error) return { data: null, error: { code: error.code, message: 'Erro ao actualizar estado da corrida.' } };
+      if (!rpcResult.success) {
+        const reason = rpcResult.reason ?? 'unknown';
+        const messages: Record<string, string> = {
+          not_your_ride: 'Esta corrida não te está atribuída.',
+          invalid_status: 'Estado da corrida não permite esta transição.',
+          not_authenticated: 'Precisas de fazer login.',
+          not_a_driver: 'Apenas motoristas podem alterar o estado.',
+          ride_not_found: 'Corrida não encontrada.',
+          concurrent_update: 'Conflito de actualização — tenta de novo.',
+        };
+        return { data: null, error: { code: reason, message: messages[reason] ?? 'Não foi possível actualizar o estado.' } };
+      }
 
-      const updatedRide = data as DbRide;
+      // Ler a corrida actualizada
+      const { data: updatedRide, error: readErr } = await supabase
+        .from('rides').select('*').eq('id', rideId).single();
 
-      if (status === RideStatus.IN_PROGRESS && updatedRide.driver_id) {
+      if (readErr || !updatedRide) return { data: null, error: { code: 'read_fail', message: 'Estado actualizado, mas erro ao ler dados.' } };
+
+      // Side effects pós-transição (mantidos no frontend)
+      if (status === RideStatus.IN_PROGRESS && updatedRide.passenger_id) {
         try {
-          await supabase.from('driver_locations')
-            .update({
-              status: 'busy',
-              online_minutes_idle: 0,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('driver_id', updatedRide.driver_id);
-        } catch (locErr) {
-          console.warn('[rideService.updateRideStatus] Falha ao marcar driver como busy:', locErr);
-        }
+          const { data: passengerProfile } = await supabase
+            .from('profiles')
+            .select('emergency_contact_phone')
+            .eq('user_id', updatedRide.passenger_id)
+            .maybeSingle();
 
-        if (updatedRide.passenger_id === actorId) {
-          try {
-            const { data: passengerProfile } = await supabase
-              .from('profiles')
-              .select('emergency_contact_phone')
-              .eq('user_id', updatedRide.passenger_id)
-              .maybeSingle();
-
-            if (passengerProfile?.emergency_contact_phone) {
-              await this.autoShareLiveTrackingOnRideStart({
-                rideId: updatedRide.id,
-                ownerUserId: updatedRide.passenger_id,
-                emergencyPhone: passengerProfile.emergency_contact_phone,
-              });
-            }
-          } catch (shareError) {
-            console.warn('[rideService.updateRideStatus] Partilha live automatica falhou:', shareError);
+          if (passengerProfile?.emergency_contact_phone) {
+            await this.autoShareLiveTrackingOnRideStart({
+              rideId: updatedRide.id,
+              ownerUserId: updatedRide.passenger_id,
+              emergencyPhone: passengerProfile.emergency_contact_phone,
+            });
           }
+        } catch (shareError) {
+          console.warn('[rideService.updateRideStatus] Partilha live automatica falhou:', shareError);
         }
       }
 
-      if (status === RideStatus.COMPLETED || status === RideStatus.CANCELLED) {
-        const updated = updatedRide ?? null;
-        if (updated?.driver_id) {
-          try {
-            await supabase.from('driver_locations')
-              .update({ status: 'available', online_minutes_idle: 0, updated_at: new Date().toISOString() })
-              .eq('driver_id', updated.driver_id);
-          } catch (locErr) {
-            console.warn('[rideService.updateRideStatus] Falha ao marcar driver como available:', locErr);
-          }
-        }
-        if (status === RideStatus.COMPLETED && updated?.passenger_id) {
-          const distKm = (updated as unknown as { route_distance_km?: number }).route_distance_km ?? updated.distance_km ?? 0;
-          if (distKm > 0) this._updateKmPerk(updated.passenger_id, distKm).catch(console.error);
-          
-          // Recarregar os 10 créditos do Kaze
-          try { await supabase.rpc('recharge_chat_quota', { p_user_id: updated.passenger_id, amount: 10 }); } catch (e) { console.error('[rideService.rechargeChatQuota]', e); logError('rideService.rechargeChatQuota', e); }
-        }
+      if (status === RideStatus.COMPLETED && updatedRide.passenger_id) {
+        const distKm = (updatedRide as unknown as { route_distance_km?: number }).route_distance_km ?? updatedRide.distance_km ?? 0;
+        if (distKm > 0) this._updateKmPerk(updatedRide.passenger_id, distKm).catch(console.error);
+
+        try { await supabase.rpc('recharge_chat_quota', { amount: 10 }); } catch (e) { console.error('[rideService.rechargeChatQuota]', e); logError('rideService.rechargeChatQuota', e); }
       }
 
-      return { data: updatedRide, error: null };
+      return { data: updatedRide as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.updateRideStatus] Excepção:', err);
       return { data: null, error: { code: 'unknown', message: 'Erro ao actualizar corrida.' } };
@@ -853,14 +847,10 @@ class RideService {
     return true;
   }
 
-  async cancelRide(rideId: string, userId: string, reason?: string): Promise<AppError | null> {
+  async cancelRide(rideId: string, _userId?: string, reason?: string): Promise<AppError | null> {
     try {
-      if (!isUuid(userId)) {
-        return { code: 'invalid_actor', message: 'Sessão inválida para cancelar a corrida.' };
-      }
       const { data, error } = await supabase.rpc('cancel_ride_safe', {
         p_ride_id: rideId,
-        p_user_id: userId,
         p_reason: reason ?? 'Cancelado pelo utilizador',
       });
 
@@ -869,9 +859,9 @@ class RideService {
         return { code: error.code ?? 'cancel_rpc_failed', message: 'Não foi possível cancelar a corrida agora.' };
       }
 
-      const result = (data as Array<{ success: boolean; message: string }>)?.[0];
+      const result = (data as Array<{ success: boolean; message: string; reason?: string }>)?.[0];
       if (result?.success) return null;
-      return { code: 'cancel_denied', message: result?.message ?? 'Não foi possível cancelar.' };
+      return { code: 'cancel_denied', message: result?.message ?? result?.reason ?? 'Não foi possível cancelar.' };
     } catch (err) {
       console.error('[rideService.cancelRide] Excepção:', err);
       return { code: 'unknown', message: 'Erro ao cancelar corrida.' };
@@ -890,10 +880,10 @@ class RideService {
     }
   }
 
-  // ── getActiveRide ──────────────────────────────────────────────────────────
-  async getActiveRide(userId: string): Promise<(DbRide & { driver_name?: string; passenger_name?: string }) | null> {
+  // ── getActiveRide — usa auth.uid() no servidor ─────────────────────────────
+  async getActiveRide(_userId?: string): Promise<(DbRide & { driver_name?: string; passenger_name?: string }) | null> {
     try {
-      const { data, error } = await supabase.rpc('get_active_ride', { p_user_id: userId });
+      const { data, error } = await supabase.rpc('get_active_ride');
       if (error) { console.error('[rideService.getActiveRide]', error); return null; }
       if (!data) return null;
       return data as DbRide & { driver_name?: string; passenger_name?: string };
@@ -903,15 +893,19 @@ class RideService {
     }
   }
 
-  // ── getAvailableRides ──────────────────────────────────────────────────────
+  // ── getAvailableRides (Usa RPC focada para contornar bloqueios do RLS) ────
   async getAvailableRides(): Promise<DbRide[]> {
     try {
-      const { data, error } = await supabase.from('rides')
-        .select('*').eq('status', RideStatus.SEARCHING).is('driver_id', null)
-        .order('created_at', { ascending: false });
-      if (error) { console.error('[rideService.getAvailableRides]', error); return []; }
+      const { data, error } = await supabase.rpc('get_searching_rides');
+      if (error) { 
+        console.error('[rideService.getAvailableRides]', error); 
+        return []; 
+      }
       return (data ?? []) as DbRide[];
-    } catch (err) { console.error('[rideService.getAvailableRides] Falha silenciosa', err); return []; }
+    } catch (err) { 
+      console.error('[rideService.getAvailableRides] Falha silenciosa', err); 
+      return []; 
+    }
   }
 
   // ── getRideHistory ─────────────────────────────────────────────────────────
@@ -970,45 +964,62 @@ class RideService {
     return () => { if (this.rideChannel) { supabase.removeChannel(this.rideChannel); this.rideChannel = null; } };
   }
 
-  // ── FIX 5: subscribeToAvailableRides com filtro H3 opcional ──────────────
-  // driverH3Cells: resultado de gridDisk(motorista_hex, k) calculado no cliente.
-  // Se não for passado, comportamento anterior (sem filtro geo).
+  // ── FIX RLS LOTE 1: Polling Adaptativo para Corridas Disponíveis ─────────
+  // Substitui WebSockets porque policies RLS não expõem "searching" via SELECT.
+  // Novo comportamento: Intervalo adaptativo de 5s a 10s c/ backoff inteligente.
   subscribeToAvailableRides(
     onNew:  (r: DbRide) => void,
     onGone: (id: string) => void,
-    driverH3Cells?: string[],
+    _driverH3Cells?: string[], // H3 ignorado nesta versão puramente opaca do RPC
   ): () => void {
-    if (this.availableChannel) { supabase.removeChannel(this.availableChannel); this.availableChannel = null; }
-
-    // Pré-calcular Set para lookup O(1)
-    const h3Set = driverH3Cells && driverH3Cells.length > 0
-      ? new Set(driverH3Cells)
-      : null;
-
-    this.availableChannel = supabase.channel('available-rides-v3')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'rides' }, (p) => {
-        const r = p.new as DbRide;
-        if (r.status !== RideStatus.SEARCHING || r.driver_id) return;
-
-        // FIX 5: Filtro H3 — só notificar se a origem estiver na vizinhança
-        if (h3Set) {
-          const rideHex = latLngToCell(r.origin_lat, r.origin_lng, H3_RES_DRIVER);
-          if (!h3Set.has(rideHex)) {
-            console.log('[rideService.subscribeToAvailableRides] Corrida fora da zona H3 — ignorando');
-            return;
+    let isActive = true;
+    let timerId: ReturnType<typeof setTimeout> | null = null;
+    let backoffMultiplier = 1;
+    let knownRideIds = new Set<string>();
+    const poll = async () => {
+      if (!isActive) return;
+      try {
+        const { data, error } = await supabase.rpc('get_searching_rides');
+        
+        if (error) {
+          console.warn('[rideService.polling] RPC erro:', error.message);
+          backoffMultiplier = Math.min(backoffMultiplier * 1.5, 4); // Abrandar perante erro
+        } else if (data) {
+          backoffMultiplier = 1;
+          const currentRides = data as DbRide[];
+          const currentIds = new Set(currentRides.map(r => r.id));
+          // Publicar novas corridas para a UI
+          for (const ride of currentRides) {
+            if (!knownRideIds.has(ride.id)) {
+              console.log('[rideService.polling] Nova corrida recebida via RPC:', ride.id);
+              onNew(ride);
+            }
           }
+          // Retirar os cartões das corridas que já foram aceites ou canceladas
+          for (const id of knownRideIds) {
+            if (!currentIds.has(id)) {
+              onGone(id);
+            }
+          }
+          knownRideIds = currentIds;
         }
-
-        console.log('[rideService.subscribeToAvailableRides] Nova corrida na zona:', r.id);
-        onNew(r);
-      })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'rides' }, (p) => {
-        const r = p.new as DbRide;
-        if (r.status !== RideStatus.SEARCHING || r.driver_id) onGone(r.id);
-      })
-      .subscribe();
-
-    return () => { if (this.availableChannel) { supabase.removeChannel(this.availableChannel); this.availableChannel = null; } };
+      } catch (err) {
+        console.warn('[rideService.polling] Network Error:', err);
+        backoffMultiplier = Math.min(backoffMultiplier * 1.5, 4);
+      }
+      if (isActive) {
+        // Dinâmico: 5 segundos nos momentos de paz, escalando para 10-20 em congestionamento
+        const nextInterval = 5000 * backoffMultiplier;
+        timerId = setTimeout(poll, nextInterval);
+      }
+    };
+    // Arranque inicial do ciclo
+    poll();
+    // Cleanup: chamado quando o motorista desliga (Ficar Offline)
+    return () => {
+      isActive = false;
+      if (timerId) clearTimeout(timerId);
+    };
   }
 
   // ── subscribeToDriverAssignments ───────────────────────────────────────────

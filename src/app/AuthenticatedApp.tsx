@@ -19,6 +19,9 @@ const KazeMascot = React.lazy(() => import('../components/KazeMascot'));
 const PostRideReview = React.lazy(() => import('../components/PostRideReview'));
 const FleetDashboard = React.lazy(() => import('../components/fleet/FleetDashboard'));
 
+// Temporariamente desativado — aguarda desenho da relação fleet↔motoristas
+// e da policy RLS correspondente. Ver ZENITH_RIDE_DECISOES_FINAIS_P0_P1.txt.
+const FLEET_DASHBOARD_ENABLED = false;
 function useMapTabResize() {
   useEffect(() => {
     const dispatchResize = () => {
@@ -163,7 +166,7 @@ export default function AuthenticatedApp() {
                 emergencyPhone={profile?.emergency_contact_phone ?? undefined}
                 isVisible={activeTab === 'home'}
               />
-            ) : effectiveRole === UserRole.FLEET_OWNER ? (
+            ) : (effectiveRole === UserRole.FLEET_OWNER && FLEET_DASHBOARD_ENABLED) ? (
               <FleetDashboard
                 ownerId={dbUser?.id ?? ''}
                 ownerName={profile?.name}

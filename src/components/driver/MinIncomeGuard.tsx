@@ -20,7 +20,7 @@ const MinIncomeGuard: React.FC<MinIncomeGuardProps> = ({
   }
 
   return (
-    <div className="rounded-[2rem] border border-blue-500/25 bg-blue-500/10 p-4 text-blue-100">
+    <div className="rounded-[2rem] border border-amber-500/25 bg-amber-500/10 p-4 text-amber-100">
       <p className="text-[9px] uppercase tracking-[0.22em] font-black">Min Income Guard</p>
       <p className="text-sm font-black mt-2">
         Sabes que estas em zona baixa? Muda para {suggestionLabel ?? 'uma zona mais quente'}

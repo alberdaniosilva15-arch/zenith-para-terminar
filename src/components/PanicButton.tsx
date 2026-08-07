@@ -58,12 +58,14 @@ export default function PanicButton({
     };
   }, []);
 
+  const triggerPanicRef = useRef<(silent?: boolean) => Promise<void>>(async () => {});
+
   // Detecção de gritos — activa durante corrida nocturna
   useEffect(() => {
     if (!enableScreamDetection || !rideId) return;
     const handle = startScreamDetection(() => {
       console.warn('[PanicButton] Grito detectado — activando SOS silencioso');
-      void triggerPanic(true);
+      void triggerPanicRef.current(true);
     });
     return () => { handle?.stop(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -75,7 +77,7 @@ export default function PanicButton({
     }
 
     lastSilentSignalRef.current = silentSignal;
-    void triggerPanic(true);
+    void triggerPanicRef.current(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [silentSignal, rideId, emergencyPhone, resolvedCounterparty]);
 
@@ -289,12 +291,14 @@ export default function PanicButton({
     );
   };
 
+  useEffect(() => { triggerPanicRef.current = triggerPanic; });
+
   if (sent) {
     return (
       <div className="zr-card" style={{ border: '1px solid var(--danger-soft)', background: 'rgba(239, 68, 68, 0.05)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         <div className="zr-inline" style={{ gap: '12px' }}>
           <div style={{ width: '40px', height: '40px', background: 'rgba(239, 68, 68, 0.2)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
-            🆘
+            <span className="material-symbols-outlined" style={{fontSize: '28px'}}>emergency</span>
           </div>
           <div>
             <strong style={{ color: 'var(--danger-soft)', display: 'block', marginBottom: '4px' }}>Alerta enviado</strong>
@@ -315,17 +319,17 @@ export default function PanicButton({
 
         {audioSaved && !recording && (
           <div className="zr-chip zr-chip--success" style={{ justifyContent: 'flex-start' }}>
-            <span style={{ marginRight: '8px' }}>✅</span>
+            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle', marginRight: '8px'}}>check_circle</span>
             Áudio de evidência guardado
           </div>
         )}
 
         <div className="zr-inline" style={{ gap: '8px' }}>
           <a href="tel:113" className="zr-button zr-button--danger zr-button--block" style={{ flex: 1, padding: '10px 0', fontSize: '10px' }}>
-            📞 Ligar 113
+            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 113
           </a>
           <a href="tel:112" className="zr-button zr-button--secondary zr-button--block" style={{ flex: 1, padding: '10px 0', fontSize: '10px', color: 'var(--danger-soft)', borderColor: 'var(--danger-soft)' }}>
-            📞 Ligar 112
+            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 112
           </a>
         </div>
       </div>
@@ -354,7 +358,7 @@ export default function PanicButton({
         className={`zr-button zr-button--block ${pressed ? 'zr-button--danger animate-pulse' : 'zr-button--secondary'}`}
         style={pressed ? { boxShadow: '0 0 20px rgba(239, 68, 68, 0.6)' } : { color: 'var(--danger-soft)', borderColor: 'rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)' }}
       >
-        {pressed ? '🆘 CONFIRMA - toca de novo para enviar alerta' : '🛡️ Botão de Pânico (SOS)'}
+        {pressed ? <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>emergency</span> CONFIRMA - toca de novo para enviar alerta</> : <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>shield</span> Botão de Pânico (SOS)</>}
       </button>
     </div>
   );

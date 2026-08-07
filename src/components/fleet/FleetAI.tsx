@@ -43,7 +43,7 @@ const FleetAI: React.FC<FleetAIProps> = ({ totalCars, activeCars, idleCars, driv
   }, [driverNames, idleCars, proactiveTip, question]);
 
   return (
-    <div className="rounded-[2rem] border border-white/10 bg-white/5 p-5">
+    <div className="rounded-[2rem] border border-white/10 bg-surface-container p-5">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
           <p className="text-[9px] uppercase tracking-[0.22em] text-primary/70 font-black">Fleet AI</p>
@@ -57,10 +57,10 @@ const FleetAI: React.FC<FleetAIProps> = ({ totalCars, activeCars, idleCars, driv
         onChange={(event) => setQuestion(event.target.value)}
         rows={3}
         placeholder="Qual carro esta a render menos hoje?"
-        className="w-full rounded-2xl bg-black/20 border border-white/10 px-4 py-3 text-sm text-white outline-none resize-none"
+        className="w-full rounded-2xl bg-surface-2 border border-white/10 px-4 py-3 text-sm text-white outline-none resize-none"
       />
 
-      <div className="mt-4 rounded-2xl bg-black/20 border border-white/10 p-4">
+      <div className="mt-4 rounded-2xl bg-surface-2 border border-white/10 p-4">
         <p className="text-[10px] uppercase tracking-widest text-white/40 font-black mb-2">Resposta</p>
         <p className="text-sm text-white/80 leading-relaxed">{answer}</p>
       </div>

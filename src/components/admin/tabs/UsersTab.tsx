@@ -143,7 +143,7 @@ export const UsersTab: React.FC = () => {
         </div>
       ) : (
         <div className="flex flex-col lg:flex-row gap-6">
-          <div className="flex-1 bg-[#050505]/90 backdrop-blur-md border border-primary/15 rounded-xl flex flex-col overflow-hidden shadow-sm">
+          <div className="flex-1 bg-[#050505]/90 border border-primary/15 rounded-xl flex flex-col overflow-hidden shadow-sm">
             <div className="p-6 border-b border-primary/10 flex flex-col sm:flex-row justify-between items-center gap-4">
               <div className="relative w-full sm:w-72">
                 <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant/50 text-[20px]">search</span>

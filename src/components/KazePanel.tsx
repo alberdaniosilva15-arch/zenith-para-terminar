@@ -6,7 +6,37 @@ import { supabase } from '../lib/supabase';
 import { geminiService } from '../services/geminiService';
 import { kazeSpeakOnline } from '../lib/kazeVoice';
 
-async function transcribeDirectGroq(blob, apiKey) {
+// ── Tipos auxiliares ────────────────────────────────────────────────────────
+type AudioStats = {
+  rawVolume: number;
+  rawBass: number;
+  rawMid: number;
+  rawHigh: number;
+  gatedVolume: number;
+  gatedBass: number;
+  gatedMid: number;
+  gatedHigh: number;
+  noiseFloor: number;
+  frequencyHz: number | null;
+  fft: number;
+  frequencyBins: number[];
+};
+
+type AudioResources = {
+  stream: MediaStream | null;
+  audioCtx: AudioContext | null;
+  analyser: AnalyserNode | null;
+  dataArray: Uint8Array | null;
+  interval: ReturnType<typeof setInterval> | null;
+};
+
+type WindowWithWebkitAudioContext = Window & typeof globalThis & {
+  webkitAudioContext?: typeof AudioContext;
+};
+
+type KazeChat = ReturnType<typeof geminiService.createHermesKazeChat>;
+
+async function transcribeDirectGroq(blob: Blob, apiKey: string): Promise<string> {
   const formData = new FormData();
   formData.append('file', blob, 'audio.webm');
   formData.append('model', 'whisper-large-v3-turbo');
@@ -40,7 +70,7 @@ const INITIAL_METRICS = {
   activeDrivers: 0,
 };
 
-const DEFAULT_AUDIO_STATS = {
+const DEFAULT_AUDIO_STATS: AudioStats = {
   rawVolume: 0,
   rawBass: 0,
   rawMid: 0,
@@ -110,24 +140,27 @@ const SCREEN_CSS = `
   }
 `;
 
-function averageBins(dataArray, start, end) {
+function averageBins(dataArray: Uint8Array, start: number, end: number): number {
   if (!dataArray?.length) return 0;
   const safeStart = Math.max(0, start);
   const safeEnd = Math.min(dataArray.length, end);
   if (safeEnd <= safeStart) return 0;
   let sum = 0;
-  for (let i = safeStart; i < safeEnd; i += 1) sum += dataArray[i];
+  for (let i = safeStart; i < safeEnd; i += 1) {
+    const v = dataArray[i];
+    if (v !== undefined) sum += v;
+  }
   return sum / (safeEnd - safeStart) / 128;
 }
 
-function computeAudioStats(dataArray, audioCtx, noiseFloor) {
+function computeAudioStats(dataArray: Uint8Array, audioCtx: AudioContext, noiseFloor: number): AudioStats {
   const len = dataArray.length || 1;
   let sum = 0;
   let maxValue = 0;
   let maxIndex = 0;
 
   for (let i = 0; i < dataArray.length; i += 1) {
-    const value = dataArray[i];
+    const value = dataArray[i] ?? 0;
     sum += value;
     if (value > maxValue) {
       maxValue = value;
@@ -169,16 +202,16 @@ export default function KazePanel() {
   const [voiceState, setVoiceState] = useState('standby');
   const [sessionActive, setSessionActive] = useState(false);
   const [onlineStatus, setOnlineStatus] = useState('ONLINE');
-  const [audioStats, setAudioStats] = useState(DEFAULT_AUDIO_STATS);
+  const [audioStats, setAudioStats] = useState<AudioStats>(DEFAULT_AUDIO_STATS);
   const [buttonLabel, setButtonLabel] = useState('ACTIVATE VOICE');
   const [lastTranscript, setLastTranscript] = useState('');
   const [lastReply, setLastReply] = useState('');
   const [textInput, setTextInput] = useState('');
   const [draftText, setDraftText] = useState('');
 
-  const chatRef = useRef(null);
-  const recognitionRef = useRef(null);
-  const audioChunksRef = useRef([]);
+  const chatRef = useRef<KazeChat | null>(null);
+  const recognitionRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const recognitionRunningRef = useRef(false);
   const sessionActiveRef = useRef(false);
   const processingRef = useRef(false);
@@ -186,10 +219,10 @@ export default function KazePanel() {
   const voiceStateRef = useRef('standby');
   const finalTranscriptRef = useRef('');
   const draftTranscriptRef = useRef('');
-  const restartTimerRef = useRef(null);
+  const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noiseFloorRef = useRef(DEFAULT_AUDIO_STATS.noiseFloor);
   const audioSessionIdRef = useRef(0);
-  const audioRef = useRef({
+  const audioRef = useRef<AudioResources>({
     stream: null,
     audioCtx: null,
     analyser: null,
@@ -307,7 +340,7 @@ export default function KazePanel() {
     stopAudioAnalyser();
   }, [stopAudioAnalyser, stopRecognition]);
 
-  const speakAndResume = useCallback(async (text) => {
+  const speakAndResume = useCallback(async (text: string) => {
     if (!text?.trim()) return;
     setLastReply(text);
     setVoiceState('speaking');
@@ -335,7 +368,7 @@ export default function KazePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const sendTranscriptToHermes = useCallback(async (transcript) => {
+  const sendTranscriptToHermes = useCallback(async (transcript: string) => {
     const clean = String(transcript || '').trim();
     if (!clean) return;
 
@@ -349,12 +382,11 @@ export default function KazePanel() {
     setVoiceState('processing');
 
     try {
-      if (!chatRef.current) {
-        chatRef.current = geminiService.createHermesKazeChat({
-          source: 'admin-kaze-hermes-fullscreen',
-          interface: 'voice',
-        });
-      }
+      const chat = chatRef.current ?? geminiService.createHermesKazeChat({
+        source: 'admin-kaze-hermes-fullscreen',
+        interface: 'voice',
+      });
+      chatRef.current = chat;
 
       // Safeguard: absolute maximum timeout for the UI state so it NEVER gets stuck
       const timeoutId = setTimeout(() => {
@@ -374,7 +406,7 @@ export default function KazePanel() {
         }
       }, 30000);
 
-      const response = await chatRef.current.sendMessage(clean, {
+      const response = await chat.sendMessage(clean, {
         metrics,
         voice: true,
         route: 'admin-fullscreen-core',
@@ -420,7 +452,7 @@ export default function KazePanel() {
   }, [metrics, speakAndResume]);
 
   const startRecognition = useCallback(() => {
-    const stream = audioRef.current?.stream;
+    const stream = audioRef.current.stream;
     if (!stream || !stream.active) {
       return false;
     }
@@ -441,7 +473,7 @@ export default function KazePanel() {
       recorder = new MediaRecorder(stream);
     }
 
-    recorder.ondataavailable = (e) => {
+    recorder.ondataavailable = (e: BlobEvent) => {
       if (e.data.size > 0) audioChunksRef.current.push(e.data);
     };
 
@@ -469,9 +501,11 @@ export default function KazePanel() {
               }, 500);
             }
           }
-        } catch (err) {
+        } catch (err: unknown) {
           console.warn('[KazePanel] Erro no Groq Whisper:', err);
-          const errMsg = err.name === 'AbortError' ? 'A transcrição demorou demasiado tempo.' : err.message;
+          const errMsg = err instanceof Error
+            ? err.name === 'AbortError' ? 'A transcrição demorou demasiado tempo.' : err.message
+            : 'Erro desconhecido';
           setDraftText('');
           setLastReply(`> KAZE: Erro na transcrição de áudio: ${errMsg}`);
           setVoiceState('error');
@@ -507,7 +541,7 @@ export default function KazePanel() {
     const sessionId = audioSessionIdRef.current + 1;
     audioSessionIdRef.current = sessionId;
 
-    const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+    const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext;
     if (!AudioContextCtor) throw new Error('AudioContext indisponivel');
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
@@ -519,7 +553,7 @@ export default function KazePanel() {
     source.connect(analyser);
 
     const dataArray = new Uint8Array(analyser.frequencyBinCount);
-    const calibrationBuffer = [];
+    const calibrationBuffer: number[] = [];
 
     setVoiceState('calibrating');
     setAudioStats((prev) => ({ ...prev, fft: analyser.frequencyBinCount }));
@@ -536,7 +570,7 @@ export default function KazePanel() {
         calibrationBuffer.push(stats.rawVolume);
       } else if (voiceStateRef.current === 'listening' && recognitionRef.current?.state === 'recording') {
         totalTicks += 1; // Conta o tempo total de gravação (1 tick = 50ms)
-        
+
         // Voice Activity Detection (VAD) — sensibilidade equilibrada para ouvir fala normal
         if (stats.gatedVolume > 0.15) {
           speakingTicks += 1;
@@ -544,7 +578,7 @@ export default function KazePanel() {
         } else if (speakingTicks > 10) { // Falou por pelo menos 0.5s
           silenceTicks += 1;
           if (silenceTicks > 24) { // 1.2s de silêncio após fala real → parar imediatamente
-            try { recognitionRef.current.stop(); } catch { /* silêncio detectado */ }
+            try { recognitionRef.current?.stop(); } catch { /* silêncio detectado */ }
             speakingTicks = 0;
             silenceTicks = 0;
             totalTicks = 0;
@@ -557,10 +591,10 @@ export default function KazePanel() {
           }
         }
 
-        // LIMITE GLOBAL ABSOLUTO: 12 segundos (240 ticks). 
+        // LIMITE GLOBAL ABSOLUTO: 12 segundos (240 ticks).
         // Garante que tenta responder após 12s mesmo que o silêncio não seja detetado.
         if (totalTicks >= 240) {
-          try { recognitionRef.current.stop(); } catch { /* limite global */ }
+          try { recognitionRef.current?.stop(); } catch { /* limite global */ }
           speakingTicks = 0;
           silenceTicks = 0;
           totalTicks = 0;
@@ -600,11 +634,11 @@ export default function KazePanel() {
       setButtonLabel('ACTIVATE VOICE');
       setVoiceState('listening');
       startRecognition();
-    } catch (error) {
+    } catch (error: unknown) {
       console.warn('[KazePanel] activar voz:', error);
       sessionActiveRef.current = false;
       setSessionActive(false);
-      const errMsg = error?.name || error?.message || 'ERRO DESCONHECIDO';
+      const errMsg = error instanceof Error ? (error.name || error.message) : 'ERRO DESCONHECIDO';
       setButtonLabel(`AUDIO: ${errMsg.toUpperCase().substring(0, 15)}`);
       setVoiceState('error');
       setOnlineStatus('EMERGENCY');
@@ -613,7 +647,7 @@ export default function KazePanel() {
   }, [startAudioAnalyser, startRecognition, stopAudioAnalyser]);
 
   useEffect(() => {
-    const onKeyDown = (event) => {
+    const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') stopVoiceSession();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -663,10 +697,10 @@ export default function KazePanel() {
         {lastReply ? `Resposta: ${lastReply}` : ''}
       </div>
 
-      <div style={{ position: 'absolute', bottom: '40px', left: '50%', transform: 'translateX(-50%)', zIndex: 30, width: '500px', maxWidth: '90%' }} className="flex flex-col gap-3">
+      <div style={{ position: 'absolute', bottom: '40px', left: '50%', transform: 'translateX(-50%)', zIndex: 30, width: '100%', maxWidth: '500px' }} className="flex flex-col gap-3">
         {/* VISUAL FEEDBACK AREA */}
         {(draftText || lastTranscript || lastReply) && (
-          <div className="bg-black/60 border border-[#00d4ff]/30 p-4 rounded-md backdrop-blur-md">
+          <div className="bg-black/60 border border-[#00d4ff]/30 p-4 rounded-md">
             {draftText && (
               <div className="text-[#00ffcc] font-bold text-sm mb-1 animate-pulse">
                 &gt; A ouvir: {draftText}

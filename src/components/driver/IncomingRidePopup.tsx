@@ -26,14 +26,14 @@ const IncomingRidePopup: React.FC<IncomingRidePopupProps> = ({
     return (
       <div className="bg-surface-container-low border-2 border-primary p-8 rounded-[3.5rem] shadow-[0_40px_100px_rgba(230,195,100,0.1)] animate-in slide-in-from-bottom-20 duration-500">
         <div className="flex items-center gap-3 mb-5">
-          <span className="text-2xl">🎯</span>
+          <span className="material-symbols-outlined" style={{fontSize:'inherit'}}>my_location</span>
           <div>
             <p className="text-[10px] font-black text-primary uppercase tracking-widest">Passageiro escolheu-te!</p>
             <p className="text-[9px] text-on-surface-variant/70 font-bold">Confirma para começar a corrida</p>
           </div>
         </div>
-        <InfoRow icon="📍" label="Origem" value={incomingRide.origin_address} />
-        <InfoRow icon="🏁" label="Destino" value={incomingRide.dest_address} />
+        <InfoRow icon="location_on" label="Origem" value={incomingRide.origin_address} />
+        <InfoRow icon="flag" label="Destino" value={incomingRide.dest_address} />
         <div className="flex gap-2 my-4">
           <Pill label={`${incomingRide.price_kz.toLocaleString('pt-AO')} Kz`} blue />
           {(incomingRide as any).distance_km && <Pill label={`${(incomingRide as any).distance_km.toFixed(1)} km`} />}
@@ -71,8 +71,8 @@ const IncomingRidePopup: React.FC<IncomingRidePopupProps> = ({
           </p>
         </div>
       </div>
-      <InfoRow icon="📍" label="Origem" value={incomingRide.origin_address} />
-      <InfoRow icon="🏁" label="Destino" value={incomingRide.dest_address} />
+      <InfoRow icon="location_on" label="Origem" value={incomingRide.origin_address} />
+      <InfoRow icon="flag" label="Destino" value={incomingRide.dest_address} />
       <div className="flex gap-2 my-4">
         <Pill label={`${incomingRide.price_kz.toLocaleString('pt-AO')} Kz`} blue />
         {(incomingRide as any).distance_km && <Pill label={`${(incomingRide as any).distance_km.toFixed(1)} km`} />}
@@ -99,7 +99,7 @@ const IncomingRidePopup: React.FC<IncomingRidePopupProps> = ({
 // ── Sub-componentes ──
 const InfoRow: React.FC<{ icon: string; label: string; value: string }> = ({ icon, label, value }) => (
   <div className="flex gap-3 items-start mb-3">
-    <span className="text-lg shrink-0">{icon}</span>
+    <span className="material-symbols-outlined shrink-0" style={{ fontSize: '20px' }}>{icon}</span>
     <div className="min-w-0">
       <p className="text-[8px] font-black text-on-surface-variant/70 uppercase">{label}</p>
       <p className="text-sm font-black text-on-surface truncate">{value}</p>

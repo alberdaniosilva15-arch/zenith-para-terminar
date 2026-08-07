@@ -67,8 +67,8 @@ export default function MultiStopInput({ destCoords, onExtraDropSet, onExtraDrop
         marginTop: 12,
       }}>
         <div>
-          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}>🚶‍♂️ Segundo destino</span>
-          <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#ffaa00' }}>📍 {address}</p>
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)' }}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>directions_walk</span> Segundo destino</span>
+          <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: '#ffaa00' }}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> {address}</p>
           <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>+{EXTRA_DROP_FEE} Kz para o motorista</span>
         </div>
         <button onClick={handleClear} style={{
@@ -115,7 +115,7 @@ export default function MultiStopInput({ destCoords, onExtraDropSet, onExtraDrop
       background: 'rgba(0,0,0,0.3)',
     }}>
       <p style={{ margin: '0 0 8px', fontSize: 12, color: '#ffaa00', fontWeight: 700 }}>
-        🚶‍♂️ Segundo destino (max {MAX_EXTRA_DISTANCE_KM} km do destino)
+        <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>directions_walk</span> Segundo destino (max {MAX_EXTRA_DISTANCE_KM} km do destino)
       </p>
       <p style={{ margin: '0 0 12px', fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>
         O motorista deixa primeiro no ponto A e depois vai ao ponto B. Custo extra: +{EXTRA_DROP_FEE} Kz.
@@ -131,7 +131,7 @@ export default function MultiStopInput({ destCoords, onExtraDropSet, onExtraDrop
       />
 
       {error && (
-        <p style={{ margin: '0 0 8px', fontSize: 11, color: '#ef4444' }}>⚠️ {error}</p>
+        <p style={{ margin: '0 0 8px', fontSize: 11, color: '#ef4444' }}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>warning</span> {error}</p>
       )}
 
       <div style={{ display: 'flex', gap: 8 }}>

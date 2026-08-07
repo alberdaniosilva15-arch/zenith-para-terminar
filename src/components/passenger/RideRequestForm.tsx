@@ -179,7 +179,7 @@ const RideRequestForm: React.FC<RideRequestFormProps> = ({
               </p>
             )}
             {routeData && (
-              <p className="zr-copy">Distância {routeData.distanceKm.toFixed(1)} km - tráfego {routeData.trafficFactor > 1.3 ? 'intenso' : 'leve'}</p>
+              <p className="zr-copy">Distância {routeData.distanceKm.toFixed(1)} km, tráfego {routeData.trafficFactor > 1.3 ? 'intenso' : 'leve'}</p>
             )}
           </div>
           <div className="zr-alert-box">

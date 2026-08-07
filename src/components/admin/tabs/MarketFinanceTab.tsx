@@ -183,8 +183,8 @@ export const MarketFinanceTab: React.FC = () => {
               <p className="font-body-sm text-on-surface-variant">Assim que houver viagens com status `completed`, a receita aparece aqui.</p>
             </div>
           ) : (
-            <div className="bg-[#050505]/90 backdrop-blur-md border border-primary/15 rounded-xl overflow-hidden">
-              <div className="grid grid-cols-[1.2fr_1.2fr_0.7fr_0.8fr] gap-3 border-b border-primary/10 px-6 py-4 text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">
+            <div className="bg-[#050505]/90 border border-primary/15 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-2 md:grid-cols-[1.2fr_1.2fr_0.7fr_0.8fr] gap-3 border-b border-primary/10 px-6 py-4 text-[11px] font-bold uppercase tracking-widest text-on-surface-variant">
                 <span>Origem</span>
                 <span>Destino</span>
                 <span>Valor</span>
@@ -192,7 +192,7 @@ export const MarketFinanceTab: React.FC = () => {
               </div>
               <div className="divide-y divide-primary/5">
                 {data.map((ride) => (
-                  <div key={ride.id} className="grid grid-cols-[1.2fr_1.2fr_0.7fr_0.8fr] gap-3 px-6 py-4 text-sm text-on-surface">
+                  <div key={ride.id} className="grid grid-cols-2 md:grid-cols-[1.2fr_1.2fr_0.7fr_0.8fr] gap-3 px-6 py-4 text-sm text-on-surface">
                     <span>{ride.origin_address || 'Origem indisponivel'}</span>
                     <span>{ride.dest_address || 'Destino indisponivel'}</span>
                     <span className="font-bold text-primary">{Math.round(Number(ride.price_kz ?? 0)).toLocaleString('pt-AO')} Kz</span>

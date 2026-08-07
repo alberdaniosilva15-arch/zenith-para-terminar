@@ -219,6 +219,13 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>, ti
         signal: controller.signal,
       });
 
+      if (res.status === 429) {
+        const retryAfter = res.headers.get('retry-after');
+        throw new Error(
+          `Quota da IA esgotada. ${retryAfter ? `Tenta em ${retryAfter}s.` : 'Contacta o suporte.'}`
+        );
+      }
+
       if (!res.ok) {
         let errorMsg = `Erro HTTP ${res.status}`;
         try {

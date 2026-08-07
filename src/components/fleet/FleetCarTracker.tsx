@@ -23,7 +23,8 @@ function createWhiteCarMarkerElement() {
   el.style.alignItems = 'center';
   el.style.justifyContent = 'center';
   const span = document.createElement('span');
-  span.textContent = '🚗';
+  span.className = 'material-symbols-outlined';
+  span.textContent = 'directions_car';
   span.style.fontSize = '24px';
   el.appendChild(span);
   return el;
@@ -83,7 +84,7 @@ const FleetCarTracker: React.FC<FleetCarTrackerProps> = ({ car, driverName, loca
         {!coords && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-10">
             <div className="text-center p-6 bg-black/80 rounded-3xl border border-white/10 max-w-[80%]">
-              <span className="text-4xl block mb-4">🛡️</span>
+              <span className="material-symbols-outlined text-4xl block mb-4">shield</span>
               <h3 className="text-lg font-black text-white mb-2">Localização Oculta</h3>
               <p className="text-sm text-white/60">
                 A viatura não pode ser rastreada neste momento devido ao acordo de blackout ativo (privacidade do motorista).

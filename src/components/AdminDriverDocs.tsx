@@ -163,7 +163,7 @@ export function AdminDriverDocs() {
               <div className="p-4 border-b border-outline-variant flex justify-between items-center bg-surface-container/50">
                 <div>
                   <p className="text-sm font-black text-white">{d.profiles?.[0]?.name || 'Desconhecido'}</p>
-                  <p className="text-[10px] text-on-surface-variant font-bold">{d.profiles?.[0]?.phone || 'Sem terminal'} - Submetido em {new Date(d.created_at).toLocaleDateString('pt-AO')}</p>
+                  <p className="text-[10px] text-on-surface-variant font-bold">{d.profiles?.[0]?.phone || 'Sem terminal'}. Submetido em {new Date(d.created_at).toLocaleDateString('pt-AO')}</p>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase ${
                   d.status === 'approved' ? 'bg-green-500/20 text-green-400' :
@@ -209,7 +209,7 @@ export function AdminDriverDocs() {
                 <div className="p-3 border-t border-outline-variant bg-surface-container/30 flex flex-col gap-2">
                   {d.status === 'pending' && (
                     <button onClick={() => handleSentinelAnalysis(d.id)} className="w-full px-6 py-3 text-[10px] font-black uppercase bg-surface-container-highest text-primary border border-primary/30 rounded-xl hover:bg-primary/10 transition-colors">
-                      🛡️ Delegar Análise ao Sentinel IA
+                      <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>shield</span> Delegar Análise ao Sentinel IA
                     </button>
                   )}
                   <div className="flex gap-2 justify-end w-full">

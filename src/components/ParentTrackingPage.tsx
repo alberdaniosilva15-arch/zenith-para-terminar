@@ -252,7 +252,7 @@ export default function ParentTrackingPage() {
 
       <div className="absolute top-0 left-0 right-0 p-6 pointer-events-none">
         <div className="max-w-md mx-auto flex items-start justify-between">
-          <div className="bg-[#0B0B0B]/80 backdrop-blur-2xl border border-white/10 p-5 rounded-[2.5rem] shadow-2xl pointer-events-auto animate-in fade-in slide-in-from-top-4 duration-700">
+          <div className="bg-[#0B0B0B]/80 border border-white/10 p-5 rounded-[2.5rem] shadow-2xl pointer-events-auto animate-in fade-in slide-in-from-top-4 duration-700">
             <div className="flex items-center gap-5">
               <div className="w-14 h-14 bg-primary rounded-3xl flex items-center justify-center font-black text-white text-2xl shadow-lg shadow-primary/20">
                 {ride?.studentName?.charAt(0) || "Z"}
@@ -283,7 +283,7 @@ export default function ParentTrackingPage() {
       <div className="absolute bottom-10 left-0 right-0 pointer-events-none flex flex-col items-center gap-2 opacity-30">
         <div className="w-1 h-1 bg-green-500 rounded-full animate-ping" />
         <p className="text-[8px] font-black text-white tracking-[0.6em] uppercase">
-          Zenith Orbital Systems - Luanda, AO
+          Zenith Orbital Systems, Luanda, AO
         </p>
       </div>
     </div>

@@ -103,7 +103,7 @@ export default function CharterModal({
               Comeca como marketplace. Capturamos a tua rota agora e alinhamos a operacao com parceiros.
             </p>
           </div>
-          <button onClick={onClose} className="h-10 w-10 rounded-full bg-white/5 text-white/55">
+          <button onClick={onClose} className="h-10 w-10 rounded-full bg-surface-container text-white/55">
             x
           </button>
         </div>
@@ -128,7 +128,7 @@ export default function CharterModal({
 
           <section className="space-y-3">
             <SectionTitle title="2. Capacidade" />
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {CAPACITY_OPTIONS.map((item) => (
                 <OptionCard key={item} active={capacity === item} onClick={() => setCapacity(item)}>
                   {item} pessoas
@@ -143,7 +143,7 @@ export default function CharterModal({
               type="datetime-local"
               value={scheduledAt}
               onChange={(event) => setScheduledAt(event.target.value)}
-              className="w-full rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+              className="w-full rounded-[1.5rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
             />
           </section>
 
@@ -153,9 +153,9 @@ export default function CharterModal({
               value={routeDescription}
               onChange={(event) => setRouteDescription(event.target.value)}
               placeholder="Pickup, paragens intermédias e destino final. Uma paragem por linha."
-              className="min-h-[120px] w-full rounded-[1.75rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+              className="min-h-[120px] w-full rounded-[1.75rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
             />
-            <label className="flex items-center justify-between rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4">
+            <label className="flex items-center justify-between rounded-[1.5rem] border border-white/10 bg-surface-container px-4 py-4">
               <div>
                 <p className="text-sm font-black text-white">Ida e volta</p>
                 <p className="text-[10px] font-bold text-white/50">Acrescenta margem operacional na estimativa</p>
@@ -163,7 +163,7 @@ export default function CharterModal({
               <button
                 type="button"
                 onClick={() => setReturnTrip((value) => !value)}
-                className={`h-8 w-14 rounded-full transition-all ${returnTrip ? 'bg-[#E6C364]' : 'bg-white/10'}`}
+                className={`h-8 w-14 rounded-full transition-all ${returnTrip ? 'bg-[#E6C364]' : 'bg-surface-2'}`}
               >
                 <span
                   className={`block h-6 w-6 rounded-full bg-white transition-all ${returnTrip ? 'translate-x-7' : 'translate-x-1'}`}
@@ -199,7 +199,7 @@ export default function CharterModal({
             value={notes}
             onChange={(event) => setNotes(event.target.value)}
             placeholder="Notas especiais, acessos, horário de embarque, perfil dos passageiros..."
-            className="min-h-[110px] w-full rounded-[1.75rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+            className="min-h-[110px] w-full rounded-[1.75rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
           />
         </div>
 
@@ -239,7 +239,7 @@ function OptionCard({
     <button
       onClick={onClick}
       className={`rounded-[1.5rem] border px-4 py-4 text-left text-sm font-black transition-all ${
-        active ? 'border-[#E6C364]/35 bg-[#E6C364]/10 text-[#E6C364]' : 'border-white/10 bg-white/5 text-white'
+        active ? 'border-[#E6C364]/35 bg-[#E6C364]/10 text-[#E6C364]' : 'border-white/10 bg-surface-container text-white'
       }`}
     >
       {children}

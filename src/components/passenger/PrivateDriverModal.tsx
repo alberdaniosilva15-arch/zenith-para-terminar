@@ -100,7 +100,7 @@ export default function PrivateDriverModal({
               Serviço premium com activação faseada. Regista-te primeiro e entra na fila de lançamento.
             </p>
           </div>
-          <button onClick={onClose} className="h-10 w-10 rounded-full bg-white/5 text-white/55">
+          <button onClick={onClose} className="h-10 w-10 rounded-full bg-surface-container text-white/55">
             ×
           </button>
         </div>
@@ -138,7 +138,7 @@ export default function PrivateDriverModal({
 
           <section className="space-y-3">
             <SectionTitle title="2. Classe do carro" />
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
               {(['standard', 'suv', 'executive'] as VehicleClass[]).map((item) => (
                 <OptionCard key={item} active={vehicleClass === item} onClick={() => setVehicleClass(item)}>
                   {item === 'standard' ? 'Standard' : item === 'suv' ? 'SUV' : 'Executivo'}
@@ -153,7 +153,7 @@ export default function PrivateDriverModal({
               type="datetime-local"
               value={scheduledAt}
               onChange={(event) => setScheduledAt(event.target.value)}
-              className="w-full rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+              className="w-full rounded-[1.5rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
             />
           </section>
 
@@ -162,12 +162,12 @@ export default function PrivateDriverModal({
             <select
               value={favoriteDriverId}
               onChange={(event) => setFavoriteDriverId(event.target.value)}
-              className="w-full rounded-[1.5rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none"
+              className="w-full rounded-[1.5rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none"
             >
               <option value="">Sem preferência</option>
               {favoriteDrivers.map((driver) => (
                 <option key={driver.driver_id} value={driver.driver_id}>
-                  {driver.driver_name} · {driver.rating.toFixed(1)}★ · {driver.total_rides} corridas
+                  {driver.driver_name} · {driver.rating.toFixed(1)}<span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>star</span> · {driver.total_rides} corridas
                 </option>
               ))}
             </select>
@@ -190,7 +190,7 @@ export default function PrivateDriverModal({
                   </p>
                 </div>
                 <div className="rounded-full bg-[#E6C364]/15 px-3 py-2 text-[10px] font-black uppercase tracking-widest text-[#E6C364]">
-                  🔒 Em breve
+                  <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>lock</span> Em breve
                 </div>
               </div>
             </div>
@@ -200,7 +200,7 @@ export default function PrivateDriverModal({
             value={notes}
             onChange={(event) => setNotes(event.target.value)}
             placeholder="Notas especiais, preferências de rota ou contexto do serviço..."
-            className="min-h-[110px] w-full rounded-[1.75rem] border border-white/10 bg-white/5 px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
+            className="min-h-[110px] w-full rounded-[1.75rem] border border-white/10 bg-surface-container px-4 py-4 text-sm outline-none focus:border-[#E6C364]/40"
           />
         </div>
 
@@ -240,7 +240,7 @@ function OptionCard({
     <button
       onClick={onClick}
       className={`rounded-[1.5rem] border px-4 py-4 text-left text-sm font-black transition-all ${
-        active ? 'border-[#E6C364]/35 bg-[#E6C364]/10 text-[#E6C364]' : 'border-white/10 bg-white/5 text-white'
+        active ? 'border-[#E6C364]/35 bg-[#E6C364]/10 text-[#E6C364]' : 'border-white/10 bg-surface-container text-white'
       }`}
     >
       {children}

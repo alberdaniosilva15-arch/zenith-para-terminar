@@ -10,6 +10,8 @@
 
 import React, { useState, useCallback, useRef, useEffect, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAutoScroll } from '../hooks/useAutoScroll';
+import { useAuth } from '../contexts/AuthContext';
 
 import LocationSearch from './passenger/LocationSearch';
 import RoutePreview from './passenger/RoutePreview';
@@ -124,6 +126,10 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [silentPanicSignal, setSilentPanicSignal] = useState(0);
   const [extraDropAddress, setExtraDropAddress] = useState<string | null>(null);
   const [extraDropCoords, setExtraDropCoords] = useState<LatLng | null>(null);
+  
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useAutoScroll(scrollRef, 0.5);
+
   const shouldMountMap = useIdleMount(isVisible);
   const hasActiveRideSafety =
     ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.IN_PROGRESS;
@@ -319,7 +325,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       setSelecting(null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Não foi possível obter a localização.';
-      showToast(`📍 ${msg}`, 'error');
+      showToast(`${msg}`, 'error');
     } finally {
       setSearching(false);
     }
@@ -373,7 +379,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       setFareExpiresAt(Date.now() + 120 * 1000); // 2 minutos de lock
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Erro ao calcular rota. Verifica a tua ligação.';
-      showToast(`❌ ${msg}`, 'error');
+      showToast(`${msg}`, 'error');
       setRouteData(null);
       setFareData(null);
     } finally {
@@ -400,7 +406,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
         setUserLocation(coords);
         success = true;
       } catch (err) {
-        showToast('❌ Não foi possível obter a tua localização. Activa o GPS.', 'error');
+        showToast('Não foi possível obter a tua localização. Activa o GPS.', 'error');
       } finally {
         setSearching(false);
       }
@@ -439,7 +445,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       );
     } catch (err) {
       console.error('[PassengerHome] handleConfirmDriver falhou:', err);
-      showToast('❌ Erro ao confirmar motorista. Verifica a tua ligação e tenta de novo.', 'error');
+      showToast('Erro ao confirmar motorista. Verifica a tua ligação e tenta de novo.', 'error');
     } finally {
       setLoadingRide(false);
     }
@@ -463,7 +469,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       );
     } catch (err) {
       console.error('[PassengerHome] handleRequestNormalRide falhou:', err);
-      showToast('❌ Erro ao pedir corrida. Verifica a tua ligação e tenta de novo.', 'error');
+      showToast('Erro ao pedir corrida. Verifica a tua ligação e tenta de novo.', 'error');
     } finally {
       setLoadingRide(false);
     }
@@ -698,26 +704,28 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                     </div>
                     <span className="material-symbols-outlined" style={{color:'var(--gold)'}}>widgets</span>
                   </div>
-                  <div className="zr-scroll-x" style={{ marginTop: '14px' }}>
-                    <button className="zr-option" onClick={() => navigate('/contrato')}>
-                      <strong>Contratos</strong><span>Escolar, Familiar e Empresas</span>
-                    </button>
-                    <button className="zr-option" onClick={() => setShowReferral(true)}>
-                      <strong>Traz o Mano</strong><span>Ganha 500 Kz por convite</span>
-                    </button>
-                    <button
-                      className="zr-option"
-                      onClick={() => {
-                        if (!ensureEmergencyContact('Define um contacto de emergência antes de agendar corridas.')) return;
-                        setScheduleDefaults(null);
-                        setShowSchedule(true);
-                      }}
-                    >
-                      <strong>Agendar</strong><span>Data, hora e recorrencia</span>
-                    </button>
-                    <button className="zr-option" onClick={() => navigate('/pos_viagem_review')}>
-                      <strong>Pos-viagem</strong><span>Avaliacao e recibo</span>
-                    </button>
+                  <div className="zr-scroll-hint">
+                    <div className="zr-scroll-x" style={{ marginTop: '14px' }} ref={scrollRef}>
+                      <button className="zr-option" onClick={() => navigate('/contrato')}>
+                        <strong>Contratos</strong><span>Escolar, Familiar e Empresas</span>
+                      </button>
+                      <button className="zr-option" onClick={() => setShowReferral(true)}>
+                        <strong>Traz o Mano</strong><span>Ganha 500 Kz por convite</span>
+                      </button>
+                      <button
+                        className="zr-option"
+                        onClick={() => {
+                          if (!ensureEmergencyContact('Define um contacto de emergência antes de agendar corridas.')) return;
+                          setScheduleDefaults(null);
+                          setShowSchedule(true);
+                        }}
+                      >
+                        <strong>Agendar</strong><span>Data, hora e recorrencia</span>
+                      </button>
+                      <button className="zr-option" onClick={() => navigate('/pos_viagem_review')}>
+                        <strong>Pos-viagem</strong><span>Avaliacao e recibo</span>
+                      </button>
+                    </div>
                   </div>
                 </section>
               </>
@@ -749,7 +757,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               emergencyPhone={emergencyPhone}
             />
             {hasActiveRideSafety && (
-              <div style={{ position: 'fixed', top: '100px', right: '14px', zIndex: 1001, width: '220px' }}>
+              <div style={{ position: 'fixed', top: '100px', right: '14px', zIndex: 1001, width: 'auto', maxWidth: '60vw' }}>
                 <PanicButton
                   userId={userId}
                   rideId={ride.rideId}

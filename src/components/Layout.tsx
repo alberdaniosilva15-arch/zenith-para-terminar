@@ -139,6 +139,7 @@ const Layout: React.FC<LayoutProps> = ({
               <span className="material-symbols-outlined">
                 {TAB_ICONS[tab]}
               </span>
+              <span className="zr-nav-label">{labels[tab]}</span>
             </button>
           );
         })}

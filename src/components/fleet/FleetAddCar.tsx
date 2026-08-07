@@ -92,7 +92,7 @@ const FleetAddCar: React.FC<FleetAddCarProps> = ({ fleetId, onCreated, onClose }
             <p className="text-[9px] uppercase tracking-[0.22em] text-primary/70 font-black">Nova viatura</p>
             <h3 className="text-lg font-black mt-1">Adicionar carro a frota</h3>
           </div>
-          <button onClick={onClose} className="w-9 h-9 rounded-full bg-white/5 text-white/60">×</button>
+          <button onClick={onClose} className="w-9 h-9 rounded-full bg-surface-container text-white/60">×</button>
         </div>
 
         <div className="space-y-4">
@@ -123,7 +123,7 @@ const FleetAddCar: React.FC<FleetAddCarProps> = ({ fleetId, onCreated, onClose }
           </button>
           <button
             onClick={onClose}
-            className="flex-1 py-3 rounded-2xl bg-white/5 border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest"
+            className="flex-1 py-3 rounded-2xl bg-surface-container border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest"
           >
             Fechar
           </button>
@@ -151,7 +151,7 @@ function Field({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-2xl bg-white/5 border border-white/10 px-4 py-3 text-sm outline-none focus:border-primary/50"
+        className="w-full rounded-2xl bg-surface-container border border-white/10 px-4 py-3 text-sm outline-none focus:border-primary/50"
       />
     </div>
   );

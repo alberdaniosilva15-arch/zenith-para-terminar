@@ -30,6 +30,7 @@ import { RideStatus, UserRole } from '../types';
 import { useToastStore } from '../store/useAppStore';
 import { cellToLatLng, latLngToCell, gridDisk } from 'h3-js';
 import { MapSingleton } from '../lib/mapInstance';
+import DriverRecharge from './driver/DriverRecharge';
 
 const Map3D = React.lazy(() => import('./Map3D'));
 
@@ -71,6 +72,13 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const [clockTick, setClockTick] = useState(() => Date.now());
   const [silentPanicSignal, setSilentPanicSignal] = useState(0);
   const [suspiciousPassenger, setSuspiciousPassenger] = useState<{ message: string; severity: 'soft' | 'high' } | null>(null);
+
+  // Crédito operacional do motorista
+  const [driverWallet, setDriverWallet] = useState<{
+    operational_credit: number;
+    status: string;
+  } | null>(null);
+  const [showRecharge, setShowRecharge] = useState(false);
   const [pendingAgreement, setPendingAgreement] = useState<(FleetDriverAgreementRecord & { fleet_name?: string | null }) | null>(null);
   // Contagem de notificações pendentes não lidas
   const [pendingNotifCount, setPendingNotifCount] = useState(0);
@@ -89,6 +97,25 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   // ✅ BUG #7 CORRIGIDO: timers para auto-mark notifications como lidas
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const mountedRef = useRef(true);
+
+  // Carregar credito operacional do motorista
+  useEffect(() => {
+    if (!driverId) return;
+    const loadWallet = async () => {
+      try {
+        const { data } = await supabase.rpc('get_driver_wallet_status');
+        if (data?.has_wallet) {
+          setDriverWallet({
+            operational_credit: data.operational_credit ?? 0,
+            status: data.status ?? 'active',
+          });
+        }
+      } catch (e) {
+        console.warn('[DriverHome] wallet load:', e);
+      }
+    };
+    void loadWallet();
+  }, [driverId]);
 
   useEffect(() => {
     if (!profile) return;
@@ -163,7 +190,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       dot.style.cssText = `width:40px;height:40px;border-radius:50%;background:${isHot ? 'rgba(239,68,68,0.3)' : 'rgba(249,115,22,0.3)'};border:1px solid ${isHot ? 'rgba(239,68,68,0.8)' : 'rgba(249,115,22,0.8)'};display:flex;align-items:center;justify-content:center;animation:pulse 2s infinite;`;
       const icon = document.createElement('span');
       icon.style.cssText = 'font-size:8px;font-weight:bold;color:white;';
-      icon.textContent = '🔥';
+      icon.className = 'material-symbols-outlined';
+      icon.textContent = 'local_fire_department';
       dot.appendChild(icon);
       el.appendChild(dot);
 
@@ -249,8 +277,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           setSuspiciousPassenger({
             severity: rating < 3 || cancelRate > 55 ? 'high' : 'soft',
             message: rating < 3.5
-              ? `⚠️ Passageiro com rating ${rating.toFixed(1)}`
-              : `⚠️ Passageiro com historico de cancelamentos (${cancelRate.toFixed(0)}%)`,
+              ? `Passageiro com rating ${rating.toFixed(1)}`
+              : `Passageiro com historico de cancelamentos (${cancelRate.toFixed(0)}%)`,
           });
           return;
         }
@@ -660,8 +688,28 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     }
   };
 
+  // Bloquear se sem credito operacional
+  const isBlocked = driverWallet !== null && driverWallet.operational_credit <= 0;
+
   return (
     <div className="zr-app" style={{ minHeight: '100vh', paddingBottom: '120px', backgroundColor: 'var(--bg)' }}>
+      {isBlocked && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 50, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div className="zr-card" style={{ maxWidth: '400px', width: '100%', textAlign: 'center', padding: '32px 24px' }}>
+            <span className="material-symbols-outlined" style={{ fontSize: '48px', color: 'var(--danger)', marginBottom: '16px' }}>block</span>
+            <h3 style={{ color: 'var(--text)', marginBottom: '8px', fontWeight: 900, fontSize: '16px' }}>Credito Operacional Esgotado</h3>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '24px', fontSize: '13px' }}>
+              Recarrega o teu credito operacional para continuar a receber corridas.
+            </p>
+            <button onClick={() => setShowRecharge(true)} className="zr-button" style={{ width: '100%', marginBottom: '12px' }}>
+              RECARREGAR CREDITO
+            </button>
+            <p style={{ color: 'var(--muted)', fontSize: '11px' }}>
+              Ainda podes: levantar dinheiro, ver historico, editar perfil
+            </p>
+          </div>
+        </div>
+      )}
       <header className="zr-header">
         <div className="zr-inline zr-inline--between">
           <div>
@@ -768,7 +816,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           
           <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <div className="zr-chip zr-chip--muted" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', border: '1px solid var(--line)' }}>
-              ⛽ 300-350 Kz/L
+              <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>local_gas_station</span> 300-350 Kz/L
             </div>
           </div>
           
@@ -853,13 +901,13 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
         {/* Estado Offline / Dicas */}
         {!isOnline && !ride.rideId && (
-          <div className="zr-empty" style={{ padding: '40px 20px', background: 'var(--surface)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--line)' }}>
+          <div className="zr-empty" style={{ padding: '24px 16px', background: 'var(--surface)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--line)' }}>
             <span className="material-symbols-outlined" style={{ fontSize: '48px', color: 'var(--muted)', marginBottom: '12px' }}>no_accounts</span>
             <h3 className="zr-section-title">Estás Offline</h3>
             <p className="zr-copy">Fica online para começar a receber pedidos de Luanda.</p>
             {simulation?.tips && (
               <div style={{ marginTop: '20px', padding: '12px', borderTop: '1px solid var(--line)' }}>
-                <p className="zr-meta">💡 {simulation.tips}</p>
+                <p className="zr-meta"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>lightbulb</span> {simulation.tips}</p>
               </div>
             )}
           </div>
@@ -904,6 +952,25 @@ const DriverHome: React.FC<DriverHomeProps> = ({
               ...agreement,
               fleet_name: agreement.fleets?.name ?? null,
             } : null);
+          }}
+        />
+      )}
+
+      {/* Modal de Recarga */}
+      {showRecharge && (
+        <DriverRecharge
+          onClose={() => setShowRecharge(false)}
+          onSuccess={() => {
+            setShowRecharge(false);
+            // Reload wallet
+            supabase.rpc('get_driver_wallet_status').then(({ data }) => {
+              if (data?.has_wallet) {
+                setDriverWallet({
+                  operational_credit: data.operational_credit ?? 0,
+                  status: data.status ?? 'active',
+                });
+              }
+            });
           }}
         />
       )}

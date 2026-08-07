@@ -45,6 +45,8 @@ export const DEFAULT_MODELS_BY_PROVIDER: Record<AiProvider, AiModelOption[]> = {
     { id: 'claude-3-5-haiku-latest', label: 'Claude 3.5 Haiku' },
   ],
   openrouter: [
+    { id: 'openrouter/free', label: 'OpenRouter Auto (Gratuito)' },
+    { id: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B (Pago)' },
     { id: 'openai/gpt-4o-mini', label: 'OpenRouter GPT-4o Mini' },
   ],
   groq: [
@@ -90,12 +92,18 @@ export function getProviderBaseUrl(provider: AiProvider, storedBaseUrl = '') {
 }
 
 export function getAiModelSettings(): AiModelSettings {
-  const provider = normalizeProvider(getStored(LS_IA_PROVIDER, 'groq'));
+  const provider = normalizeProvider(getStored(LS_IA_PROVIDER, 'openrouter'));
   let model = getStored(LS_IA_MODEL, getDefaultModel(provider)) || getDefaultModel(provider);
   
   // Re-map deprecated models to avoid 404
   if (model.includes('gemini-1.5-pro') || model.includes('gemini-2.0')) model = 'gemini-2.5-pro';
   if (model.includes('gemini-1.5-flash')) model = 'gemini-2.5-flash';
+
+  // Fallback se o modelo armazenado já não existir na lista do provider
+  const availableModels = DEFAULT_MODELS_BY_PROVIDER[provider] || [];
+  if (!availableModels.some(m => m.id === model)) {
+    model = getDefaultModel(provider);
+  }
 
   return {
     provider,

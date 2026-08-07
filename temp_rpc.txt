@@ -1,0 +1,136 @@
+﻿
+  zenith_schema_final.sq
+l:693:
+  zenith_schema_final.sq
+l:694:-- 8.2 Procura de 
+motoristas próximos
+> zenith_schema_final.sq
+l:695:DROP FUNCTION IF 
+EXISTS find_nearby_drive
+rs(DOUBLE PRECISION, 
+DOUBLE PRECISION, 
+DOUBLE PRECISION, INT);
+> zenith_schema_final.sq
+l:696:CREATE OR REPLACE 
+FUNCTION public.find_nea
+rby_drivers(
+  zenith_schema_final.sq
+l:697:  p_lat       
+DOUBLE PRECISION,
+  zenith_schema_final.sq
+l:698:  p_lng       
+DOUBLE PRECISION,
+  zenith_schema_final.sq
+l:699:  p_radius_km 
+DOUBLE PRECISION 
+DEFAULT 5.0,
+  zenith_schema_final.sq
+l:700:  p_limit     INT 
+DEFAULT 10
+  zenith_schema_final.sq
+l:701:)
+  zenith_schema_final.sq
+l:702:RETURNS TABLE(
+  zenith_schema_final.sq
+l:703:  driver_id   
+UUID,
+  zenith_schema_final.sq
+l:704:  driver_name 
+TEXT,
+  zenith_schema_final.sq
+l:705:  rating      
+NUMERIC,
+  zenith_schema_final.sq
+l:706:  distance_m  
+DOUBLE PRECISION,
+  zenith_schema_final.sq
+l:707:  heading     
+NUMERIC
+  zenith_schema_final.sq
+l:708:)
+  zenith_schema_final.sq
+l:709:LANGUAGE plpgsql
+  zenith_schema_final.sq
+l:710:SECURITY DEFINER
+  zenith_schema_final.sq
+l:711:SET search_path = 
+public
+  zenith_schema_final.sq
+l:712:AS $$
+  zenith_schema_final.sq
+l:713:BEGIN
+  zenith_schema_final.sq
+l:714:  RETURN QUERY
+  zenith_schema_final.sq
+l:715:  SELECT
+  zenith_schema_final.sq
+l:716:    dl.driver_id,
+  zenith_schema_final.sq
+l:717:    pr.name,
+  zenith_schema_final.sq
+l:718:    pr.rating,
+  zenith_schema_final.sq
+l:719:    
+ST_Distance(dl.location,
+  zenith_schema_final.sq
+l:720:      ST_SetSRID(S
+T_MakePoint(p_lng, 
+p_lat), 
+4326)::geography) AS 
+distance_m,
+  zenith_schema_final.sq
+l:721:    dl.heading
+  zenith_schema_final.sq
+l:722:  FROM 
+public.driver_locations 
+dl
+  zenith_schema_final.sq
+l:723:  JOIN 
+public.profiles pr ON 
+pr.user_id = 
+dl.driver_id
+  zenith_schema_final.sq
+l:724:  WHERE dl.status 
+= 'available'
+  zenith_schema_final.sq
+l:725:    AND 
+ST_DWithin(dl.location,
+  zenith_schema_final.sq
+l:726:      ST_SetSRID(S
+T_MakePoint(p_lng, 
+p_lat), 
+4326)::geography,
+  zenith_schema_final.sq
+l:727:      p_radius_km 
+* 1000)
+  zenith_schema_final.sq
+l:728:  ORDER BY
+  zenith_schema_final.sq
+l:729:    (ST_Distance(d
+l.location, ST_SetSRID(S
+T_MakePoint(p_lng, 
+p_lat), 
+4326)::geography) * 0.7)
+  zenith_schema_final.sq
+l:730:    + ((5.0 - 
+pr.rating) * 500 * 0.3)
+  zenith_schema_final.sq
+l:731:  LIMIT p_limit;
+  zenith_schema_final.sq
+l:732:END;
+  zenith_schema_final.sq
+l:733:$$;
+  zenith_schema_final.sq
+l:734:
+  zenith_schema_final.sq
+l:735:-- 8.3 Procura de 
+motoristas para leilão
+  zenith_schema_final.sq
+l:736:DROP FUNCTION IF 
+EXISTS find_drivers_for_
+auction(DOUBLE 
+PRECISION, DOUBLE 
+PRECISION, DOUBLE 
+PRECISION, INT);
+
+

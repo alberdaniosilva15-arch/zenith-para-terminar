@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import type { ServiceType } from '../../types';
+import { useAutoScroll } from '../../hooks/useAutoScroll';
 
 type StandardVehicleType = Extract<ServiceType, 'standard' | 'moto' | 'comfort' | 'xl'>;
 type PremiumServiceType = Extract<ServiceType, 'private_driver' | 'charter' | 'cargo'>;
@@ -38,9 +39,13 @@ export default function ServiceCarousel({
   onSelectVehicle,
   onOpenService,
 }: ServiceCarouselProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useAutoScroll(scrollRef, 0.5);
+
   return (
-    <div className="zr-scroll-x" style={{ marginTop: '14px' }}>
-      {STANDARD_SERVICES.map((service) => {
+    <div className="zr-scroll-hint">
+      <div className="zr-scroll-x" style={{ marginTop: '14px' }} ref={scrollRef}>
+        {STANDARD_SERVICES.map((service) => {
         const isActive = selectedVehicle === service.id;
         return (
           <button
@@ -67,6 +72,7 @@ export default function ServiceCarousel({
           <span style={{ opacity: 0.8 }}>{service.subtitle}</span>
         </button>
       ))}
+      </div>
     </div>
   );
 }

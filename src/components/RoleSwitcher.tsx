@@ -135,7 +135,7 @@ export default function RoleSwitcher({ compact = false }: RoleSwitcherProps) {
       <div className="relative">
         <button
           onClick={() => setMenuOpen((value) => !value)}
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[13px] font-black transition-all"
+          className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-surface-container text-[13px] font-black transition-all"
           title={ROLE_META[currentRole].label}
         >
           {ROLE_META[currentRole].icon}
@@ -149,7 +149,7 @@ export default function RoleSwitcher({ compact = false }: RoleSwitcherProps) {
                 onClick={() => void handleSwitch(item)}
                 disabled={loading}
                 className={`w-full rounded-xl px-3 py-3 text-left transition-all ${
-                  item === role ? 'bg-primary/15 text-primary' : 'text-white/80 hover:bg-white/5'
+                  item === role ? 'bg-primary/15 text-primary' : 'text-white/80 hover:bg-surface-container'
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -184,7 +184,7 @@ export default function RoleSwitcher({ compact = false }: RoleSwitcherProps) {
         </div>
         <button
           onClick={() => setMenuOpen((value) => !value)}
-          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest"
+          className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest"
         >
           Trocar
         </button>
@@ -200,7 +200,7 @@ export default function RoleSwitcher({ compact = false }: RoleSwitcherProps) {
               className={`w-full rounded-2xl border px-4 py-4 text-left transition-all ${
                 item === role
                   ? 'border-primary/30 bg-primary/10 text-primary'
-                  : 'border-white/10 bg-white/5 text-white hover:border-primary/30'
+                  : 'border-white/10 bg-surface-container text-white hover:border-primary/30'
               }`}
             >
               <div className="flex items-center gap-3">

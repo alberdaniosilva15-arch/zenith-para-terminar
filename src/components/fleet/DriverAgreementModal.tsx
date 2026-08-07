@@ -59,7 +59,7 @@ const DriverAgreementModal: React.FC<DriverAgreementModalProps> = ({
               key={value}
               onClick={() => setAgreementType(value)}
               className={`w-full rounded-2xl border p-4 text-left ${
-                agreementType === value ? 'border-primary bg-primary/10' : 'border-white/10 bg-white/5'
+                agreementType === value ? 'border-primary bg-primary/10' : 'border-white/10 bg-surface-container'
               }`}
             >
               <p className="font-black text-sm">{title}</p>
@@ -84,7 +84,7 @@ const DriverAgreementModal: React.FC<DriverAgreementModalProps> = ({
           <button
             onClick={() => void handleDecision('rejected')}
             disabled={loading}
-            className="flex-1 py-3 rounded-2xl bg-white/5 border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest"
+            className="flex-1 py-3 rounded-2xl bg-surface-container border border-white/10 text-white/80 font-black text-[10px] uppercase tracking-widest"
           >
             Recusar
           </button>
@@ -110,7 +110,7 @@ function TimeField({
         type="time"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-2xl bg-white/5 border border-white/10 px-4 py-3 text-sm outline-none"
+        className="w-full rounded-2xl bg-surface-container border border-white/10 px-4 py-3 text-sm outline-none"
       />
     </div>
   );

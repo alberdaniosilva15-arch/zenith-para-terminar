@@ -55,7 +55,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
           <div className="flex flex-col items-center gap-4">
             <div className="relative">
               <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-              <span className="absolute inset-0 flex items-center justify-center text-2xl">🚖</span>
+              <span className="absolute inset-0 flex items-center justify-center"><span className="material-symbols-outlined text-2xl">local_taxi</span></span>
             </div>
             <p className="font-black text-on-surface uppercase tracking-widest text-sm">À procura de motorista</p>
             <p className="text-[10px] text-on-surface-variant/70 font-bold text-center">
@@ -93,7 +93,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
           {/* 🛡️ SAFETY SHIELD — partilha ao vivo */}
           {resolvedRideId && (
             <div className="border-t border-outline-variant/10 pt-4">
-              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50 mb-2">🛡️ Safety Shield</p>
+              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50 mb-2"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>shield</span> Safety Shield</p>
               <LiveShareButton
                 rideId={resolvedRideId}
                 userId={userId}
@@ -111,14 +111,14 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
               className="zr-button zr-button--danger zr-button--block"
               style={{ padding: '10px 0', fontSize: '10px' }}
             >
-              📞 Ligar 113
+              <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 113
             </a>
             <a
               href="tel:112"
               className="zr-button zr-button--secondary zr-button--block"
               style={{ padding: '10px 0', fontSize: '10px', color: 'var(--danger-soft)', borderColor: 'var(--danger-soft)' }}
             >
-              📞 Ligar 112
+              <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 112
             </a>
           </div>
 
@@ -165,7 +165,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
               <p className="text-on-surface-variant text-xs font-label">{ride.pickup} → {ride.destination}</p>
               {routeInfo && (
                 <p className="text-[9px] text-primary/70 font-bold mt-0.5">
-                  📏 {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
+                  <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>straighten</span> {routeInfo.distanceKm.toFixed(1)} km · ~{routeInfo.durationMin} min
                 </p>
               )}
             </div>
@@ -174,7 +174,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
           {/* 🛡️ SAFETY SHIELD — partilha + SOS */}
           {resolvedRideId && (
             <div className="border border-outline-variant/10 rounded-2xl p-4 space-y-3">
-              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50">🛡️ Kaze Safety Shield</p>
+              <p className="text-[9px] font-black uppercase tracking-widest text-on-surface-variant/50"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>shield</span> Kaze Safety Shield</p>
               <LiveShareButton
                 rideId={resolvedRideId}
                 userId={userId}
@@ -189,14 +189,14 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
                   className="zr-button zr-button--danger zr-button--block"
                   style={{ padding: '10px 0', fontSize: '10px' }}
                 >
-                  📞 Ligar 113
+                  <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 113
                 </a>
                 <a
                   href="tel:112"
                   className="zr-button zr-button--secondary zr-button--block"
                   style={{ padding: '10px 0', fontSize: '10px', color: 'var(--danger-soft)', borderColor: 'var(--danger-soft)' }}
                 >
-                  📞 Ligar 112
+                  <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 112
                 </a>
               </div>
             </div>

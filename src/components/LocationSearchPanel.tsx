@@ -49,12 +49,12 @@ function haversineKm(
 }
 
 function getPlaceIcon(types: string[]): string {
-  if (types.includes('airport')) return '✈️';
-  if (types.includes('poi')) return '📍';
-  if (types.includes('address')) return '🏠';
-  if (types.includes('neighborhood') || types.includes('locality')) return '🏘️';
-  if (types.includes('place')) return '🏙️';
-  return '📍';
+  if (types.includes('airport')) return 'flight';
+  if (types.includes('poi')) return 'location_on';
+  if (types.includes('address')) return 'home';
+  if (types.includes('neighborhood') || types.includes('locality')) return 'location_city';
+  if (types.includes('place')) return 'apartment';
+  return 'location_on';
 }
 
 // ── Componente Principal ──────────────────────────────────────────────────────
@@ -468,7 +468,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
                   onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(0,212,255,0.07)')}
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >
-                  <span style={{ fontSize: 18, flexShrink: 0 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: 18, flexShrink: 0 }}>
                     {getPlaceIcon(r.place_type)}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -557,7 +557,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
               </div>
               <div style={{ width: 1, height: 36, background: 'rgba(255,255,255,0.08)' }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <span style={{ fontSize: 18 }}>📍</span>
+                <span className="material-symbols-outlined" style={{ fontSize: 18 }}>location_on</span>
                 <div>
                   <div style={{ fontSize: 9, color: 'rgba(255,255,255,0.3)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
                     Distância
@@ -587,7 +587,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
           fontSize: 13,
           display: 'flex', alignItems: 'center', gap: '8px',
         }}>
-          <span>⚠️</span> {error}
+          <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>warning</span> {error}
         </div>
       )}
 

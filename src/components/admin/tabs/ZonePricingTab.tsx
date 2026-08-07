@@ -355,12 +355,12 @@ export const ZonePricingTab: React.FC = () => {
                 <div className="ze-card">
                   <div className="ze-section-title">multiplicadores zenith</div>
                   <div className="ze-btn-group">
-                    <button className="ze-btn-preset" onClick={() => setPreset('rain')}>🌧 Chuva</button>
-                    <button className="ze-btn-preset" onClick={() => setPreset('event')}>🎉 Evento</button>
-                    <button className="ze-btn-preset" onClick={() => setPreset('night')}>🌙 Noite</button>
-                    <button className="ze-btn-preset" onClick={() => setPreset('premium')}>🏙 Zona Premium</button>
+                    <button className="ze-btn-preset" onClick={() => setPreset('rain')}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>rainy</span> Chuva</button>
+                    <button className="ze-btn-preset" onClick={() => setPreset('event')}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>celebration</span> Evento</button>
+                    <button className="ze-btn-preset" onClick={() => setPreset('night')}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>dark_mode</span> Noite</button>
+                    <button className="ze-btn-preset" onClick={() => setPreset('premium')}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>apartment</span> Zona Premium</button>
                     <button className="ze-btn-preset" onClick={() => setPreset('vip')}>⭐ VIP</button>
-                    <button className="ze-btn-preset" onClick={() => setPreset('bad')}>⚠️ Mau Utilizador</button>
+                    <button className="ze-btn-preset" onClick={() => setPreset('bad')}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>warning</span> Mau Utilizador</button>
                     <button className="ze-btn-preset" onClick={() => setPreset('reset')}>↺ Reset</button>
                   </div>
                   <div className="ze-sl-row"><span className="ze-sl-label">W_l (zona)</span><input type="range" min="8" max="25" value={pWl} step="1" onChange={e => setPWl(+e.target.value)} /><span className="ze-sl-val">{(pWl/10).toFixed(1)}</span></div>

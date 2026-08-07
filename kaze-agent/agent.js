@@ -10,10 +10,9 @@ const { classifyIntent, auditLog } = require('./security/permissions');
 const { enforcePolicy, resetCommandContext, incrementToolCount } = require('./security/executionPolicy');
 const { runAutoOperator } = require('./core/autoOperator');
 
-// Only disable TLS validation when explicitly requested for a local diagnostic.
-if (process.env.KAZE_ALLOW_INSECURE_TLS === '1' && !process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-}
+// TLS validation is always enforced. Removed perma-disable switch (security audit P0-4).
+// If local dev needs per-request TLS bypass, configure it on a specific
+// https.Agent instance, never globally via env var.
 
 const MAX_TOOLS_PER_COMMAND = 5;
 const GEMINI_MODEL_CHAIN = (

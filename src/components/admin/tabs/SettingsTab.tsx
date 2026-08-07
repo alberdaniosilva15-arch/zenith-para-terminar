@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import {
   DEFAULT_MODELS_BY_PROVIDER,
   LOCAL_KAZE_URL,
-  LS_IA_API_KEY,
   LS_IA_BASE_URL,
   LS_IA_MODEL,
   LS_IA_MODELS_CACHE,
@@ -176,7 +175,6 @@ export const SettingsTab: React.FC = () => {
   const saveIaSettings = () => {
     setStored(LS_IA_PROVIDER, iaProvider);
     setStored(LS_IA_MODEL, iaModel);
-    setStored(LS_IA_API_KEY, iaApiKey.trim());
     setStored(LS_IA_BASE_URL, getProviderBaseUrl(iaProvider, iaBaseUrl));
     setIaSaved(true);
     setTimeout(() => setIaSaved(false), 2000);
@@ -222,7 +220,7 @@ export const SettingsTab: React.FC = () => {
         <section className="rounded-xl border border-primary/15 bg-[#050505]/85 p-6">
           <div className="flex items-center gap-3 mb-5">
             <span className="material-symbols-outlined text-primary">record_voice_over</span>
-            <h3 className="font-headline-lg text-on-surface tracking-tight">API de Voz — ElevenLabs</h3>
+            <h3 className="font-headline-lg text-on-surface tracking-tight">API de Voz: ElevenLabs</h3>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
@@ -254,7 +252,7 @@ export const SettingsTab: React.FC = () => {
                 disabled={elevenVoices.length === 0}
                 className="bg-[#0A0A0A] border border-primary/20 rounded px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none disabled:opacity-40"
               >
-                <option value="">— Selecionar voz —</option>
+                <option value="">Selecionar voz</option>
                 {elevenVoices.map((v) => (
                   <option key={v.voice_id} value={v.voice_id}>
                     {v.name} {v.labels?.gender ? `(${v.labels.gender})` : ''}
@@ -297,7 +295,7 @@ export const SettingsTab: React.FC = () => {
                 {systemVoices.length === 0 && <option value="">Nenhuma voz encontrada</option>}
                 {systemVoices.map((v) => (
                   <option key={v.voiceURI} value={v.voiceURI}>
-                    {v.name} ({v.lang}) {v.isDefault ? '★' : ''}
+                    {v.name} ({v.lang}) {v.isDefault ? <span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>star</span> : ''}
                   </option>
                 ))}
               </select>

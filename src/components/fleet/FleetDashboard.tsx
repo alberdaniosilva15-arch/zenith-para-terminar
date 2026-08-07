@@ -200,7 +200,7 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
   if (!fleet) {
     return (
       <div className="zr-app" style={{ minHeight: '100vh', padding: '20px' }}>
-        <section className="zr-card" style={{ textAlign: 'center', padding: '40px 20px' }}>
+        <section className="zr-card" style={{ textAlign: 'center', padding: '24px 16px' }}>
           <p className="zr-kicker">Modo Dono de Frota</p>
           <h2 className="zr-section-title">Criar a tua primeira frota</h2>
           <p className="zr-copy" style={{ marginBottom: '24px' }}>
@@ -414,7 +414,8 @@ function createWhiteCarMarkerElement() {
   el.style.alignItems = 'center';
   el.style.justifyContent = 'center';
   const span = document.createElement('span');
-  span.textContent = '🚗';
+  span.className = 'material-symbols-outlined';
+  span.textContent = 'directions_car';
   span.style.fontSize = '18px';
   el.appendChild(span);
   return el;

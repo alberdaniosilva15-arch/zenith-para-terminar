@@ -14,7 +14,7 @@ function getQuickLocalResponse(text: string): string {
   if (/como.*funciona|ajuda|tutorial/i.test(t))
     return 'Escolhe origem e destino, ve o preco fixo, confirma e aguarda o motorista!';
   if (/kaze|quem.*[eé]s/i.test(t))
-    return 'Sou o Kaze — assistente inteligente do Zenith Ride. Pergunta-me sobre precos, corridas ou Luanda!';
+    return 'Sou o Kaze, assistente inteligente do Zenith Ride. Pergunta-me sobre precos, corridas ou Luanda!';
   if (/corrida|viagem|ir para|motorista|condutor/i.test(t))
     return 'Para pedir corrida: define origem, escreve destino, ve o preco e confirma. Simples!';
   return 'Estou em modo local (servidor IA indisponivel). Posso ajudar com precos, corridas e zonas de Luanda.';
@@ -479,7 +479,7 @@ export const KazeAITab: React.FC = () => {
               </div>
             ) : (
               directives.map((dir) => (
-                <div key={dir.id} className="bg-surface/80 backdrop-blur-md border border-primary/15 p-md rounded-lg flex flex-col gap-md shadow-sm">
+                <div key={dir.id} className="bg-surface/80 border border-primary/15 p-md rounded-lg flex flex-col gap-md shadow-sm">
                   <div className="flex justify-between items-start">
                     <div className="flex items-center gap-sm">
                       <span className="material-symbols-outlined text-secondary text-lg">

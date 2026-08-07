@@ -21,6 +21,7 @@ import type { DbUser, DbProfile, AppError } from '../types';
 import { UserRole } from '../types';
 import { useAppStore } from '../store/useAppStore';
 import { logError } from '../lib/logger';
+import { sanitizeRedirectTarget } from '../lib/authUtils';
 
 const CLIENT_ONLY_STORAGE_KEYS = [
   'zenith-ride-store-v3',
@@ -40,15 +41,7 @@ let autoRepairTimeout: ReturnType<typeof setTimeout> | null = null;
 const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
 const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
 const REST_FALLBACK_TIMEOUT_MS = 12000;
-const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_intent';
-
-function sanitizeRedirectTarget(candidate: string | null | undefined): string | null {
-  if (!candidate) return null;
-  if (!candidate.startsWith('/')) return null;
-  if (candidate.startsWith('//')) return null;
-  if (candidate.startsWith('/login')) return null;
-  return candidate;
-}
+const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_target';
 
 function clearBrowserAuthStorage(): void {
   if (typeof window === 'undefined') {
@@ -479,6 +472,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let mounted = true;
 
     const init = async () => {
+      try {
       console.log('[AuthContext] init');
       // 1) Tentar detectar sessão diretamente a partir da URL (link mágico)
       try {
@@ -546,6 +540,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } else {
             clearSyncedUserState();
           }
+          setLoading(false);
+        }
+      }
+      } catch (err) {
+        console.error('[AuthContext] init falhou:', err);
+        if (mounted) {
+          clearSyncedUserState();
+          setAuthError({
+            code: 'init_failed',
+            message: 'Erro ao inicializar. Tenta recarregar a pagina.',
+            details: err instanceof Error ? err.message : String(err),
+          });
           setLoading(false);
         }
       }

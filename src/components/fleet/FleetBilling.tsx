@@ -108,7 +108,7 @@ export default function FleetBilling({ fleetId }: FleetBillingProps) {
 
   return (
     <div className="space-y-4">
-      <div className="rounded-[2rem] border border-white/10 bg-white/5 p-5 text-white">
+      <div className="rounded-[2rem] border border-white/10 bg-surface-container p-5 text-white">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-[9px] font-black uppercase tracking-[0.2em] text-primary/70">Faturação Zenith Fleet</p>
@@ -127,13 +127,13 @@ export default function FleetBilling({ fleetId }: FleetBillingProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Metric label="Total mês" value={`${Math.round(totalSpentThisMonth).toLocaleString('pt-AO')} Kz`} />
         <Metric label="Carros activos" value={String(carsCount)} />
         <Metric label="Custo/carro" value={`${Math.round(costPerCar).toLocaleString('pt-AO')} Kz`} />
       </div>
 
-      <div className="rounded-[2rem] border border-white/10 bg-white/5 p-5 text-white">
+      <div className="rounded-[2rem] border border-white/10 bg-surface-container p-5 text-white">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
             <p className="text-[9px] font-black uppercase tracking-widest text-white/45">Histórico de pagamentos</p>
@@ -143,7 +143,7 @@ export default function FleetBilling({ fleetId }: FleetBillingProps) {
           </div>
           <button
             onClick={() => void loadBilling()}
-            className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white/80"
+            className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white/80"
           >
             Actualizar
           </button>
@@ -156,7 +156,7 @@ export default function FleetBilling({ fleetId }: FleetBillingProps) {
         ) : (
           <div className="space-y-3">
             {ledger.map((entry) => (
-              <div key={entry.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
+              <div key={entry.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-surface-2 px-4 py-4">
                 <div>
                   <p className="text-sm font-black text-white">
                     {new Date(entry.billing_month).toLocaleDateString('pt-AO', { month: 'long', year: 'numeric' })}
@@ -184,7 +184,7 @@ export default function FleetBilling({ fleetId }: FleetBillingProps) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[1.75rem] border border-white/10 bg-white/5 p-4 text-white">
+    <div className="rounded-[1.75rem] border border-white/10 bg-surface-container p-4 text-white">
       <p className="text-[9px] font-black uppercase tracking-widest text-white/45">{label}</p>
       <p className="mt-2 text-xl font-black">{value}</p>
     </div>

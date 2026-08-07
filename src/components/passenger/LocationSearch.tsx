@@ -31,12 +31,12 @@ function quickDistanceKm(
 
 function getTypeIcon(type: LocationResult['type']): string {
   switch (type) {
-    case 'bairro':    return '🏘️';
-    case 'hospital':  return '🏥';
-    case 'servico':   return '🏪';
-    case 'monumento': return '🏛️';
-    case 'rua':       return '🛣️';
-    default:          return '📍';
+    case 'bairro':    return 'location_city';
+    case 'hospital':  return 'local_hospital';
+    case 'servico':   return 'store';
+    case 'monumento': return 'account_balance';
+    case 'rua':       return 'route';
+    default:          return 'location_on';
   }
 }
 
@@ -79,7 +79,7 @@ const LocationSearch: React.FC<LocationSearchProps> = ({
             : results.length > 0
               ? `${results.length} locais encontrados`
               : searchQuery.length >= 2
-                ? 'Nenhum resultado — tenta outro nome'
+                ? 'Nenhum resultado. Tenta outro nome'
                 : 'Escreve o nome do bairro, rua ou local'}
         </p>
 
@@ -98,7 +98,7 @@ const LocationSearch: React.FC<LocationSearchProps> = ({
             const distKm = userLocation ? quickDistanceKm(userLocation.lat, userLocation.lng, res.coords.lat, res.coords.lng) : null;
             return (
               <button key={`location-${res.name}-${i}`} onClick={() => onSelectLocation(res)} className="zr-list-item zr-list-item--interactive" style={{ textAlign: 'left', width: '100%' }}>
-                <span style={{ fontSize: '24px' }}>{getTypeIcon(res.type)}</span>
+                <span className="material-symbols-outlined" style={{ fontSize: '24px' }}>{getTypeIcon(res.type)}</span>
                 <div style={{ flex: 1 }}>
                   <strong style={{ display: 'block' }}>{res.name}</strong>
                   <span className="zr-copy">{res.description}</span>

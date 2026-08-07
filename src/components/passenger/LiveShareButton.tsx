@@ -74,23 +74,23 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
   };
 
   const doShare = (shareLink: string) => {
-    const driverInfo = driverName ? `🚗 Motorista: *${driverName}*\n` : '';
+    const driverInfo = driverName ? `Motorista: *${driverName}*\n` : '';
     const routeInfo  = (pickup && destination)
-      ? `📍 ${pickup} → ${destination}\n`
+      ? `<span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>location_on</span> ${pickup} → ${destination}\n`
       : '';
 
     const message = encodeURIComponent(
-      `🛡️ *ZENITH RIDE — Estou numa corrida*\n\n` +
+      `<span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>shield</span> *ZENITH RIDE, estou numa corrida*\n\n` +
       `${driverInfo}${routeInfo}\n` +
-      `Segue a minha viagem em tempo real aqui:\n👉 ${shareLink}\n\n` +
+      `Segue a minha viagem em tempo real aqui:\n<span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>arrow_forward</span> ${shareLink}\n\n` +
       `_Este link expira em 4 horas. Enviado por Zenith Ride Kaze Safety Shield._`
     );
 
     // Tentar partilha nativa primeiro (mobile)
     if (navigator.share) {
       navigator.share({
-        title: 'Zenith Ride — A minha corrida ao vivo',
-        text:  `🛡️ Segue a minha viagem: ${shareLink}`,
+        title: 'Zenith Ride: a minha corrida ao vivo',
+        text:  `<span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>shield</span> Segue a minha viagem: ${shareLink}`,
         url:   shareLink,
       }).catch(() => {
         // Utilizador cancelou ou falhou — fallback WhatsApp
@@ -114,10 +114,10 @@ export const LiveShareButton: React.FC<LiveShareButtonProps> = ({
     navigator.geolocation.getCurrentPosition((pos) => {
       const { latitude, longitude } = pos.coords;
       const mapLink = `https://maps.google.com/?q=${latitude},${longitude}`;
-      const driverInfo = driverName ? `🚗 Motorista: *${driverName}*\n` : '';
+      const driverInfo = driverName ? `Motorista: *${driverName}*\n` : '';
       const message = encodeURIComponent(
-        `⚠️ *ZENITH RIDE — Estou numa corrida*\n\n${driverInfo}` +
-        `📍 A minha localização actual: ${mapLink}\n\n` +
+        `<span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>warning</span> *ZENITH RIDE, estou numa corrida*\n\n${driverInfo}` +
+        `<span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>location_on</span> A minha localização actual: ${mapLink}\n\n` +
         `_Enviado via Zenith Ride Safety Shield_`
       );
       if (emergencyPhone) openWhatsApp(message);

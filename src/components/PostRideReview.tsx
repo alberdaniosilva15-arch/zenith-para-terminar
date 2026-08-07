@@ -276,7 +276,7 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
           {step === 'price_feedback' && (
             <div>
               <h3 className="zr-section-title" style={{ textAlign: 'center', marginBottom: '8px' }}>O que achas do preço?</h3>
-              <p className="zr-meta" style={{ textAlign: 'center', marginBottom: '20px' }}>{priceKz ? `${priceKz.toLocaleString('pt-AO')} Kz` : ''} — A tua opinião ajuda</p>
+              <p className="zr-meta" style={{ textAlign: 'center', marginBottom: '20px' }}>{priceKz ? `${priceKz.toLocaleString('pt-AO')} Kz` : ''}. A tua opinião ajuda</p>
               
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '20px' }}>
                 {PRICE_OPTIONS.map(opt => (
@@ -318,7 +318,7 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
           {/* STEP: done */}
           {step === 'done' && (
             <div style={{ textAlign: 'center' }}>
-              <div style={{ fontSize: '56px', marginBottom: '16px' }}>✅</div>
+              <span className="material-symbols-outlined" style={{ fontSize: '56px', marginBottom: '16px' }}>check_circle</span>
               <h3 className="zr-section-title" style={{ marginBottom: '8px' }}>Obrigado!</h3>
               <p className="zr-copy" style={{ marginBottom: '24px' }}>A tua avaliação ajuda a melhorar a Zenith.</p>
 

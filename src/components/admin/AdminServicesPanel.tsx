@@ -173,11 +173,11 @@ export default function AdminServicesPanel() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
-        <div className="rounded-[2rem] border border-white/10 bg-white/5 p-5 text-white">
+        <div className="rounded-[2rem] border border-white/10 bg-surface-container p-5 text-white">
           <p className="text-[9px] font-black uppercase tracking-widest text-white/45">Receita por serviço</p>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             {(['private_driver', 'charter', 'cargo'] as Array<Extract<ServiceType, 'private_driver' | 'charter' | 'cargo'>>).map((item) => (
-              <div key={item} className="rounded-[1.5rem] border border-white/10 bg-black/20 p-4">
+              <div key={item} className="rounded-[1.5rem] border border-white/10 bg-surface-2 p-4">
                 <p className="text-[10px] font-black uppercase tracking-widest text-white/45">{item.replace('_', ' ')}</p>
                 <p className="mt-2 text-xl font-black text-primary">
                   {Math.round(metrics.revenueByType[item] ?? 0).toLocaleString('pt-AO')} Kz
@@ -187,7 +187,7 @@ export default function AdminServicesPanel() {
           </div>
         </div>
 
-        <div className="rounded-[2rem] border border-white/10 bg-white/5 p-5 text-white">
+        <div className="rounded-[2rem] border border-white/10 bg-surface-container p-5 text-white">
           <p className="text-[9px] font-black uppercase tracking-widest text-white/45">Premium vs taxi normal</p>
           <div className="mt-4 h-60">
             <ResponsiveContainer width="100%" height="100%">
@@ -205,7 +205,7 @@ export default function AdminServicesPanel() {
         <select
           value={serviceFilter}
           onChange={(event) => setServiceFilter(event.target.value as ServiceFilter)}
-          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
+          className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
         >
           <option value="all">Todos os serviços</option>
           <option value="private_driver">Motorista privado</option>
@@ -216,7 +216,7 @@ export default function AdminServicesPanel() {
         <select
           value={statusFilter}
           onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-          className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
+          className="rounded-full border border-white/10 bg-surface-container px-4 py-2 text-[10px] font-black uppercase tracking-widest text-white"
         >
           <option value="all">Todos os estados</option>
           <option value="pending">Pendente</option>
@@ -229,7 +229,7 @@ export default function AdminServicesPanel() {
 
       <div className="space-y-3">
         {loading ? (
-          <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 text-center text-sm font-bold text-white/55">
+          <div className="rounded-[2rem] border border-white/10 bg-surface-container p-8 text-center text-sm font-bold text-white/55">
             A carregar reservas premium...
           </div>
         ) : error ? (
@@ -238,25 +238,25 @@ export default function AdminServicesPanel() {
             <p className="text-sm text-red-400 max-w-sm">{error}</p>
             <button
               onClick={loadServices}
-              className="mt-2 px-5 py-2 text-sm rounded border border-white/20 text-white/70 hover:bg-white/10 transition-colors"
+              className="mt-2 px-5 py-2 text-sm rounded border border-white/20 text-white/70 hover:bg-surface-2 transition-colors"
             >
               Tentar Novamente
             </button>
           </div>
         ) : bookings.length === 0 ? (
-          <div className="rounded-[2rem] border border-white/10 bg-white/5 p-8 text-center text-sm font-bold text-white/55">
+          <div className="rounded-[2rem] border border-white/10 bg-surface-container p-8 text-center text-sm font-bold text-white/55">
             Ainda não existem reservas premium com estes filtros.
           </div>
         ) : (
           bookings.map((booking) => (
-            <div key={booking.id} className="rounded-[2rem] border border-white/10 bg-white/5 p-5 text-white">
+            <div key={booking.id} className="rounded-[2rem] border border-white/10 bg-surface-container p-5 text-white">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="rounded-full bg-primary/15 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-primary">
                       {booking.service_type.replace('_', ' ')}
                     </span>
-                    <span className="rounded-full bg-white/10 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-white/70">
+                    <span className="rounded-full bg-surface-2 px-3 py-1 text-[9px] font-black uppercase tracking-widest text-white/70">
                       {booking.status}
                     </span>
                     {booking.notify_me && (
@@ -282,7 +282,7 @@ export default function AdminServicesPanel() {
               </div>
 
               {booking.notes && (
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-[11px] font-bold text-white/70">
+                <div className="mt-4 rounded-2xl border border-white/10 bg-surface-2 px-4 py-3 text-[11px] font-bold text-white/70">
                   {booking.notes}
                 </div>
               )}
@@ -291,7 +291,7 @@ export default function AdminServicesPanel() {
                 <select
                   value={assignmentDrafts[booking.id] ?? booking.driver_id ?? ''}
                   onChange={(event) => setAssignmentDrafts((prev) => ({ ...prev, [booking.id]: event.target.value }))}
-                  className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm font-bold text-white outline-none"
+                  className="rounded-2xl border border-white/10 bg-surface-2 px-4 py-3 text-sm font-bold text-white outline-none"
                 >
                   <option value="">Atribuir motorista manualmente</option>
                   {driverOptions.map((driver) => (
@@ -318,7 +318,7 @@ export default function AdminServicesPanel() {
 
 function MetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-[1.5rem] border border-white/10 bg-white/5 p-4 text-white">
+    <div className="rounded-[1.5rem] border border-white/10 bg-surface-container p-4 text-white">
       <p className="text-[9px] font-black uppercase tracking-widest text-white/45">{label}</p>
       <p className="mt-2 text-2xl font-black">{value}</p>
     </div>

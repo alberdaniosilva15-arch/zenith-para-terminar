@@ -198,7 +198,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         >
           <div className="zr-inline" style={{ marginBottom: '8px' }}>
             <span className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: 'var(--gold)' }} />
-            <p className="zr-meta" style={{ color: 'var(--gold)' }}>Kaze - Zenith Ride</p>
+            <p className="zr-meta" style={{ color: 'var(--gold)' }}>Kaze · Zenith Ride</p>
           </div>
           <p className="zr-copy" style={{ fontStyle: 'italic', fontWeight: 'bold' }}>"{thought}"</p>
         </div>
@@ -267,7 +267,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
                         <div className="zr-stack" style={{ gap: '8px' }}>
                           {m.sources.map((s: any, si: number) => (
                             <a key={si} href={s.uri} target="_blank" rel="noreferrer" className="zr-chip" style={{ justifyContent: 'flex-start' }}>
-                              📍 <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{s.title}</span>
+                              <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{s.title}</span>
                             </a>
                           ))}
                         </div>

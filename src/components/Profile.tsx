@@ -299,7 +299,7 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
             
             <div className="zr-list" style={{ marginBottom: '24px' }}>
               <InfoRow label="Sessões" value="1 activa neste dispositivo" />
-              <InfoRow label="Estado" value={dbUser?.suspended_until ? 'Suspensa' : 'Activa ✅'} />
+              <InfoRow label="Estado" value={dbUser?.suspended_until ? 'Suspensa' : <>Activa <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>check_circle</span></>} />
             </div>
 
             <p className="zr-kicker" style={{ marginBottom: '12px' }}>Alterar Palavra-passe</p>
@@ -340,7 +340,7 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
 };
 
 // Row Helper
-const InfoRow: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+const InfoRow: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
   <div className="zr-list-item" style={{ padding: '12px 0', borderBottom: '1px solid var(--line)' }}>
     <span className="zr-meta" style={{ flex: 1 }}>{label}</span>
     <strong className="zr-copy">{value}</strong>

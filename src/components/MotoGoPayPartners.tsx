@@ -22,11 +22,11 @@ interface ZenithPayPartnersProps {
 }
 
 const CATEGORY_ICONS: Record<PartnerCategory, string> = {
-  fuel:        '⛽',
-  food:        '🍽️',
-  insurance:   '🛡️',
-  mechanic:    '🔧',
-  supermarket: '🛒',
+  fuel:        'local_gas_station',
+  food:        'restaurant',
+  insurance:   'shield',
+  mechanic:    'build',
+  supermarket: 'shopping_cart',
 };
 
 const CATEGORY_LABELS: Record<PartnerCategory, string> = {
@@ -132,7 +132,7 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
 
       {/* ── Saldo disponível ─────────────────────────────────────────────── */}
       <div className="bg-primary rounded-[2rem] p-5 flex items-center gap-4">
-        <div className="text-3xl">💳</div>
+        <div className="text-3xl"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>credit_card</span></div>
         <div>
           <p className="text-[8px] font-black text-primary/70 uppercase tracking-widest">Saldo Zenith Pay</p>
           <p className="text-2xl font-black text-white tracking-tighter">
@@ -163,7 +163,7 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
                 : 'bg-surface-container-low text-on-surface-variant/70 border border-outline-variant/20'
             }`}
           >
-            {cat === 'all' ? 'Todos' : `${CATEGORY_ICONS[cat]} ${CATEGORY_LABELS[cat]}`}
+            {cat === 'all' ? 'Todos' : <><span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>{CATEGORY_ICONS[cat]}</span> {CATEGORY_LABELS[cat]}</>}
           </button>
         ))}
       </div>
@@ -190,7 +190,7 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
                 className="w-full flex items-center gap-4 p-5 text-left"
               >
                 <div className="w-14 h-14 bg-surface-container-lowest rounded-2xl flex items-center justify-center text-2xl shrink-0">
-                  {CATEGORY_ICONS[partner.category]}
+                  <span className="material-symbols-outlined" style={{fontSize:'inherit'}}>{CATEGORY_ICONS[partner.category]}</span>
                 </div>
                 <div className="flex-1">
                   <p className="font-black text-on-surface text-sm">{partner.name}</p>

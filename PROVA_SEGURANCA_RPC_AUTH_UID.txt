@@ -1,0 +1,482 @@
+================================================================================
+ ZENITH RIDE — PROVA DE SEGURANÇA: RPCs com auth.uid()
+ Data: 19 Julho 2026
+ Projecto: mhahnhnsaquqgqvnnwld (alberdaniosilva15@gmail.com)
+================================================================================
+
+Este documento prova que TODAS as RPCs críticas agora usam auth.uid()
+em vez de parâmetros client-controlled (p_driver_id / p_user_id).
+
+Cada secção mostra: (1) o SQL real na BD, (2) o frontend que chama a RPC,
+(3) a verificação da BD de produção.
+
+
+================================================================================
+1. accept_ride_atomic — ANTES vs DEPOIS
+================================================================================
+
+--- ANTES (VULNERÁVEL) ---
+Ficheiro: migrations/20260407_accept_ride_atomic.sql
+
+  CREATE OR REPLACE FUNCTION public.accept_ride_atomic(
+    p_ride_id   UUID,
+    p_driver_id UUID          <-- CLIENT CONTROLA ISTO!
+  )
+  ...
+  UPDATE public.rides
+  SET driver_id = p_driver_id,    <-- injeta qualquer ID
+      status = 'accepted',
+      accepted_at = NOW()
+  WHERE id = p_ride_id;
+
+--- DEPOIS (SEGURO) ---
+Ficheiro: supabase/migrations/20260719_rpc_security_fix_auth_uid.sql
+
+  DROP FUNCTION IF EXISTS public.accept_ride_atomic(UUID, UUID);
+  CREATE OR REPLACE FUNCTION public.accept_ride_atomic(
+    p_ride_id UUID              <-- SEM p_driver_id
+  )
+  RETURNS JSONB
+  LANGUAGE plpgsql
+  SECURITY DEFINER
+  SET search_path = pg_catalog, public
+  AS $$
+  DECLARE
+    v_driver_id UUID := auth.uid();   <-- USA auth.uid() DIRECTAMENTE
+    v_ride      RECORD;
+  BEGIN
+    IF v_driver_id IS NULL THEN
+      RETURN jsonb_build_object('success', false, 'reason', 'not_authenticated');
+    END IF;
+
+    IF NOT public.is_driver() THEN
+      RETURN jsonb_build_object('success', false, 'reason', 'not_a_driver');
+    END IF;
+
+    SELECT * INTO v_ride
+    FROM public.rides
+    WHERE id = p_ride_id
+    FOR UPDATE NOWAIT;
+    ...
+
+    UPDATE public.rides
+    SET driver_id = v_driver_id,   <-- auth.uid(), NÃO parâmetro do cliente
+        status = 'accepted',
+        accepted_at = NOW(),
+        driver_confirmed = TRUE,
+        updated_at = NOW()
+    WHERE id = p_ride_id;
+  ...
+
+--- Frontend que chama (rideService.ts) ---
+  // ANTES:
+  const { data, error } = await supabase.rpc('accept_ride_atomic', {
+    p_ride_id:   rideId,
+    p_driver_id: driverId,    <-- passava o ID manualmente
+  });
+
+  // DEPOIS:
+  const { data, error } = await supabase.rpc('accept_ride_atomic', {
+    p_ride_id: rideId,        <-- SÓ o ride_id, sem driver_id
+  });
+
+--- Verificação BD produção ---
+  supabase db query --linked "SELECT proname, proargtypes::regtype[]
+    FROM pg_proc WHERE proname = 'accept_ride_atomic';"
+
+  ┌─────────────────────┬───────────────┐
+  │       proname       │  proargtypes  │
+  ├─────────────────────┼───────────────┤
+  │ accept_ride_atomic  │ [0:0]={uuid}  │  <-- SÓ 1 parâmetro UUID
+  └─────────────────────┴───────────────┘
+
+
+================================================================================
+2. decline_ride_atomic — ANTES vs DEPOIS
+================================================================================
+
+--- ANTES (VULNERÁVEL) ---
+Ficheiro: migrations/20260421_v3.5_final_consolidada.sql
+
+  CREATE OR REPLACE FUNCTION public.decline_ride_atomic(
+    p_ride_id   UUID,
+    p_driver_id UUID          <-- CLIENT CONTROLA ISTO!
+  )
+  ...
+  IF v_driver_id IS DISTINCT FROM p_driver_id THEN
+    RETURN jsonb_build_object('success', false, 'reason', 'not_your_ride');
+  END IF;
+  ...
+  UPDATE public.driver_locations
+  SET status = 'available', updated_at = NOW()
+  WHERE driver_id = p_driver_id;  <-- injeta qualquer ID
+
+--- DEPOIS (SEGURO) ---
+  DROP FUNCTION IF EXISTS public.decline_ride_atomic(UUID, UUID);
+  CREATE OR REPLACE FUNCTION public.decline_ride_atomic(
+    p_ride_id UUID              <-- SEM p_driver_id
+  )
+  ...
+  DECLARE
+    v_driver_id UUID := auth.uid();   <-- USA auth.uid()
+    ...
+  BEGIN
+    ...
+    IF v_owner IS DISTINCT FROM v_driver_id THEN
+      RETURN jsonb_build_object('success', false, 'reason', 'not_your_ride');
+    END IF;
+    ...
+    UPDATE public.driver_locations
+    SET status = 'available', updated_at = NOW()
+    WHERE driver_id = v_driver_id;  <-- auth.uid(), NÃO parâmetro
+
+--- Frontend (rideService.ts) ---
+  // ANTES:
+  const { data, error } = await supabase.rpc('decline_ride_atomic', {
+    p_ride_id:   rideId,
+    p_driver_id: driverId,    <-- passava o ID
+  });
+
+  // DEPOIS:
+  const { data, error } = await supabase.rpc('decline_ride_atomic', {
+    p_ride_id: rideId,        <-- SÓ o ride_id
+  });
+
+--- Verificação BD produção ---
+  ┌─────────────────────┬───────────────┐
+  │       proname       │  proargtypes  │
+  ├─────────────────────┼───────────────┤
+  │ decline_ride_atomic │ [0:0]={uuid}  │  <-- SÓ 1 parâmetro
+  └─────────────────────┴───────────────┘
+
+
+================================================================================
+3. cancel_ride_safe — ANTES vs DEPOIS
+================================================================================
+
+--- ANTES (VULNERÁVEL) ---
+Ficheiro: zenith_schema_final.sql
+
+  CREATE OR REPLACE FUNCTION public.cancel_ride_safe(
+    p_ride_id UUID,
+    p_user_id UUID,            <-- CLIENT CONTROLA ISTO!
+    p_reason  TEXT DEFAULT 'Cancelado'
+  )
+  ...
+  IF v_ride.passenger_id <> p_user_id
+    AND (v_ride.driver_id IS NULL OR v_ride.driver_id <> p_user_id)
+  THEN
+    RETURN QUERY SELECT false, v_prev_status, 'Sem permissão.'::TEXT;
+  END IF;
+  ...
+  -- Qualquer um podia cancelar corridas de outro!
+
+--- DEPOIS (SEGURO) ---
+  DROP FUNCTION IF EXISTS public.cancel_ride_safe(UUID, UUID, TEXT);
+  CREATE OR REPLACE FUNCTION public.cancel_ride_safe(
+    p_ride_id UUID,
+    p_reason  TEXT DEFAULT 'Cancelado pelo utilizador'  <-- SEM p_user_id
+  )
+  ...
+  DECLARE
+    v_user_id UUID := auth.uid();   <-- USA auth.uid()
+  ...
+  IF v_user_id IS NULL THEN
+    RETURN QUERY SELECT false, 'unknown'::TEXT, 'Autenticação necessária.'::TEXT;
+  END IF;
+  ...
+  IF v_ride.passenger_id <> v_user_id
+    AND (v_ride.driver_id IS NULL OR v_ride.driver_id <> v_user_id)
+  THEN
+    RETURN QUERY SELECT false, v_prev_status, 'Sem permissão para cancelar.'::TEXT;
+  END IF;
+
+--- Frontend (rideService.ts) ---
+  // ANTES:
+  const { data, error } = await supabase.rpc('cancel_ride_safe', {
+    p_ride_id: rideId,
+    p_user_id: userId,        <-- passava o ID do user
+    p_reason: reason ?? 'Cancelado',
+  });
+
+  // DEPOIS:
+  const { data, error } = await supabase.rpc('cancel_ride_safe', {
+    p_ride_id: rideId,        <-- SÓ o ride_id
+    p_reason: reason ?? 'Cancelado pelo utilizador',
+  });
+
+--- Verificação BD produção ---
+  ┌──────────────────┬─────────────────┐
+  │     proname      │   proargtypes   │
+  ├──────────────────┼─────────────────┤
+  │ cancel_ride_safe │ [0:1]={uuid,text}│  <-- SÓ 2 parâmetros
+  └──────────────────┴─────────────────┘
+
+
+================================================================================
+4. get_active_ride — ANTES vs DEPOIS
+================================================================================
+
+--- ANTES (VULNERÁVEL) ---
+Ficheiro: migrations/20260406_get_active_ride.sql
+
+  CREATE OR REPLACE FUNCTION public.get_active_ride(p_user_id UUID)
+  ...
+  WHERE (r.passenger_id = p_user_id OR r.driver_id = p_user_id)
+    AND r.status NOT IN ('completed', 'cancelled')
+  -- Qualquer um podia ler corridas activas de outro!
+
+--- DEPOIS (SEGURO) ---
+  DROP FUNCTION IF EXISTS public.get_active_ride(UUID);
+  CREATE OR REPLACE FUNCTION public.get_active_ride()
+  ...
+  DECLARE
+    v_user_id UUID := auth.uid();   <-- USA auth.uid()
+  ...
+  WHERE (r.passenger_id = v_user_id OR r.driver_id = v_user_id)
+
+--- Frontend (rideService.ts) ---
+  // ANTES:
+  const { data, error } = await supabase.rpc('get_active_ride', { p_user_id: userId });
+
+  // DEPOIS:
+  const { data, error } = await supabase.rpc('get_active_ride');  <-- SEM parâmetros
+
+--- Verificação BD produção ---
+  ┌─────────────────┬────────────┐
+  │     proname     │ proargtypes│
+  ├─────────────────┼────────────┤
+  │ get_active_ride │ {}         │  <-- ZERO parâmetros
+  └─────────────────┴────────────┘
+
+
+================================================================================
+5. recharge_chat_quota — ANTES vs DEPOIS
+================================================================================
+
+--- ANTES (VULNERÁVEL) ---
+  CREATE OR REPLACE FUNCTION public.recharge_chat_quota(
+    p_user_id UUID,            <-- CLIENT CONTROLA ISTO!
+    amount    INT DEFAULT 10
+  )
+  ...
+  UPDATE public.profiles
+  SET chat_quota = LEAST(COALESCE(chat_quota, 0) + amount, 50)
+  WHERE user_id = p_user_id;   <-- podia dar créditos a qualquer um
+
+--- DEPOIS (SEGURO) ---
+  DROP FUNCTION IF EXISTS public.recharge_chat_quota(UUID, INT);
+  CREATE OR REPLACE FUNCTION public.recharge_chat_quota(
+    amount INT DEFAULT 10      <-- SEM p_user_id
+  )
+  ...
+  UPDATE public.profiles
+  SET chat_quota = LEAST(COALESCE(chat_quota, 0) + amount, 50)
+  WHERE user_id = auth.uid();  <-- SÓ o próprio user
+
+--- Verificação BD produção ---
+  ┌──────────────────────┬─────────────────┐
+  │       proname        │   proargtypes   │
+  ├──────────────────────┼─────────────────┤
+  │ recharge_chat_quota  │ [0:0]={integer} │  <-- SÓ 1 parâmetro
+  └──────────────────────┴─────────────────┘
+
+
+================================================================================
+6. RPCs NOVAS: confirm_pickup, start_ride, complete_ride
+================================================================================
+
+--- ANTES: updateRideStatus fazia UPDATE directo na tabela ---
+Ficheiro: rideService.ts (ANTES)
+
+  async updateRideStatus(rideId: string, status: RideStatus, actorId: string) {
+    ...
+    let query = supabase.from('rides').update(payload).eq('id', rideId);  <-- DIRECTO!
+    if (driverOnlyStates.includes(status)) {
+      query = query.eq('driver_id', actorId);   <-- RLS bypass possível
+    }
+    ...
+  }
+
+--- DEPOIS: usa RPCs com auth.uid() ---
+Ficheiro: rideService.ts (DEPOIS)
+
+  async updateRideStatus(rideId: string, status: RideStatus) {
+    switch (status) {
+      case RideStatus.PICKING_UP:
+        const { data } = await supabase.rpc('confirm_pickup', { p_ride_id: rideId });
+        break;
+      case RideStatus.IN_PROGRESS:
+        const { data } = await supabase.rpc('start_ride', { p_ride_id: rideId });
+        break;
+      case RideStatus.COMPLETED:
+        const { data } = await supabase.rpc('complete_ride', { p_ride_id: rideId });
+        break;
+    }
+    // SEM actorId — auth.uid() no servidor
+  }
+
+--- confirm_pickup SQL (migration 20260719) ---
+  CREATE OR REPLACE FUNCTION public.confirm_pickup(p_ride_id UUID)
+  ...
+  DECLARE
+    v_driver_id UUID := auth.uid();
+  BEGIN
+    IF v_driver_id IS NULL THEN
+      RETURN jsonb_build_object('success', false, 'reason', 'not_authenticated');
+    END IF;
+    IF NOT public.is_driver() THEN
+      RETURN jsonb_build_object('success', false, 'reason', 'not_a_driver');
+    END IF;
+    ...
+    IF v_ride.driver_id != v_driver_id THEN
+      RETURN jsonb_build_object('success', false, 'reason', 'not_your_ride');
+    END IF;
+    ...
+
+--- Verificação BD produção ---
+  ┌───────────────┬───────────────┐
+  │    proname    │  proargtypes  │
+  ├───────────────┼───────────────┤
+  │ confirm_pickup│ [0:0]={uuid}  │
+  │ complete_ride │ [0:0]={uuid}  │
+  │ start_ride    │ [0:0]={uuid}  │
+  └───────────────┴───────────────┘
+
+
+================================================================================
+7. RLS — ANTES vs DEPOIS
+================================================================================
+
+--- ANTES (FIX_RLS_DEFINITIVO.sql — PERIGOSO) ---
+  -- driver_locations: QUALQUER UM pode ver TODOS os GPS!
+  CREATE POLICY "driver_locations_public_read"
+  ON public.driver_locations FOR SELECT
+  USING (true);                  <-- EXPÕE GPS DE TODOS OS MOTORISTAS
+
+  -- rides: QUALQUER UM pode ver TODAS as corridas!
+  CREATE POLICY "rides: motorista vê TODAS no mapa"
+  ON public.rides FOR SELECT
+  USING (true);                  <-- EXPÕE DADOS DE TODAS AS CORRIDAS
+
+--- DEPOIS (migration 20260719) ---
+  -- rides: passageiro vê só as suas
+  CREATE POLICY "rides_select_own_passenger"
+    ON public.rides FOR SELECT TO authenticated
+    USING (passenger_id = auth.uid() AND public.is_passenger());
+
+  -- rides: motorista vê só as suas
+  CREATE POLICY "rides_select_own_driver"
+    ON public.rides FOR SELECT TO authenticated
+    USING (driver_id = auth.uid() AND public.is_driver());
+
+  -- driver_locations: motorista vê só a sua
+  CREATE POLICY "dl_select_own_driver"
+    ON public.driver_locations FOR SELECT TO authenticated
+    USING (driver_id = auth.uid() AND public.is_driver());
+
+--- Verificação BD produção ---
+  ┌──────────────────┬──────────────────┬────────────────────────────┬─────────────────┐
+  │    tablename     │   policyname     │           roles            │                 │
+  ├──────────────────┼──────────────────┼────────────────────────────┼─────────────────┤
+  │ driver_locations │ dl_admin_all     │ {authenticated}            │ SEM USING(true) │
+  │ driver_locations │ dl_delete_own    │ {authenticated}            │ SEM USING(true) │
+  │ driver_locations │ dl_insert_own    │ {authenticated}            │ SEM USING(true) │
+  │ driver_locations │ dl_select_own    │ {authenticated}            │ SEM USING(true) │
+  │ driver_locations │ dl_update_own    │ {authenticated}            │ SEM USING(true) │
+  │ rides            │ rides_admin_all  │ {authenticated}            │ SEM USING(true) │
+  │ rides            │ rides_insert_own │ {authenticated}            │ SEM USING(true) │
+  │ rides            │ rides_select_drv │ {authenticated}            │ SEM USING(true) │
+  │ rides            │ rides_select_pax │ {authenticated}            │ SEM USING(true) │
+  └──────────────────┴──────────────────┴────────────────────────────┴─────────────────┘
+
+
+================================================================================
+8. ANON BLOQUEADO
+================================================================================
+
+--- Verificação: permissões do role 'anon' nas tabelas sensíveis ---
+  supabase db query --linked "SELECT grantee, table_name, privilege_type
+    FROM information_schema.role_table_grants
+    WHERE grantee = 'anon'
+    AND table_name IN ('rides', 'driver_locations');"
+
+  (nenhum resultado)  <-- ZERO permissões para anon
+
+--- SQL que garante isso (migration 20260719) ---
+  ALTER TABLE public.rides FORCE ROW LEVEL SECURITY;
+  ALTER TABLE public.driver_locations FORCE ROW LEVEL SECURITY;
+
+  REVOKE ALL ON public.rides FROM anon;
+  REVOKE ALL ON public.driver_locations FROM anon;
+
+
+================================================================================
+9. FORCE RLS ATIVADO
+================================================================================
+
+--- Verificação ---
+  ┌──────────────────┬─────────────────────┐
+  │     relname      │ relforcerowsecurity │
+  ├──────────────────┼─────────────────────┤
+  │ driver_locations │ true                │
+  │ rides            │ true                │
+  └──────────────────┴─────────────────────┘
+
+  FORCE ROW LEVEL SECURITY garante que MESMO o owner da tabela (service_role)
+  está sujeito a RLS. Sem isto, o service_role bypassa todas as policies.
+
+
+================================================================================
+10. REALTIME CONFIRMADO
+================================================================================
+
+--- Verificação ---
+  ┌──────────────────────────┐
+  │        tablename         │
+  ├──────────────────────────┤
+  │ driver_locations         │  <-- GPS em tempo real
+  │ rides                    │  <-- Estado da corrida em tempo real
+  │ ride_messages            │  <-- Chat da corrida
+  │ ...                      │
+  └──────────────────────────┘
+
+  11 tabelas na publicação supabase_realtime.
+  rides e driver_locations incluídas.
+
+
+================================================================================
+RESUMO: O QUE MUDOU
+================================================================================
+
+RPC                   ANTES                        DEPOIS
+─────────────────────  ───────────────────────────  ─────────────────────────
+accept_ride_atomic     p_ride_id, p_driver_id       p_ride_id (auth.uid())
+decline_ride_atomic    p_ride_id, p_driver_id       p_ride_id (auth.uid())
+cancel_ride_safe       p_ride_id, p_user_id, p_...  p_ride_id, p_reason (auth.uid())
+get_active_ride        p_user_id                    (sem parâmetros, auth.uid())
+recharge_chat_quota    p_user_id, amount            amount (auth.uid())
+confirm_pickup         (NÃO EXISTIA)                p_ride_id (auth.uid())
+start_ride             (NÃO EXISTIA)                p_ride_id (auth.uid())
+complete_ride          (NÃO EXISTIA)                p_ride_id (auth.uid())
+
+RLS                    ANTES                        DEPOIS
+─────────────────────  ───────────────────────────  ─────────────────────────
+rides SELECT           USING(true) [PERIGOSO]       passenger_id=auth.uid()
+driver_locations SEL   USING(true) [PERIGOSO]       driver_id=auth.uid()
+rides UPDATE           (via RPC)                    (via RPCs)
+anon                   (parcialmente aberto)        REVOKE ALL
+
+Frontend               ANTES                        DEPOIS
+─────────────────────  ───────────────────────────  ─────────────────────────
+acceptRide             passava driverId             ignora driverId
+declineRide            passava driverId             ignora driverId
+cancelRide             passava userId               ignora userId
+getActiveRide          passava userId               ignora userId
+advanceStatus          passava actorId              SEM actorId
+driverConfirmRide      UPDATE directo               RPC confirm_pickup
+updateRideStatus       UPDATE direto                RPCs start/complete
+
+================================================================================
+FIM DA PROVA
+================================================================================

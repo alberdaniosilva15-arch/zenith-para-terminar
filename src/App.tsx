@@ -2,21 +2,13 @@ import React, { Suspense, useEffect, useRef } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import FullPageSpinner from './components/FullPageSpinner';
-import { hasRecoveryType } from './lib/authUtils';
+import { hasRecoveryType, sanitizeRedirectTarget } from './lib/authUtils';
 
 const Login = React.lazy(() => import('./components/Login'));
 const ParentTrackingPage = React.lazy(() => import('./components/ParentTrackingPage'));
 const AuthenticatedApp = React.lazy(() => import('./app/AuthenticatedApp'));
-const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_intent';
-const CRM_ADMIN_ORIGIN = 'http://127.0.0.1:4000';
-
-function sanitizeRedirectTarget(candidate: string | null | undefined): string | null {
-  if (!candidate) return null;
-  if (!candidate.startsWith('/')) return null;
-  if (candidate.startsWith('//')) return null;
-  if (candidate.startsWith('/login')) return null;
-  return candidate;
-}
+const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_target';
+const CRM_ADMIN_ORIGIN = import.meta.env.VITE_CRM_ADMIN_ORIGIN ?? 'http://127.0.0.1:4000';
 
 function readStoredRedirectTarget(): string | null {
   if (typeof window === 'undefined') return null;
@@ -91,7 +83,7 @@ const StuckRegistrationScreen: React.FC<{ onSignOut: () => void }> = ({ onSignOu
         <>
           <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin" />
           <div className="text-center">
-            <p className="text-white/80 font-bold">Conta autenticada - a finalizar registo...</p>
+            <p className="text-white/80 font-bold">Conta autenticada. A finalizar registo...</p>
             <p className="text-white/40 text-xs mt-2">({15 - seconds}s)</p>
           </div>
           <p className="text-white/40 text-sm max-w-sm text-center">

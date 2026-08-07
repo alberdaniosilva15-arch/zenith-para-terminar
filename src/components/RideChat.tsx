@@ -134,7 +134,7 @@ export default function RideChat({
           <div>
             <h3 className="zr-section-title" style={{ fontSize: '16px', margin: 0 }}>{peerName}</h3>
             {phonePrivacyMode && (
-              <span className="zr-meta" style={{ color: 'var(--gold)', fontSize: '10px' }}>Número protegido - usa o chat</span>
+              <span className="zr-meta" style={{ color: 'var(--gold)', fontSize: '10px' }}>Número protegido. Usa o chat</span>
             )}
             <div style={{ marginTop: '4px' }}>
               <KazeCreditsBadge userId={myId} rideId={rideId} />

@@ -6,7 +6,7 @@
 import React from 'react';
 import { useToastStore } from '../store/useAppStore';
 
-const ICONS = { success: '✅', error: '❌', info: 'ℹ️' };
+const ICONS: Record<string, string> = { success: 'check_circle', error: 'cancel', info: 'info' };
 const COLORS = {
   success: 'border-green-500/40 bg-green-950/80',
   error:   'border-red-500/40 bg-red-950/80',
@@ -22,7 +22,7 @@ const Toast: React.FC = () => {
       className={`fixed top-4 left-1/2 -translate-x-1/2 z-[9999] flex items-center gap-3 px-5 py-4 rounded-2xl border backdrop-blur-xl shadow-2xl text-white max-w-[90vw] animate-in slide-in-from-top-4 duration-300 ${COLORS[toast.type]}`}
       onClick={clearToast}
     >
-      <span className="text-xl shrink-0">{ICONS[toast.type]}</span>
+      <span className="material-symbols-outlined text-xl shrink-0">{ICONS[toast.type]}</span>
       <p className="font-black text-xs leading-tight">{toast.message}</p>
     </div>
   );

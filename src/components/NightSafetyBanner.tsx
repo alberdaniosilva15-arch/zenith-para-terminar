@@ -53,7 +53,7 @@ export default function NightSafetyBanner({
       >×</button>
       
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-        <span style={{ fontSize: 28 }}>🌙</span>
+        <span className="material-symbols-outlined" style={{ fontSize: 28 }}>dark_mode</span>
         <div>
           <strong style={{ color: '#ffaa00', fontSize: 14, display: 'block' }}>Modo Nocturno Activo</strong>
           <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11 }}>
@@ -82,11 +82,11 @@ export default function NightSafetyBanner({
             textTransform: 'uppercase' as const,
           }}
         >
-          🛡️ Activar Partilha de Localização ao Vivo
+          <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>shield</span> Activar Partilha de Localização ao Vivo
         </button>
       ) : (
         <p style={{ color: 'rgba(255,68,68,0.8)', fontSize: 11, margin: 0, textAlign: 'center' }}>
-          ⚠️ Adiciona um contacto de emergência em Perfil → Segurança para activar esta funcionalidade.
+          <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>warning</span> Adiciona um contacto de emergência em Perfil → Segurança para activar esta funcionalidade.
         </p>
       )}
     </div>

@@ -133,3 +133,5 @@ admin-dev/
 kaze_voice_server.py
 dist-admin/
 KAZE_CORE_BACKUP.md
+
+.vercel

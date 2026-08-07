@@ -13,7 +13,7 @@ export default function MarketChart({ zonesData }: MarketChartProps) {
         <Tooltip contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 40px rgba(0,0,0,0.1)', fontWeight: 'bold', fontSize: '10px' }} />
         <Bar dataKey="demand" radius={[10, 10, 10, 10]} barSize={24}>
           {zonesData.map((entry, index) => (
-            <Cell key={`cell-${index}`} fill={entry.risk > 15 ? '#ef4444' : '#4f46e5'} />
+            <Cell key={`cell-${index}`} fill={entry.risk > 15 ? '#ef4444' : '#e6c364'} />
           ))}
         </Bar>
       </BarChart>

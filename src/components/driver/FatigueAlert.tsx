@@ -23,8 +23,8 @@ const FatigueAlert: React.FC<FatigueAlertProps> = ({ isOnline, onlineHours }) =>
       </p>
       <p className="text-sm font-black mt-2">
         {isCritical
-          ? '🛑 Descansa. Seguranca em primeiro lugar.'
-          : '⚡ Para 10 min - a eficiencia costuma cair depois de 4 horas continuas.'}
+          ? <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>front_hand</span> Descansa. Seguranca em primeiro lugar.</>
+          : <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>bolt</span> Para 10 min. A eficiência costuma cair depois de 4 horas contínuas.</>}
       </p>
       <p className="text-[11px] mt-2 opacity-80">
         Tempo online continuo estimado: {onlineHours.toFixed(1)} h
