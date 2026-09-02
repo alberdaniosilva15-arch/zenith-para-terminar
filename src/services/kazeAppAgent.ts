@@ -3,15 +3,15 @@
 // Agente Operacional do Kaze para o App do Utilizador
 // Suporta:
 //   1. Function Calling via Gemini (request_ride, schedule_ride, create_contract, etc.)
-//   2. Fallback local inteligente com regex caso a IA esteja sem rede
-//   3. Resolução de GPS/Geocodificação em Luanda via mapService e zonePriceService
+//   2. Fallback local inteligente com NLP e limpeza de linguagem natural luandense
+//   3. Validação geográfica estrita de Luanda (previne rotas absurdas de Benguela ou IP)
 //   4. Proposta de Ações com confirmação de segurança (cartão interativo no chat)
 // =============================================================================
 
-import { mapService } from './mapService';
+import { mapService, LUANDA_STATIC_LOCATIONS } from './mapService';
 import { zonePriceService } from './zonePrice';
 import { supabase } from '../lib/supabase';
-import type { LatLng, ServiceType } from '../types';
+import type { LatLng } from '../types';
 
 export type KazeActionType =
   | 'REQUEST_RIDE'
@@ -37,8 +37,8 @@ export interface KazeProposedSchedule {
   originCoords: LatLng;
   destination: string;
   destCoords: LatLng;
-  date: string;       // YYYY-MM-DD
-  time: string;       // HH:MM
+  date: string;        // YYYY-MM-DD
+  time: string;        // HH:MM
   scheduledAt: string; // ISO String
   vehicleType: 'standard' | 'moto' | 'comfort' | 'xl';
 }
@@ -72,23 +72,76 @@ export interface KazeAgentResult {
 
 const FRONTEND_GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
 
+// Centro de Luanda (Mutamba / Baixa)
+const LUANDA_CENTER: LatLng = { lat: -8.8390, lng: 13.2343 };
+
+/**
+ * Validação rigorosa: A Zenith Ride opera na Província de Luanda.
+ * Se o GPS ou IP do utilizador reportar fora de Luanda (ex: Benguela, Huambo, etc.),
+ * restringimos para Luanda Centro para evitar rotas de 400km e 100.000 Kz.
+ */
+export function isWithinLuanda(coords: LatLng): boolean {
+  return coords.lat >= -9.5 && coords.lat <= -8.3 && coords.lng >= 12.9 && coords.lng <= 13.9;
+}
+
+/**
+ * Sanitizador de linguagem natural para destinos e origens.
+ * Remove vícios de fala como "pede para mim uma corrida para", "mais próximo de mim", etc.
+ */
+export function cleanDestinationQuery(raw: string): string {
+  let q = String(raw || '').trim();
+
+  // Remover prefixos comuns de comando de fala
+  q = q.replace(/^(?:por favor|kaze|podes|pede|chama|quero|preciso de|marca|levar|leva[- ]me|ir)\s+/i, '');
+  q = q.replace(/^(?:para mim|pra mim)\s+/i, '');
+  q = q.replace(/^(?:uma corrida|um táxi|um taxi|um carro|uma viagem|um motogo)\s+/i, '');
+  q = q.replace(/^(?:para|pra|ao|à|a|ate|até)\s+/i, '');
+  q = q.replace(/^(?:o|a|os|as)\s+/i, '');
+
+  // Remover sufixos de proximidade
+  q = q.replace(/\s+(?:mais pr[oó]ximo(?: de mim)?|mais perto(?: de mim)?|por perto|aqui perto)$/i, '');
+  q = q.replace(/\s+(?:de mim|onde estou)$/i, '');
+
+  // Normalização de marcos famosos de Luanda
+  if (/bela[s]?\s*shopping/i.test(q)) return 'Belas Shopping';
+  if (/xyami\s*kilamba/i.test(q)) return 'Xyami Shopping Kilamba';
+  if (/xyami/i.test(q)) return 'Xyami Shopping';
+  if (/aeroporto/i.test(q)) return 'Aeroporto 4 de Fevereiro';
+  if (/ilha\s*do\s*cabo|ilha/i.test(q) && !/maianga|talatona/i.test(q)) return 'Ilha do Cabo';
+  if (/mutamba/i.test(q)) return 'Mutamba — Baixa de Luanda';
+  if (/kinaxixi/i.test(q)) return 'Kinaxixi';
+  if (/talatona/i.test(q)) return 'Talatona';
+  if (/kilamba/i.test(q)) return 'Kilamba';
+  if (/viana/i.test(q)) return 'Viana — Centro';
+  if (/cacuaco/i.test(q)) return 'Cacuaco — Centro';
+  if (/morro\s*bento/i.test(q)) return 'Morro Bento';
+  if (/benfica/i.test(q)) return 'Benfica';
+  if (/camama/i.test(q)) return 'Camama';
+  if (/alvalade/i.test(q)) return 'Alvalade';
+  if (/maianga/i.test(q)) return 'Maianga';
+  if (/cazenga/i.test(q)) return 'Cazenga';
+  if (/samba/i.test(q)) return 'Samba';
+
+  return q.trim();
+}
+
 // ── Definição das Ferramentas para o Gemini ───────────────────────────────────
 const KAZE_APP_TOOLS = [
   {
     function_declarations: [
       {
         name: 'request_ride',
-        description: 'Prepara e solicita uma corrida no app para o passageiro em Luanda.',
+        description: 'Prepara e solicita uma corrida no app para o passageiro em Luanda, Angola.',
         parameters: {
           type: 'OBJECT',
           properties: {
             origin: {
               type: 'STRING',
-              description: 'Local de partida (ex: Kinaxixi, Talatona, Viana, ou vazio para localização actual)',
+              description: 'Local de partida em Luanda (ex: Kinaxixi, Talatona, Viana, ou vazio para localização actual do passageiro)',
             },
             destination: {
               type: 'STRING',
-              description: 'Local de destino (ex: Aeroporto 4 de Fevereiro, Belas Shopping, Kilamba)',
+              description: 'Nome limpo do destino em Luanda (ex: Belas Shopping, Aeroporto 4 de Fevereiro, Talatona)',
             },
             vehicle_type: {
               type: 'STRING',
@@ -105,9 +158,9 @@ const KAZE_APP_TOOLS = [
         parameters: {
           type: 'OBJECT',
           properties: {
-            origin: { type: 'STRING', description: 'Local de partida' },
-            destination: { type: 'STRING', description: 'Local de destino' },
-            date: { type: 'STRING', description: 'Data no formato YYYY-MM-DD (ou palavras como "hoje" ou "amanhã")' },
+            origin: { type: 'STRING', description: 'Local de partida em Luanda' },
+            destination: { type: 'STRING', description: 'Local de destino em Luanda' },
+            date: { type: 'STRING', description: 'Data no formato YYYY-MM-DD ou "hoje" / "amanhã"' },
             time: { type: 'STRING', description: 'Hora no formato HH:MM (ex: 08:00, 14:30)' },
             vehicle_type: { type: 'STRING', enum: ['standard', 'moto', 'comfort', 'xl'] },
           },
@@ -169,16 +222,19 @@ const KAZE_APP_TOOLS = [
 const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente inteligente, ágil e executivo da Zenith Ride em Luanda, Angola.
 Tens capacidade directa de operar e controlar o aplicativo do passageiro e do motorista!
 
+A Zenith Ride opera EXCLUSIVAMENTE em Luanda, Angola.
+Todos os locais são zonas de Luanda (Talatona, Belas Shopping, Mutamba, Kinaxixi, Kilamba, Viana, Cacuaco, Aeroporto, Ilha do Cabo, Maianga, etc.).
+
 QUANDO O UTILIZADOR PEDIR UMA AÇÃO:
-1. Pedir corrida: Se o utilizador disser "pede um táxi para o Talatona", "leva-me para o aeroporto", chama imediatamente a ferramenta "request_ride".
+1. Pedir corrida: Se o utilizador disser "pede para mim uma corrida para o Belas Shopping", chama a ferramenta "request_ride" com destination="Belas Shopping".
+   - Remove do campo destination palavras como "pede para mim", "mais próximo de mim", "uma corrida para". Extrai apenas o nome do local limpo!
 2. Agendar corrida: Se pedir para agendar para amanhã ou para uma hora específica, chama "schedule_ride".
 3. Criar contrato: Se falar em contrato escolar, transporte de filhos ou trabalho regular, chama "create_contract".
 4. Carteira / Saldo: Se perguntar quanto tem de dinheiro ou pedir para abrir a carteira, chama "check_balance" ou "navigate_app".
 5. Histórico: Se pedir para ver corridas passadas, chama "navigate_app" com screen="rides".
 6. Cancelar corrida: Se pedir para cancelar a corrida actual, chama "cancel_current_ride".
 
-Responde com simpatia, energia positiva e profissionalismo luandense ("mano", "fixe", "tranquilo", com moderação).
-Lembra-te: Sempre que o utilizador quiser fazer uma acção no app, deves acionar a respectiva ferramenta (function call)!`;
+Responde sempre com entusiasmo, clareza e elegância executiva!`;
 
 export class KazeAppAgent {
   /**
@@ -253,7 +309,7 @@ export class KazeAppAgent {
           contents: [{ role: 'user', parts: [{ text: message }] }],
           tools: KAZE_APP_TOOLS,
           generationConfig: {
-            temperature: 0.3,
+            temperature: 0.2,
             maxOutputTokens: 600,
           },
         }),
@@ -298,45 +354,65 @@ export class KazeAppAgent {
   ): Promise<KazeAgentResult> {
     switch (toolName) {
       case 'request_ride': {
-        const destStr = args.destination;
-        if (!destStr) return { text: 'Para onde gostarias de ir, mano?' };
+        const rawDest = args.destination;
+        if (!rawDest) return { text: 'Para onde gostarias de ir em Luanda, mano?' };
 
-        // 1. Origem: se não indicada ou 'aqui', usa GPS actual
-        let originStr = args.origin || 'Minha localização actual';
-        let originCoords = context.userLocation || null;
+        // 1. Limpar o destino de frases conversacionais
+        let destStr = cleanDestinationQuery(rawDest);
 
-        if (!originCoords || (args.origin && !/aqui|onde estou|minha localiza/i.test(args.origin))) {
+        // 2. Origem: se não indicada ou 'aqui', usa GPS actual
+        let originStr = args.origin ? cleanDestinationQuery(args.origin) : 'Minha localização actual';
+        let originCoords: LatLng | null = context.userLocation || null;
+
+        if (args.origin && !/aqui|onde estou|minha localiza|minha posi/i.test(args.origin)) {
           originCoords = await mapService.geocodeAddress(originStr);
-          if (!originCoords && context.userLocation) {
-            originCoords = context.userLocation;
-            originStr = 'Minha localização actual';
-          }
         }
 
-        // Se ainda não tiver coords de origem, tenta GPS do aparelho
+        // Se não tiver origem ainda, tenta GPS ou localização padrão de Luanda
         if (!originCoords) {
           try {
-            originCoords = await mapService.getCurrentPosition();
-            originStr = await mapService.reverseGeocode(originCoords);
+            const gps = await mapService.getCurrentPosition();
+            // VALIDAÇÃO CRUCIAL: Se o GPS for fora de Luanda (ex: Benguela/erro de IP), usar Luanda Centro
+            if (isWithinLuanda(gps)) {
+              originCoords = gps;
+              originStr = await mapService.reverseGeocode(originCoords);
+            } else {
+              originCoords = LUANDA_CENTER;
+              originStr = 'Luanda (Mutamba)';
+            }
           } catch {
-            originCoords = { lat: -8.8368, lng: 13.2343 }; // Luanda Centro
-            originStr = 'Luanda';
+            originCoords = LUANDA_CENTER;
+            originStr = 'Luanda (Mutamba)';
           }
+        } else if (!isWithinLuanda(originCoords)) {
+          // Garantir que a origem está dentro de Luanda
+          originCoords = LUANDA_CENTER;
+          originStr = 'Luanda (Mutamba)';
         }
 
-        // 2. Destino: geocodificar
-        let destCoords = await mapService.geocodeAddress(destStr);
+        // 3. Destino: Geocodificar com mapa e base local de Luanda
+        let destCoords: LatLng | null = await mapService.geocodeAddress(destStr);
         if (!destCoords) {
           const search = await mapService.searchPlaces(destStr, originCoords);
           if (search.length > 0 && search[0]?.coords) {
             destCoords = search[0].coords;
-            originStr = search[0].name;
+            destStr = search[0].name; // ✅ CORRETO: actualiza destStr com o nome encontrado
           } else {
-            destCoords = { lat: -8.9350, lng: 13.1810 }; // Fallback Talatona
+            // Verificar busca fuzzy na lista estática de Luanda
+            const staticMatch = LUANDA_STATIC_LOCATIONS.find(loc =>
+              loc.name.toLowerCase().includes(destStr.toLowerCase())
+            );
+            if (staticMatch) {
+              destCoords = staticMatch.coords;
+              destStr = staticMatch.name;
+            } else {
+              destCoords = { lat: -8.9280, lng: 13.1950 }; // Belas Shopping como centro de referência
+              destStr = 'Belas Shopping';
+            }
           }
         }
 
-        // 3. Rota e Preço
+        // 4. Rota e Preço Real
         const route = mapService.calculateRouteInfo(originCoords, destCoords);
         const zp = await zonePriceService.getZonePrice(originStr, destStr);
         const priceKz = zp?.price_kz ?? Math.max(500, Math.round(500 + route.distanceKm * 250));
@@ -371,11 +447,10 @@ export class KazeAppAgent {
       }
 
       case 'schedule_ride': {
-        const destStr = args.destination;
+        const destStr = cleanDestinationQuery(args.destination);
         const timeStr = args.time || '08:00';
         let dateStr = args.date || '';
 
-        // Tratar "hoje" / "amanhã"
         const now = new Date();
         if (!dateStr || /hoje/i.test(dateStr)) {
           dateStr = now.toISOString().split('T')[0] ?? '';
@@ -385,10 +460,12 @@ export class KazeAppAgent {
           dateStr = tmrw.toISOString().split('T')[0] ?? '';
         }
 
-        const originCoords = context.userLocation || { lat: -8.8368, lng: 13.2343 };
-        const originStr = args.origin || 'Minha localização actual';
+        let originCoords = context.userLocation || LUANDA_CENTER;
+        if (!isWithinLuanda(originCoords)) originCoords = LUANDA_CENTER;
+        const originStr = args.origin ? cleanDestinationQuery(args.origin) : 'Minha localização actual';
+
         let destCoords = await mapService.geocodeAddress(destStr);
-        if (!destCoords) destCoords = { lat: -8.9350, lng: 13.1810 };
+        if (!destCoords) destCoords = { lat: -8.9280, lng: 13.1950 };
 
         const scheduledAt = new Date(`${dateStr}T${timeStr}:00+01:00`).toISOString();
 
@@ -421,12 +498,12 @@ export class KazeAppAgent {
       }
 
       case 'create_contract': {
-        const destStr = args.destination_address || 'Luanda';
+        const destStr = cleanDestinationQuery(args.destination_address || 'Luanda');
         const titleStr = args.title || `Contrato ${args.contract_type || 'Escolar'}`;
         const timeStart = args.time_start || '07:30';
         const timeEnd = args.time_end || '13:00';
         let destCoords = await mapService.geocodeAddress(destStr);
-        if (!destCoords) destCoords = { lat: -8.9350, lng: 13.1810 };
+        if (!destCoords) destCoords = { lat: -8.9280, lng: 13.1950 };
 
         const proposedContract: KazeProposedContract = {
           contractType: args.contract_type || 'school',
@@ -544,19 +621,29 @@ export class KazeAppAgent {
     const text = message.toLowerCase();
 
     // 1. Pedir Corrida
-    const rideMatch = text.match(/(?:pede|chama|quero|preciso de|levar para|ir para)\s+(?:um táxi|uma corrida|um motogo|um carro|para|ate)?\s*(.+)/i);
-    if (rideMatch && !/agenda|amanh|saldo|contrato/i.test(text)) {
-      let dest = rideMatch[1]?.trim() || '';
-      dest = dest.replace(/^para\s+/i, '').replace(/^ao\s+/i, '').replace(/^à\s+/i, '');
+    if (/(?:pede|chama|quero|preciso de|levar para|ir para|corrida|t[aá]xi)\b/i.test(text) && !/agenda|amanh|saldo|contrato/i.test(text)) {
+      // Extrair rota com "de X para Y" se houver
+      const routeMatch = text.match(/(?:de|desde)\s+([^,]+?)\s+(?:para|até|ao|à)\s+(.+)/i);
+      let origin: string | undefined;
+      let dest: string;
 
-      return await this._resolveToolAction('request_ride', { destination: dest }, '', context);
+      if (routeMatch) {
+        origin = cleanDestinationQuery(routeMatch[1] ?? '');
+        dest = cleanDestinationQuery(routeMatch[2] ?? '');
+      } else {
+        dest = cleanDestinationQuery(text);
+      }
+
+      if (!dest || dest.length < 2) dest = 'Belas Shopping';
+
+      return await this._resolveToolAction('request_ride', { destination: dest, origin }, '', context);
     }
 
     // 2. Agendar Corrida
     if (/agenda|agendar/i.test(text)) {
       const timeMatch = text.match(/(\d{1,2}(?::\d{2})|\d{1,2}h|\d{1,2}\s+horas?)/i);
       const time = timeMatch ? timeMatch[0].replace('h', ':00').replace(' horas', ':00').padStart(5, '0') : '08:00';
-      const dest = text.replace(/.*(?:para|até|ao)\s+/i, '').trim() || 'Luanda Centro';
+      const dest = cleanDestinationQuery(text) || 'Aeroporto 4 de Fevereiro';
       const isTomorrow = /amanh[aã]/i.test(text);
 
       return await this._resolveToolAction('schedule_ride', {
@@ -568,10 +655,11 @@ export class KazeAppAgent {
 
     // 3. Contrato
     if (/contrato/i.test(text)) {
+      const dest = cleanDestinationQuery(text) || 'Luanda';
       return await this._resolveToolAction('create_contract', {
         contract_type: /escola/i.test(text) ? 'school' : /empresa|trabalho/i.test(text) ? 'corporate' : 'family',
         title: 'Novo Contrato de Transporte',
-        destination_address: 'Luanda',
+        destination_address: dest,
         time_start: '07:30',
         time_end: '13:00',
       }, '', context);
@@ -594,7 +682,7 @@ export class KazeAppAgent {
 
     // Resposta padrão amigável
     return {
-      text: `Olá mano! Sou o Kaze. Posso pedir uma corrida agora ("pede um táxi para Talatona"), agendar uma viagem ("agenda para amanhã às 8h"), criar um contrato ou consultar o teu saldo. O que precisas? 🚗✨`,
+      text: `Olá mano! Sou o Kaze. Posso pedir uma corrida agora ("pede para mim uma corrida para o Belas Shopping"), agendar uma viagem ("agenda para amanhã às 8h"), criar um contrato ou consultar o teu saldo. O que precisas? 🚗✨`,
       speakText: 'Olá! Sou o Kaze. Podes pedir uma corrida, agendar ou consultar o teu saldo.',
     };
   }

@@ -1,17 +1,18 @@
 // =============================================================================
-// ZENITH RIDE v3.8 — KazeMascot.tsx
+// ZENITH RIDE v3.9 — KazeMascot.tsx
 // KAZE OPERACIONAL — AGENTE EXECUTIVO NO APP
 // Capacidades:
-//   1. Pedir / criar corrida por voz e texto com confirmação visual e sonora
-//   2. Agendar corridas futuras (grava em scheduled_rides)
-//   3. Criar contratos (escolar/familiar/corporativo)
-//   4. Consultar saldo da carteira e navegar entre telas (/wallet, /rides, /contrato)
-//   5. Botão de microfone integrado no chat para fala contínua
+//   1. Microfone com transcrição nativa via Gemini 2.5 Flash (funciona em qualquer navegador)
+//   2. Pedir / criar corrida por voz e texto com rotas e preços corretos em Luanda
+//   3. Agendar corridas futuras (grava em scheduled_rides)
+//   4. Criar contratos (escolar/familiar/corporativo)
+//   5. Consultar saldo da carteira e navegar entre telas (/wallet, /rides, /contrato)
 // =============================================================================
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { geminiService, getLocalKazeResponse } from '../services/geminiService';
 import { kazeAppAgent, KazeProposedAction } from '../services/kazeAppAgent';
+import { transcribeAudioWithGemini } from '../lib/kazeAudioTranscribe';
 import { kazeSpeak } from '../lib/kazeVoice';
 import { UserRole, RideStatus, LatLng } from '../types';
 import { supabase } from '../lib/supabase';
@@ -49,9 +50,9 @@ type SupportedKazeGreetingRole = UserRole.PASSENGER | UserRole.DRIVER;
 
 const KAZE_GREETINGS: Record<SupportedKazeGreetingRole, readonly string[]> = {
   passenger: [
-    'Olá! Sou o Kaze. Podes pedir-me uma corrida, agendar uma viagem ou criar um contrato por voz ou texto!',
-    'Pronto para a tua próxima corrida? Diz-me: "Kaze, pede um táxi para Talatona"!',
-    'Bem-vindo ao Zenith Ride! Posso ajudar-te a pedir corridas, agendar ou ver o teu saldo.',
+    'Olá! Sou o Kaze. Podes falar comigo pelo microfone ou escrever: "pede um táxi para o Belas Shopping", agendar viagens ou ver o teu saldo!',
+    'Pronto para sair em Luanda? Toca no microfone e diz-me para onde queres ir!',
+    'Bem-vindo ao Zenith Ride! Posso pedir a tua corrida, agendar ou ver o teu saldo em segundos.',
   ],
   driver: [
     'Força motorista! O Kaze está contigo na estrada.',
@@ -81,39 +82,43 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   userLocation,
 }) => {
   const showToast = useAppStore((s) => s.showToast);
-  const [isOpen,         setIsOpen]         = useState(false);
-  const [mode,           setMode]           = useState<'chat' | 'voice' | 'explore'>('chat');
-  const [messages,       setMessages]       = useState<ChatMessage[]>([]);
-  const [inputValue,     setInputValue]     = useState('');
-  const [isThinking,     setIsThinking]     = useState(false);
-  const [thought,        setThought]        = useState<string | null>(null);
-  const [isLive,         setIsLive]         = useState(false);
-  const [voiceError,     setVoiceError]     = useState<string | null>(null);
-  const [kazeOnline,     setKazeOnline]     = useState<boolean | null>(true);
-  const [voiceEnabled,   setVoiceEnabled]   = useState(true);
-  const [isListeningMic, setIsListeningMic] = useState(false);
+  const [isOpen,          setIsOpen]          = useState(false);
+  const [mode,            setMode]            = useState<'chat' | 'voice' | 'explore'>('chat');
+  const [messages,        setMessages]        = useState<ChatMessage[]>([]);
+  const [inputValue,      setInputValue]      = useState('');
+  const [isThinking,      setIsThinking]      = useState(false);
+  const [thought,         setThought]         = useState<string | null>(null);
+  const [isLive,          setIsLive]          = useState(false);
+  const [voiceError,      setVoiceError]      = useState<string | null>(null);
+  const [kazeOnline,      setKazeOnline]      = useState<boolean | null>(true);
+  const [voiceEnabled,    setVoiceEnabled]    = useState(true);
+  const [isListeningMic,  setIsListeningMic]  = useState(false);
+  const [isTranscribing,  setIsTranscribing]  = useState(false);
   const [actionExecuting, setActionExecuting] = useState(false);
-  const [pendingAction,  setPendingAction]  = useState<KazeProposedAction | null>(null);
+  const [pendingAction,   setPendingAction]   = useState<KazeProposedAction | null>(null);
 
-  const chatRef        = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
-  const liveSessionRef = useRef<{ close: () => void } | null>(null);
-  const scrollRef      = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<any>(null);
+  const chatRef          = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
+  const liveSessionRef   = useRef<{ close: () => void } | null>(null);
+  const scrollRef        = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef   = useRef<Blob[]>([]);
+  const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-scroll ao adicionar mensagens
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, isThinking, pendingAction]);
+  }, [messages, isThinking, pendingAction, isTranscribing]);
 
   useEffect(() => () => {
     liveSessionRef.current?.close();
     liveSessionRef.current = null;
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch { /* ignore */ }
+    if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
     }
   }, []);
 
-  // Mostrar mensagem de boas-vindas ao abrir o chat pela primeira vez
+  // Mensagem de boas-vindas
   useEffect(() => {
     if (isOpen && messages.length === 0) {
       const greeting = pickGreeting(getGreetingPool(role));
@@ -125,7 +130,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     }
   }, [isOpen, role, userName, messages.length]);
 
-  // Pensamentos espontâneos — SÓ quando corrida activa E painel aberto
+  // Pensamentos espontâneos
   useEffect(() => {
     if (dataSaver || rideStatus === RideStatus.IDLE) return;
     if (!isOpen) return;
@@ -182,7 +187,6 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           ]);
           if (voiceEnabled) await kazeSpeak('Corrida solicitada com sucesso! A procurar motoristas.');
           showToast('Corrida solicitada pelo Kaze!', 'success');
-          // Fechar painel após 2.5 segundos para o utilizador ver o mapa
           setTimeout(() => setIsOpen(false), 2500);
           break;
         }
@@ -314,7 +318,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
         if (voiceEnabled) await kazeSpeak(result.text);
       } else {
-        // 1. Passar pelo Kaze App Agent operacional
+        // Passar pelo Kaze App Agent operacional com localização atual
         const agentResult = await kazeAppAgent.processUserMessage(userText, {
           userId,
           userRole: role,
@@ -323,7 +327,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           pendingAction,
         });
 
-        // Se o utilizador acabou de confirmar por texto/voz e já tínhamos uma acção
+        // Se o utilizador confirmou por texto/voz
         if (agentResult.action && agentResult.action.status === 'confirmed') {
           setMessages(prev => [...prev, { role: 'model', text: agentResult.text }]);
           if (voiceEnabled && agentResult.speakText) await kazeSpeak(agentResult.speakText);
@@ -331,7 +335,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           return;
         }
 
-        // Se o utilizador cancelou a acção pendente
+        // Se cancelou
         if (agentResult.action && agentResult.action.status === 'cancelled') {
           setPendingAction(null);
           setMessages(prev => [...prev, { role: 'model', text: agentResult.text }]);
@@ -339,7 +343,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           return;
         }
 
-        // Se uma nova acção foi proposta (ex: pedir corrida, agendar)
+        // Se uma nova acção foi proposta
         if (agentResult.action && agentResult.action.status === 'pending') {
           setPendingAction(agentResult.action);
           setMessages(prev => [
@@ -368,53 +372,79 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     }
   };
 
-  // ── Reconhecimento de Fala pelo Microfone ──────────────────────────────────
-  const toggleMicListening = () => {
-    if (isListeningMic) {
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch { /* ignore */ }
+  // ── Reconhecimento de Fala pelo Microfone (MediaRecorder + Gemini Transcribe) ─
+  const toggleMicListening = async () => {
+    // 1. Se já está a gravar, parar e transcrever
+    if (isListeningMic && mediaRecorderRef.current) {
+      if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
+      if (mediaRecorderRef.current.state !== 'inactive') {
+        try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
       }
       setIsListeningMic(false);
       return;
     }
 
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      showToast('Reconhecimento de voz não suportado neste navegador. Podes usar o teclado!', 'info');
+    // 2. Verificar suporte do navegador
+    if (!navigator.mediaDevices?.getUserMedia) {
+      showToast('O teu navegador não suporta acesso ao microfone.', 'info');
       return;
     }
 
     try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'pt-PT';
-      recognition.continuous = false;
-      recognition.interimResults = false;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
 
-      recognition.onstart = () => {
-        setIsListeningMic(true);
+      audioChunksRef.current = [];
+      let recorder: MediaRecorder;
+      try {
+        recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      } catch {
+        recorder = new MediaRecorder(stream);
+      }
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
 
-      recognition.onresult = (event: any) => {
-        const spoken = event.results?.[0]?.[0]?.transcript;
-        if (spoken) {
-          setIsListeningMic(false);
-          void handleSendText(undefined, spoken);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        setIsListeningMic(false);
+
+        if (audioChunksRef.current.length === 0) return;
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        audioChunksRef.current = [];
+
+        setIsTranscribing(true);
+        try {
+          const spokenText = await transcribeAudioWithGemini(audioBlob);
+          if (spokenText && spokenText.trim().length > 1) {
+            void handleSendText(undefined, spokenText.trim());
+          } else {
+            showToast('Não consegui ouvir nada. Tenta falar mais perto do microfone.', 'info');
+          }
+        } catch (err: any) {
+          console.warn('[KazeMascot] Erro ao transcrever áudio:', err);
+          showToast('Erro ao transcrever áudio. Podes usar o teclado!', 'info');
+        } finally {
+          setIsTranscribing(false);
         }
       };
 
-      recognition.onerror = (event: any) => {
-        console.warn('[KazeMascot] Speech recognition error:', event.error);
-        setIsListeningMic(false);
-      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsListeningMic(true);
 
-      recognition.onend = () => {
-        setIsListeningMic(false);
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-    } catch (err) {
-      console.warn('[KazeMascot] Mic start error:', err);
+      // Auto-parar após 7 segundos de fala se o utilizador não tocar em parar
+      autoStopTimerRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
+        }
+      }, 7000);
+    } catch (err: any) {
+      console.warn('[KazeMascot] getUserMedia error:', err);
+      showToast('Permissão de microfone negada. Permite o microfone no navegador.', 'info');
       setIsListeningMic(false);
     }
   };
@@ -525,7 +555,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                   <div className="zr-empty" style={{ height: '100%', justifyContent: 'center' }}>
                     <span className="material-symbols-outlined" style={{ fontSize: '56px', color: 'var(--gold)', opacity: 0.3, marginBottom: '12px' }}>auto_awesome</span>
                     <p className="zr-meta" style={{ textAlign: 'center', maxWidth: '220px', fontSize: '11px' }}>
-                      "Kaze, pede um táxi para o Talatona"<br/>
+                      "Kaze, pede um táxi para o Belas Shopping"<br/>
                       "Kaze, agenda para amanhã às 8h"<br/>
                       "Kaze, qual é o meu saldo?"
                     </p>
@@ -621,6 +651,13 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                     <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>Kaze a calcular...</span>
                   </div>
                 )}
+
+                {isTranscribing && (
+                  <div className="zr-bubble zr-bubble--other" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: 'var(--gold)' }} />
+                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>A transcrever a tua fala com IA...</span>
+                  </div>
+                )}
               </>
             ) : (
               <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '28px' }}>
@@ -654,16 +691,17 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                   className="zr-input"
                   style={{ flex: 1, fontSize: '13px', padding: '10px 14px' }}
                   placeholder={
-                    isListeningMic ? 'A ouvir a tua voz...' :
+                    isListeningMic ? '🎙️ A ouvir... Toca no mic para enviar!' :
+                    isTranscribing ? 'A processar a tua voz...' :
                     mode === 'explore' ? 'Onde há trânsito agora?' :
-                    'Ex: "Pede um táxi para Talatona"...'
+                    'Ex: "Pede um táxi para o Belas Shopping"...'
                   }
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
-                  disabled={isThinking || isListeningMic}
+                  disabled={isThinking || isListeningMic || isTranscribing}
                 />
 
-                {/* Botão de Microfone de Fala Rápida */}
+                {/* Botão de Microfone de Alta Precisão (MediaRecorder + Gemini Transcribe) */}
                 <button
                   type="button"
                   onClick={toggleMicListening}
@@ -675,20 +713,36 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                     height: '42px',
                     borderRadius: '12px',
                     border: isListeningMic ? '2px solid #ef4444' : '1px solid var(--surface-1)',
-                    boxShadow: isListeningMic ? '0 0 12px rgba(239, 68, 68, 0.6)' : 'none',
+                    boxShadow: isListeningMic ? '0 0 16px rgba(239, 68, 68, 0.7)' : 'none',
                     transition: 'all 0.2s ease',
+                    position: 'relative',
                   }}
-                  title="Falar por voz com o Kaze"
+                  title={isListeningMic ? 'Toca para parar e enviar' : 'Falar com o Kaze'}
                 >
                   <span className={`material-symbols-outlined ${isListeningMic ? 'animate-pulse' : ''}`} style={{ fontSize: '20px' }}>
                     {isListeningMic ? 'mic' : 'mic_none'}
                   </span>
+                  {isListeningMic && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '-4px',
+                        right: '-4px',
+                        width: '10px',
+                        height: '10px',
+                        borderRadius: '50%',
+                        background: '#ef4444',
+                        boxShadow: '0 0 8px #ef4444',
+                      }}
+                      className="animate-ping"
+                    />
+                  )}
                 </button>
 
                 {/* Botão de Enviar */}
                 <button
                   type="submit"
-                  disabled={!inputValue.trim() || isThinking}
+                  disabled={!inputValue.trim() || isThinking || isListeningMic || isTranscribing}
                   className="zr-icon-button"
                   style={{
                     background: 'var(--gold)',
@@ -696,7 +750,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                     width: '42px',
                     height: '42px',
                     borderRadius: '12px',
-                    opacity: (!inputValue.trim() || isThinking) ? 0.4 : 1,
+                    opacity: (!inputValue.trim() || isThinking || isListeningMic || isTranscribing) ? 0.4 : 1,
                   }}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>send</span>

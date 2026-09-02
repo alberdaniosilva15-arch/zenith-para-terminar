@@ -213,6 +213,7 @@ export default function AuthenticatedApp() {
             onRequestRide={requestRide}
             onCancelRide={cancelRide}
             onNavigate={(path) => navigate(path)}
+            userLocation={ride.pickupCoords || null}
           />
         </Suspense>
       )}
