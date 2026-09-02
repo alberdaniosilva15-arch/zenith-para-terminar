@@ -1,32 +1,57 @@
 // =============================================================================
-// ZENITH RIDE v3.1 — KazeMascot.tsx
-// FIXES v3.1:
-//   1. Tabs: VOZ adicionada de volta (estava oculta)
-//   2. Mensagem de erro: mostra o texto real do geminiService (com diagnóstico)
-//   3. Indicador online/offline mais claro
+// ZENITH RIDE v3.8 — KazeMascot.tsx
+// KAZE OPERACIONAL — AGENTE EXECUTIVO NO APP
+// Capacidades:
+//   1. Pedir / criar corrida por voz e texto com confirmação visual e sonora
+//   2. Agendar corridas futuras (grava em scheduled_rides)
+//   3. Criar contratos (escolar/familiar/corporativo)
+//   4. Consultar saldo da carteira e navegar entre telas (/wallet, /rides, /contrato)
+//   5. Botão de microfone integrado no chat para fala contínua
 // =============================================================================
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { geminiService, getLocalKazeResponse } from '../services/geminiService';
+import { kazeAppAgent, KazeProposedAction } from '../services/kazeAppAgent';
 import { kazeSpeak } from '../lib/kazeVoice';
-import { UserRole, RideStatus } from '../types';
+import { UserRole, RideStatus, LatLng } from '../types';
+import { supabase } from '../lib/supabase';
+import { useAppStore } from '../store/useAppStore';
 
 interface KazeMascotProps {
-  role:        UserRole;
-  rideStatus:  RideStatus;
-  dataSaver:   boolean;
-  userName?:   string;
+  role:            UserRole;
+  rideStatus:      RideStatus;
+  dataSaver:       boolean;
+  userName?:       string;
+  userId?:         string;
+  onRequestRide?:  (
+    pickup: string,
+    pickupCoords: LatLng,
+    dest: string,
+    destCoords: LatLng,
+    proposedPrice?: number,
+    distanceKm?: number,
+    durationMin?: number,
+    vehicleType?: 'standard' | 'moto' | 'comfort' | 'xl'
+  ) => Promise<void>;
+  onCancelRide?:   (reason?: string) => Promise<void>;
+  onNavigate?:     (path: string) => void;
+  userLocation?:   LatLng | null;
 }
 
-// Ícones Material Symbols usados em vez de imagem mascote
+interface ChatMessage {
+  role: 'user' | 'model';
+  text: string;
+  sources?: any[];
+  action?: KazeProposedAction;
+}
 
 type SupportedKazeGreetingRole = UserRole.PASSENGER | UserRole.DRIVER;
 
 const KAZE_GREETINGS: Record<SupportedKazeGreetingRole, readonly string[]> = {
   passenger: [
-    'Olá! Sou o Kaze, o teu assistente de corridas em Luanda. Como posso ajudar?',
-    'Pronto para a tua próxima corrida? Diz-me onde queres ir!',
-    'Bem-vindo ao Zenith Ride! Posso ajudar-te a encontrar o melhor trajecto.',
+    'Olá! Sou o Kaze. Podes pedir-me uma corrida, agendar uma viagem ou criar um contrato por voz ou texto!',
+    'Pronto para a tua próxima corrida? Diz-me: "Kaze, pede um táxi para Talatona"!',
+    'Bem-vindo ao Zenith Ride! Posso ajudar-te a pedir corridas, agendar ou ver o teu saldo.',
   ],
   driver: [
     'Força motorista! O Kaze está contigo na estrada.',
@@ -44,30 +69,48 @@ function pickGreeting(greetings: readonly string[]): string {
   return randomGreeting ?? greetings[0] ?? 'Estou aqui para ajudar.';
 }
 
-const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, userName }) => {
-  const [isOpen,      setIsOpen]      = useState(false);
-  const [mode,        setMode]        = useState<'chat' | 'voice' | 'explore'>('chat');
-  const [messages,    setMessages]    = useState<{ role: 'user' | 'model'; text: string; sources?: any[] }[]>([]);
-  const [inputValue,  setInputValue]  = useState('');
-  const [isThinking,  setIsThinking]  = useState(false);
-  const [thought,     setThought]     = useState<string | null>(null);
-  const [isLive,      setIsLive]      = useState(false);
-  const [voiceError,  setVoiceError]  = useState<string | null>(null);
-  const [kazeOnline,  setKazeOnline]  = useState<boolean | null>(null);
-  const [voiceEnabled, setVoiceEnabled] = useState(true); // Ativado por defeito no app
+const KazeMascot: React.FC<KazeMascotProps> = ({
+  role,
+  rideStatus,
+  dataSaver,
+  userName,
+  userId,
+  onRequestRide,
+  onCancelRide,
+  onNavigate,
+  userLocation,
+}) => {
+  const showToast = useAppStore((s) => s.showToast);
+  const [isOpen,         setIsOpen]         = useState(false);
+  const [mode,           setMode]           = useState<'chat' | 'voice' | 'explore'>('chat');
+  const [messages,       setMessages]       = useState<ChatMessage[]>([]);
+  const [inputValue,     setInputValue]     = useState('');
+  const [isThinking,     setIsThinking]     = useState(false);
+  const [thought,        setThought]        = useState<string | null>(null);
+  const [isLive,         setIsLive]         = useState(false);
+  const [voiceError,     setVoiceError]     = useState<string | null>(null);
+  const [kazeOnline,     setKazeOnline]     = useState<boolean | null>(true);
+  const [voiceEnabled,   setVoiceEnabled]   = useState(true);
+  const [isListeningMic, setIsListeningMic] = useState(false);
+  const [actionExecuting, setActionExecuting] = useState(false);
+  const [pendingAction,  setPendingAction]  = useState<KazeProposedAction | null>(null);
 
-  const chatRef   = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
+  const chatRef        = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
   const liveSessionRef = useRef<{ close: () => void } | null>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef      = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   // Auto-scroll ao adicionar mensagens
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, isThinking]);
+  }, [messages, isThinking, pendingAction]);
 
   useEffect(() => () => {
     liveSessionRef.current?.close();
     liveSessionRef.current = null;
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* ignore */ }
+    }
   }, []);
 
   // Mostrar mensagem de boas-vindas ao abrir o chat pela primeira vez
@@ -79,16 +122,13 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         role: 'model',
         text: `Olá${name}! ${greeting}`,
       }]);
-      setKazeOnline(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, role, userName]);
+  }, [isOpen, role, userName, messages.length]);
 
-  // Pensamentos espontâneos — SÓ quando corrida activa E painel aberto (economia de bateria/dados)
+  // Pensamentos espontâneos — SÓ quando corrida activa E painel aberto
   useEffect(() => {
-    // FIX: Só faz chamadas API quando há corrida activa E o Kaze está aberto
     if (dataSaver || rideStatus === RideStatus.IDLE) return;
-    if (!isOpen) return; // Não gastar recursos com painel fechado
+    if (!isOpen) return;
 
     const generate = async () => {
       try {
@@ -102,22 +142,168 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
           setTimeout(() => setThought(null), 10000);
         }
       } catch (err) {
-        console.warn('[KazeMascot] fetch:', err);
-        // Silêncio se offline — não mostrar erro
+        console.warn('[KazeMascot] insight:', err);
       }
     };
 
     const timer    = setTimeout(generate, 5000);
-    const interval = setInterval(generate, 120000); // 2 min em vez de 90s — menos chamadas
+    const interval = setInterval(generate, 120000);
     return () => { clearTimeout(timer); clearInterval(interval); };
   }, [rideStatus, dataSaver, role, userName, isOpen]);
 
-  // ------------------------------------------------------------------
-  const handleSendText = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputValue.trim() || isThinking) return;
+  // ── Executar Acção no App (Disparada pelo utilizador ou confirmada pela IA) ─
+  const executeAppAction = useCallback(async (action: KazeProposedAction) => {
+    setActionExecuting(true);
+    try {
+      switch (action.type) {
+        case 'REQUEST_RIDE': {
+          if (!onRequestRide) {
+            showToast('Pedido de corrida indisponível nesta tela.', 'error');
+            return;
+          }
+          const d = action.data;
+          await onRequestRide(
+            d.origin,
+            d.originCoords,
+            d.destination,
+            d.destCoords,
+            d.priceKz,
+            d.distanceKm,
+            d.durationMin,
+            d.vehicleType
+          );
+          setPendingAction(null);
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'model',
+              text: `✅ **Corrida solicitada com sucesso!**\nA procurar motoristas próximos em Luanda... 🚗💨`,
+            },
+          ]);
+          if (voiceEnabled) await kazeSpeak('Corrida solicitada com sucesso! A procurar motoristas.');
+          showToast('Corrida solicitada pelo Kaze!', 'success');
+          // Fechar painel após 2.5 segundos para o utilizador ver o mapa
+          setTimeout(() => setIsOpen(false), 2500);
+          break;
+        }
 
-    const userText = inputValue.trim();
+        case 'SCHEDULE_RIDE': {
+          if (!userId) {
+            showToast('Inicia sessão para agendar uma corrida.', 'info');
+            return;
+          }
+          const s = action.data;
+          const { error: dbError } = await supabase.from('scheduled_rides').insert({
+            user_id:        userId,
+            pickup_address: s.origin,
+            pickup_lat:     s.originCoords.lat,
+            pickup_lng:     s.originCoords.lng,
+            dest_address:   s.destination,
+            dest_lat:       s.destCoords.lat,
+            dest_lng:       s.destCoords.lng,
+            scheduled_at:   s.scheduledAt,
+            status:         'pending',
+          });
+
+          if (dbError) {
+            showToast(`Erro ao agendar: ${dbError.message}`, 'error');
+            return;
+          }
+
+          setPendingAction(null);
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'model',
+              text: `📅 **Viagem agendada com sucesso!**\nData: ${s.date} às ${s.time}\nDestino: ${s.destination}\n\nPodes consultar a qualquer momento nos teus agendamentos.`,
+            },
+          ]);
+          if (voiceEnabled) await kazeSpeak(`Viagem agendada para ${s.date} às ${s.time}.`);
+          showToast('Viagem agendada com sucesso!', 'success');
+          break;
+        }
+
+        case 'CREATE_CONTRACT': {
+          if (!userId) {
+            showToast('Inicia sessão para criar um contrato.', 'info');
+            return;
+          }
+          const c = action.data;
+          const { error: dbError } = await supabase.from('contracts').insert({
+            user_id:       userId,
+            contract_type: c.contractType,
+            title:         c.title,
+            address:       c.address,
+            dest_lat:      c.destLat,
+            dest_lng:      c.destLng,
+            time_start:    c.timeStart,
+            time_end:      c.timeEnd,
+            active:        true,
+          });
+
+          if (dbError) {
+            showToast(`Erro ao criar contrato: ${dbError.message}`, 'error');
+            return;
+          }
+
+          setPendingAction(null);
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'model',
+              text: `🎓 **${c.title} activado com sucesso!**\nHorário: ${c.timeStart} - ${c.timeEnd}\nDestino: ${c.destinationAddress}\n\nPodes gerir o teu contrato na aba Contratos.`,
+            },
+          ]);
+          if (voiceEnabled) await kazeSpeak('Contrato criado com sucesso!');
+          showToast('Contrato criado!', 'success');
+          break;
+        }
+
+        case 'NAVIGATE_APP': {
+          if (onNavigate) {
+            const screenMap: Record<string, string> = {
+              wallet:   '/wallet',
+              rides:    '/rides',
+              contrato: '/contrato',
+              precos:   '/precos',
+              profile:  '/profile',
+              home:     '/',
+            };
+            const target = screenMap[action.data.screen] || `/${action.data.screen}`;
+            onNavigate(target);
+            setPendingAction(null);
+            setIsOpen(false);
+          }
+          break;
+        }
+
+        case 'CANCEL_RIDE': {
+          if (onCancelRide) {
+            await onCancelRide(action.data?.reason || 'Cancelado pelo passageiro via Kaze');
+            setPendingAction(null);
+            setMessages(prev => [
+              ...prev,
+              { role: 'model', text: 'Corrida cancelada com sucesso.' },
+            ]);
+            if (voiceEnabled) await kazeSpeak('Corrida cancelada com sucesso.');
+          }
+          break;
+        }
+      }
+    } catch (err: any) {
+      console.error('[KazeMascot] Erro ao executar acção:', err);
+      showToast('Ocorreu um erro ao processar a acção.', 'error');
+    } finally {
+      setActionExecuting(false);
+    }
+  }, [onRequestRide, onCancelRide, onNavigate, userId, voiceEnabled, showToast]);
+
+  // ── Envio de Texto / Comando ───────────────────────────────────────────────
+  const handleSendText = async (e?: React.FormEvent, customText?: string) => {
+    if (e) e.preventDefault();
+    const userText = (customText || inputValue).trim();
+    if (!userText || isThinking) return;
+
     setInputValue('');
     setMessages(prev => [...prev, { role: 'user', text: userText }]);
     setIsThinking(true);
@@ -127,33 +313,109 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         const result = await geminiService.exploreLuanda(userText);
         setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
         if (voiceEnabled) await kazeSpeak(result.text);
-        // FIX: só marcar online se não há mensagem de erro no texto
-        setKazeOnline(!result.text.startsWith('⚠️') && !result.text.startsWith('❌'));
       } else {
-        if (!chatRef.current) chatRef.current = geminiService.createKazeChat({ rideStatus, role, mode });
-        const response = await chatRef.current.sendMessage(userText, { rideStatus, role, mode, time: new Date().toISOString() });
-        setMessages(prev => [...prev, { role: 'model', text: response.text }]);
-        if (voiceEnabled) await kazeSpeak(response.text);
-        const isError = response.text.startsWith('⚠️') || response.text.startsWith('❌') || response.text.startsWith('🔒') || response.text.startsWith('⏱️');
-        setKazeOnline(!response.local && !isError);
+        // 1. Passar pelo Kaze App Agent operacional
+        const agentResult = await kazeAppAgent.processUserMessage(userText, {
+          userId,
+          userRole: role,
+          userLocation,
+          hasActiveRide: rideStatus !== RideStatus.IDLE,
+          pendingAction,
+        });
+
+        // Se o utilizador acabou de confirmar por texto/voz e já tínhamos uma acção
+        if (agentResult.action && agentResult.action.status === 'confirmed') {
+          setMessages(prev => [...prev, { role: 'model', text: agentResult.text }]);
+          if (voiceEnabled && agentResult.speakText) await kazeSpeak(agentResult.speakText);
+          await executeAppAction(agentResult.action);
+          return;
+        }
+
+        // Se o utilizador cancelou a acção pendente
+        if (agentResult.action && agentResult.action.status === 'cancelled') {
+          setPendingAction(null);
+          setMessages(prev => [...prev, { role: 'model', text: agentResult.text }]);
+          if (voiceEnabled && agentResult.speakText) await kazeSpeak(agentResult.speakText);
+          return;
+        }
+
+        // Se uma nova acção foi proposta (ex: pedir corrida, agendar)
+        if (agentResult.action && agentResult.action.status === 'pending') {
+          setPendingAction(agentResult.action);
+          setMessages(prev => [
+            ...prev,
+            {
+              role: 'model',
+              text: agentResult.text,
+              action: agentResult.action,
+            },
+          ]);
+          if (voiceEnabled && agentResult.speakText) await kazeSpeak(agentResult.speakText);
+          return;
+        }
+
+        // Conversa padrão
+        setMessages(prev => [...prev, { role: 'model', text: agentResult.text }]);
+        if (voiceEnabled && agentResult.speakText) await kazeSpeak(agentResult.speakText);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('[KazeMascot] Erro ao enviar:', err);
-      const errMsg = err instanceof Error ? err.message : '';
-      const isOffline = errMsg.includes('modo local')
-        || errMsg.includes('indisponÃ­vel')
-        || errMsg.includes('indisponível')
-        || errMsg.includes('timeout')
-        || errMsg.includes('Timeout')
-        || errMsg.includes('Falha de ligacao')
-        || errMsg.includes('Falha de ligaÃ§Ã£o');
-      setKazeOnline(!isOffline);
-      setMessages(prev => [...prev, {
-        role: 'model',
-        text: isOffline ? getLocalKazeResponse(userText) : (errMsg || 'Erro desconhecido. Tenta de novo.'),
-      }]);
+      const fallbackText = getLocalKazeResponse(userText);
+      setMessages(prev => [...prev, { role: 'model', text: fallbackText }]);
+      if (voiceEnabled) await kazeSpeak(fallbackText);
     } finally {
       setIsThinking(false);
+    }
+  };
+
+  // ── Reconhecimento de Fala pelo Microfone ──────────────────────────────────
+  const toggleMicListening = () => {
+    if (isListeningMic) {
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch { /* ignore */ }
+      }
+      setIsListeningMic(false);
+      return;
+    }
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      showToast('Reconhecimento de voz não suportado neste navegador. Podes usar o teclado!', 'info');
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'pt-PT';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        setIsListeningMic(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        const spoken = event.results?.[0]?.[0]?.transcript;
+        if (spoken) {
+          setIsListeningMic(false);
+          void handleSendText(undefined, spoken);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn('[KazeMascot] Speech recognition error:', event.error);
+        setIsListeningMic(false);
+      };
+
+      recognition.onend = () => {
+        setIsListeningMic(false);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+    } catch (err) {
+      console.warn('[KazeMascot] Mic start error:', err);
+      setIsListeningMic(false);
     }
   };
 
@@ -175,8 +437,10 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         liveSessionRef.current = session;
         setIsLive(true);
         setVoiceError(null);
+      } else {
+        setIsLive(false);
+        setVoiceError('Modo de voz temporariamente indisponível.');
       }
-      else { setIsLive(false); setVoiceError('Modo de voz temporariamente indisponível.'); }
     } catch (err) {
       console.warn('[KazeMascot] voice:', err);
       setIsLive(false);
@@ -206,92 +470,168 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
 
       {/* Painel principal */}
       {isOpen && (
-        <div className="zr-card" style={{ marginBottom: '16px', width: '90vw', maxWidth: '380px', height: '60vh', maxHeight: '500px', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', pointerEvents: 'auto', border: '1px solid var(--gold-soft)', boxShadow: '0 20px 40px rgba(0,0,0,0.8)' }}>
+        <div className="zr-card" style={{ marginBottom: '16px', width: '92vw', maxWidth: '400px', height: '65vh', maxHeight: '540px', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', pointerEvents: 'auto', border: '1px solid var(--gold-soft)', boxShadow: '0 20px 40px rgba(0,0,0,0.85)' }}>
 
           {/* Header */}
-          <div className="zr-header" style={{ padding: '16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, rgba(230,195,100,0.1), transparent)' }}>
+          <div className="zr-header" style={{ padding: '14px 16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, rgba(230,195,100,0.15), transparent)' }}>
             <div className="zr-inline zr-inline--between">
               <div className="zr-inline" style={{ gap: '12px' }}>
-                <div style={{ width: '48px', height: '48px', background: 'var(--surface-3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-                  <span className="material-symbols-outlined" style={{ color: 'var(--gold)', fontSize: '28px' }}>auto_awesome</span>
+                <div style={{ width: '44px', height: '44px', background: 'var(--surface-3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+                  <span className="material-symbols-outlined" style={{ color: 'var(--gold)', fontSize: '26px' }}>auto_awesome</span>
                 </div>
                 <div>
-                  <h4 className="zr-section-title" style={{ fontSize: '14px', margin: 0 }}>KAZE 2.5</h4>
-                  <span className="zr-meta" style={{ color: 'var(--gold)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: kazeOnline ? '#4ade80' : 'var(--gold)' }} className="" />
-                    {kazeOnline ? (isDriver ? 'MOTORISTA ONLINE' : 'IA CONECTADA') : 'MODO LOCAL'}
+                  <h4 className="zr-section-title" style={{ fontSize: '13px', margin: 0, letterSpacing: '0.05em' }}>KAZE AGENT 3.0</h4>
+                  <span className="zr-meta" style={{ color: 'var(--gold)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px' }}>
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: kazeOnline ? '#4ade80' : 'var(--gold)' }} />
+                    {kazeOnline ? (isDriver ? 'MOTORISTA ONLINE' : 'AGENTE OPERACIONAL') : 'MODO LOCAL'}
                   </span>
                 </div>
               </div>
-              <button onClick={() => setVoiceEnabled(!voiceEnabled)} className="zr-icon-button" style={{ marginRight: '8px', color: voiceEnabled ? 'var(--gold)' : 'var(--copy)' }}>
-                <span className="material-symbols-outlined">{voiceEnabled ? 'volume_up' : 'volume_off'}</span>
-              </button>
-              <button onClick={() => setIsOpen(false)} className="zr-icon-button">✕</button>
+              <div className="zr-inline" style={{ gap: '4px' }}>
+                <button
+                  onClick={() => setVoiceEnabled(!voiceEnabled)}
+                  className="zr-icon-button"
+                  style={{ width: '36px', height: '36px', color: voiceEnabled ? 'var(--gold)' : 'var(--copy)' }}
+                  title={voiceEnabled ? 'Voz activada' : 'Voz desativada'}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>{voiceEnabled ? 'volume_up' : 'volume_off'}</span>
+                </button>
+                <button onClick={() => setIsOpen(false)} className="zr-icon-button" style={{ width: '36px', height: '36px' }}>✕</button>
+              </div>
             </div>
           </div>
 
           {/* Tabs de modo */}
-          <div style={{ padding: '0 16px', marginTop: '16px' }}>
+          <div style={{ padding: '0 16px', marginTop: '12px' }}>
             <div className="zr-scroll-x" style={{ background: 'var(--surface-3)', borderRadius: '12px', padding: '4px' }}>
               {(['chat', 'explore', 'voice'] as const).map(m => (
                 <button
                   key={m}
                   onClick={() => m === 'voice' ? startVoiceMode() : setMode(m)}
                   className={`zr-tab ${mode === m ? 'is-active' : ''}`}
-                  style={{ flex: 1, padding: '8px', fontSize: '10px' }}
+                  style={{ flex: 1, padding: '6px', fontSize: '10px' }}
                 >
-                  {m === 'chat' ? 'Chat' : m === 'explore' ? 'Luanda' : 'Voz'}
+                  {m === 'chat' ? 'Comandos & Chat' : m === 'explore' ? 'Trânsito Luanda' : 'Voz Ao Vivo'}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Corpo */}
-          <div ref={scrollRef} className="zr-chat" style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          {/* Corpo do Chat */}
+          <div ref={scrollRef} className="zr-chat" style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
             {mode !== 'voice' ? (
               <>
                 {messages.length === 0 && (
                   <div className="zr-empty" style={{ height: '100%', justifyContent: 'center' }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '64px', color: 'var(--gold)', opacity: 0.3, marginBottom: '16px' }}>auto_awesome</span>
-                    <p className="zr-meta" style={{ textAlign: 'center', maxWidth: '180px' }}>
-                      {mode === 'explore' ? 'TRÂNSITO EM TEMPO REAL' : 'ASSISTENTE VIGILANTE PRONTO'}
+                    <span className="material-symbols-outlined" style={{ fontSize: '56px', color: 'var(--gold)', opacity: 0.3, marginBottom: '12px' }}>auto_awesome</span>
+                    <p className="zr-meta" style={{ textAlign: 'center', maxWidth: '220px', fontSize: '11px' }}>
+                      "Kaze, pede um táxi para o Talatona"<br/>
+                      "Kaze, agenda para amanhã às 8h"<br/>
+                      "Kaze, qual é o meu saldo?"
                     </p>
                   </div>
                 )}
+
                 {messages.map((m, i) => (
-                  <div key={i} className={`zr-bubble ${m.role === 'user' ? 'zr-bubble--self' : 'zr-bubble--other'}`}>
-                    {m.text}
-                    {m.sources && m.sources.length > 0 && (
-                      <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--surface-3)' }}>
-                        <p className="zr-meta" style={{ marginBottom: '8px' }}>Fontes:</p>
-                        <div className="zr-stack" style={{ gap: '8px' }}>
-                          {m.sources.map((s: any, si: number) => (
-                            <a key={si} href={s.uri} target="_blank" rel="noreferrer" className="zr-chip" style={{ justifyContent: 'flex-start' }}>
-                              <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{s.title}</span>
-                            </a>
-                          ))}
+                  <div key={i} className="flex flex-col gap-2">
+                    <div className={`zr-bubble ${m.role === 'user' ? 'zr-bubble--self' : 'zr-bubble--other'}`}>
+                      <div style={{ whiteSpace: 'pre-line' }}>{m.text}</div>
+
+                      {/* Fontes do Explore */}
+                      {m.sources && m.sources.length > 0 && (
+                        <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--surface-3)' }}>
+                          <p className="zr-meta" style={{ marginBottom: '6px' }}>Fontes:</p>
+                          <div className="zr-stack" style={{ gap: '6px' }}>
+                            {m.sources.map((s: any, si: number) => (
+                              <a key={si} href={s.uri} target="_blank" rel="noreferrer" className="zr-chip" style={{ justifyContent: 'flex-start' }}>
+                                <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span>
+                                <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{s.title}</span>
+                              </a>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ── CARTÃO INTERATIVO DE AÇÃO PROPOSTA ──────────────────── */}
+                    {m.action && pendingAction?.id === m.action.id && pendingAction.status === 'pending' && (
+                      <div
+                        className="rounded-2xl p-4 border space-y-3 vault-shadow animate-fade-in"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(230,195,100,0.12), rgba(0,0,0,0.6))',
+                          borderColor: 'var(--gold, #e6c364)',
+                        }}
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="material-symbols-outlined text-xl" style={{ color: 'var(--gold)' }}>
+                            {m.action.type === 'REQUEST_RIDE' ? 'local_taxi' :
+                             m.action.type === 'SCHEDULE_RIDE' ? 'calendar_month' :
+                             m.action.type === 'CREATE_CONTRACT' ? 'school' :
+                             m.action.type === 'NAVIGATE_APP' ? 'open_in_new' : 'warning'}
+                          </span>
+                          <span className="text-xs font-black uppercase tracking-wider text-on-surface">
+                            {m.action.title}
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-on-surface-variant font-medium">
+                          {m.action.summary}
+                        </p>
+
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <button
+                            onClick={() => executeAppAction(m.action!)}
+                            disabled={actionExecuting}
+                            className="zr-button zr-button--block font-bold text-xs"
+                            style={{
+                              padding: '10px 8px',
+                              background: 'var(--gold, #e6c364)',
+                              color: '#000',
+                              border: 'none',
+                              borderRadius: '10px',
+                            }}
+                          >
+                            {actionExecuting ? 'A processar...' : '✓ Confirmar'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setPendingAction(null);
+                              setMessages(prev => [...prev, { role: 'model', text: 'Ação cancelada.' }]);
+                            }}
+                            disabled={actionExecuting}
+                            className="zr-button zr-button--secondary zr-button--block text-xs"
+                            style={{
+                              padding: '10px 8px',
+                              borderColor: 'rgba(239, 68, 68, 0.4)',
+                              color: 'var(--danger-soft, #ef4444)',
+                              borderRadius: '10px',
+                            }}
+                          >
+                            ✕ Cancelar
+                          </button>
                         </div>
                       </div>
                     )}
                   </div>
                 ))}
+
                 {isThinking && (
                   <div className="zr-bubble zr-bubble--other" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                     <div className="zr-loading-dots"><span></span><span></span><span></span></div>
-                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>A pensar...</span>
+                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>Kaze a calcular...</span>
                   </div>
                 )}
               </>
             ) : (
-              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '32px' }}>
+              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '28px' }}>
                 <div style={{ position: 'relative' }}>
-                  <div className={`transition-all duration-1000 ${isLive ? '' : ''}`} style={{ position: 'absolute', inset: '-20px', background: 'var(--gold)', borderRadius: '50%', filter: 'blur(30px)', opacity: isLive ? 0.3 : 0.1 }} />
-                  <div style={{ width: '120px', height: '120px', borderRadius: '50%', background: 'var(--surface-3)', border: isLive ? '2px solid var(--gold)' : '2px solid transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '56px', color: 'var(--gold)', transform: isLive ? 'scale(1.1)' : 'scale(0.9)', transition: 'transform 0.5s', opacity: isLive ? 1 : 0.6 }}>graphic_eq</span>
+                  <div style={{ position: 'absolute', inset: '-20px', background: 'var(--gold)', borderRadius: '50%', filter: 'blur(30px)', opacity: isLive ? 0.35 : 0.1 }} />
+                  <div style={{ width: '110px', height: '110px', borderRadius: '50%', background: 'var(--surface-3)', border: isLive ? '2px solid var(--gold)' : '2px solid transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '50px', color: 'var(--gold)', transform: isLive ? 'scale(1.1)' : 'scale(0.9)', transition: 'transform 0.5s', opacity: isLive ? 1 : 0.6 }}>graphic_eq</span>
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <p className="zr-section-title" style={{ fontSize: '14px', marginBottom: '8px' }}>SISTEMA VOZ KAZE</p>
+                  <p className="zr-section-title" style={{ fontSize: '13px', marginBottom: '6px' }}>SISTEMA VOZ KAZE</p>
                   <p className="zr-meta">{isLive ? 'Fale agora com o Kaze' : 'Pronto para sincronizar'}</p>
                 </div>
                 {!isLive && (
@@ -306,19 +646,60 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
             )}
           </div>
 
-          {/* Input */}
+          {/* Barra de Input */}
           {mode !== 'voice' && (
-            <div style={{ padding: '16px', borderTop: '1px solid var(--surface-3)', background: 'var(--surface-2)' }}>
-              <form onSubmit={handleSendText} className="zr-inline" style={{ gap: '8px' }}>
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--surface-3)', background: 'var(--surface-2)' }}>
+              <form onSubmit={e => handleSendText(e)} className="zr-inline" style={{ gap: '8px' }}>
                 <input
                   className="zr-input"
-                  style={{ flex: 1 }}
-                  placeholder={mode === 'explore' ? 'Onde há trânsito agora?' : 'Falar com Kaze...'}
+                  style={{ flex: 1, fontSize: '13px', padding: '10px 14px' }}
+                  placeholder={
+                    isListeningMic ? 'A ouvir a tua voz...' :
+                    mode === 'explore' ? 'Onde há trânsito agora?' :
+                    'Ex: "Pede um táxi para Talatona"...'
+                  }
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
+                  disabled={isThinking || isListeningMic}
                 />
-                <button type="submit" className="zr-icon-button" style={{ background: 'var(--gold)', color: '#000', width: '48px', height: '48px', borderRadius: '12px' }}>
-                  <span className="material-symbols-outlined">send</span>
+
+                {/* Botão de Microfone de Fala Rápida */}
+                <button
+                  type="button"
+                  onClick={toggleMicListening}
+                  className="zr-icon-button"
+                  style={{
+                    background: isListeningMic ? '#ef4444' : 'var(--surface-3)',
+                    color: isListeningMic ? '#fff' : 'var(--gold)',
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '12px',
+                    border: isListeningMic ? '2px solid #ef4444' : '1px solid var(--surface-1)',
+                    boxShadow: isListeningMic ? '0 0 12px rgba(239, 68, 68, 0.6)' : 'none',
+                    transition: 'all 0.2s ease',
+                  }}
+                  title="Falar por voz com o Kaze"
+                >
+                  <span className={`material-symbols-outlined ${isListeningMic ? 'animate-pulse' : ''}`} style={{ fontSize: '20px' }}>
+                    {isListeningMic ? 'mic' : 'mic_none'}
+                  </span>
+                </button>
+
+                {/* Botão de Enviar */}
+                <button
+                  type="submit"
+                  disabled={!inputValue.trim() || isThinking}
+                  className="zr-icon-button"
+                  style={{
+                    background: 'var(--gold)',
+                    color: '#000',
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '12px',
+                    opacity: (!inputValue.trim() || isThinking) ? 0.4 : 1,
+                  }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>send</span>
                 </button>
               </form>
             </div>
@@ -326,21 +707,47 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
         </div>
       )}
 
-      {/* Botão flutuante */}
+      {/* Botão flutuante do Kaze Mascot */}
       <button
         onClick={() => setIsOpen(!isOpen)}
         className="zr-icon-button"
         style={{
-          width: '56px', height: '56px', borderRadius: '28px', pointerEvents: 'auto', zIndex: 601,
+          width: '56px',
+          height: '56px',
+          borderRadius: '28px',
+          pointerEvents: 'auto',
+          zIndex: 601,
           background: isOpen ? 'var(--gold)' : 'var(--surface-3)',
           border: isOpen ? 'none' : '2px solid var(--surface-1)',
           boxShadow: isOpen ? '0 10px 30px rgba(230,195,100,0.4)' : '0 10px 20px rgba(0,0,0,0.5)',
-          position: 'relative'
+          position: 'relative',
         }}
+        title="Abrir Kaze"
       >
-        <span className="material-symbols-outlined" style={{ fontSize: '28px', color: isOpen ? '#000' : 'var(--gold)', transform: (isOpen || isThinking) ? 'scale(1.1)' : 'none', transition: 'transform 0.3s' }}>{isThinking ? 'graphic_eq' : 'auto_awesome'}</span>
+        <span
+          className="material-symbols-outlined"
+          style={{
+            fontSize: '28px',
+            color: isOpen ? '#000' : 'var(--gold)',
+            transform: (isOpen || isThinking) ? 'scale(1.1)' : 'none',
+            transition: 'transform 0.3s',
+          }}
+        >
+          {isThinking ? 'graphic_eq' : 'auto_awesome'}
+        </span>
         {kazeOnline === true && (
-          <span style={{ position: 'absolute', bottom: '8px', right: '8px', width: '10px', height: '10px', borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 8px var(--success)' }} className="" />
+          <span
+            style={{
+              position: 'absolute',
+              bottom: '8px',
+              right: '8px',
+              width: '10px',
+              height: '10px',
+              borderRadius: '50%',
+              background: 'var(--success, #22c55e)',
+              boxShadow: '0 0 8px var(--success, #22c55e)',
+            }}
+          />
         )}
       </button>
     </div>
@@ -348,4 +755,3 @@ const KazeMascot: React.FC<KazeMascotProps> = ({ role, rideStatus, dataSaver, us
 };
 
 export default KazeMascot;
-

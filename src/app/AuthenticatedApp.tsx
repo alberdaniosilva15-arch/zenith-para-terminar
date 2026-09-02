@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect, useState } from 'react';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../hooks/useRide';
 import Layout from '../components/Layout';
@@ -85,6 +85,7 @@ function HomePanelFallback({ label }: { label: string }) {
 export default function AuthenticatedApp() {
   const { dbUser, profile, role, signOut } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const {
     ride,
@@ -203,7 +204,16 @@ export default function AuthenticatedApp() {
 
       {showKaze && (
         <Suspense fallback={null}>
-          <KazeMascot role={effectiveRole} rideStatus={ride.status} dataSaver={dataSaver} userName={profile?.name} />
+          <KazeMascot
+            role={effectiveRole}
+            rideStatus={ride.status}
+            dataSaver={dataSaver}
+            userName={profile?.name}
+            userId={dbUser?.id}
+            onRequestRide={requestRide}
+            onCancelRide={cancelRide}
+            onNavigate={(path) => navigate(path)}
+          />
         </Suspense>
       )}
 
