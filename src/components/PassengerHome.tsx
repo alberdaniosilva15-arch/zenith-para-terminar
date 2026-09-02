@@ -132,7 +132,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   const shouldMountMap = useIdleMount(isVisible);
   const hasActiveRideSafety =
-    ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.IN_PROGRESS;
+    ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.PICKING_UP || ride.status === RideStatus.IN_PROGRESS;
 
   const ensureEmergencyContact = useCallback((message = 'Define um contacto de emergência antes de continuar.') => {
     if (emergencyPhone) {
@@ -284,7 +284,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   useSilentTripleTap({
     enabled: isVisible && !!ride.rideId && (
-      ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.IN_PROGRESS
+      ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.PICKING_UP || ride.status === RideStatus.IN_PROGRESS
     ),
     onTrigger: () => setSilentPanicSignal((value) => value + 1),
   });
@@ -428,17 +428,27 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   // O Countdown foi movido para dentro do RideRequestForm para evitar re-renders do ecrã todo
 
   // ── Confirmar motorista escolhido ───────────────────────────────────────────
+  // FIX BUG 2: Resolver o preço exato que foi exibido ao passageiro na UI
+  // Prioridade: zonePrice (tabela fixa) > fareData com desconto de score > ride.priceKz > fallback
   const handleConfirmDriver = async () => {
     if (!ensureEmergencyContact()) return;
     if (!pickupName || !destName || !pickupCoords || !destCoords) return;
     setLoadingRide(true);
     try {
+      // Resolver preço correcto: o que foi exibido ao passageiro
+      const resolvedPrice: number | undefined =
+        zonePrice ??                                        // Preço fixo de zona
+        (fareData?.score_discount?.final_price) ??          // Preço Engine Pro com desconto
+        (fareData ? Number(fareData.fare_kz) : undefined) ?? // Preço Engine Pro sem desconto
+        ride.priceKz ??                                     // Estimativa já no state
+        undefined;                                          // fallback local (último recurso)
+
       await onRequestRide(
         pickupName,
         pickupCoords,
         destName,
         destCoords,
-        undefined,
+        resolvedPrice,
         routeData?.distanceKm,
         routeData?.durationMin,
         selectedVehicle,

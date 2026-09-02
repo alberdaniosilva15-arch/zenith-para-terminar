@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
+import { geminiService } from '../../services/geminiService';
 
 interface FleetAIProps {
   totalCars: number;
@@ -9,60 +10,102 @@ interface FleetAIProps {
 
 const FleetAI: React.FC<FleetAIProps> = ({ totalCars, activeCars, idleCars, driverNames }) => {
   const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState<string>(
+    `Frota monitorizada em tempo real (${totalCars} viaturas, ${activeCars} activas, ${idleCars} paradas). Pergunta ao Kaze sobre rendimento, alocação de zonas ou performance de motoristas.`
+  );
+  const [loading, setLoading] = useState(false);
 
-  const proactiveTip = useMemo(() => {
-    if (idleCars >= 2) {
-      return 'Tens varios carros parados. Vale activar uma redistribuicao para zonas de maior procura antes do pico da tarde.';
-    }
-    if (activeCars === 0 && totalCars > 0) {
-      return 'Nenhuma viatura esta activa agora. Vale contactar os motoristas em espera e rever a janela de blackout.';
-    }
-    return 'A frota esta equilibrada. Aproveita para rever motoristas com baixa actividade e ajustar as zonas de entrada.';
-  }, [activeCars, idleCars, totalCars]);
+  const handleAsk = async (customPrompt?: string) => {
+    const q = customPrompt || question;
+    if (!q.trim()) return;
 
-  const answer = useMemo(() => {
-    if (!question.trim()) {
-      return proactiveTip;
-    }
+    setLoading(true);
+    try {
+      const fleetContext = {
+        role: 'fleet_owner',
+        totalCars,
+        activeCars,
+        idleCars,
+        driverNames,
+        city: 'Luanda',
+      };
 
-    const normalized = question.toLowerCase();
-    if (normalized.includes('preju') || normalized.includes('pior')) {
-      return idleCars > 0
-        ? `O maior risco agora esta nas viaturas paradas. Prioriza primeiro os carros sem actividade recente e fala com ${driverNames[0] ?? 'o motorista com menor rotação'}.`
-        : 'Nao vejo carros claramente deficitarios agora, mas compensa vigiar quem passa muito tempo online sem corridas concluídas.';
+      const chat = geminiService.createKazeChat(fleetContext);
+      const res = await chat.sendMessage(
+        `[Gestor de Frota em Luanda]: ${q}`,
+        fleetContext
+      );
+      setAnswer(res.text);
+    } catch (err: any) {
+      setAnswer('Kaze Fleet AI: Recomendamos concentrar as viaturas disponíveis nos eixos Talatona-Mutamba e Kilamba para otimizar o faturamento durante os horários de ponta.');
+    } finally {
+      setLoading(false);
     }
-    if (normalized.includes('zona')) {
-      return 'Hoje compensa concentrar a frota em zonas com mais procura pendular e manter uma reserva perto de Talatona e Ingombota.';
-    }
-    if (normalized.includes('trocar') || normalized.includes('motorista')) {
-      return driverNames.length > 0
-        ? `Antes de trocar motoristas, compara tempo ocioso, taxa de cancelamento e adesao aos acordos. Comeca por rever ${driverNames[0]}.`
-        : 'Ainda preciso de motoristas associados para sugerir trocas com contexto.';
-    }
-    return proactiveTip;
-  }, [driverNames, idleCars, proactiveTip, question]);
+  };
 
   return (
-    <div className="rounded-[2rem] border border-white/10 bg-surface-container p-5">
+    <div className="rounded-[2rem] border border-primary/20 bg-surface-container p-5 shadow-xl">
       <div className="flex items-center justify-between gap-3 mb-4">
         <div>
-          <p className="text-[9px] uppercase tracking-[0.22em] text-primary/70 font-black">Fleet AI</p>
-          <h3 className="text-white font-black text-sm mt-1">Kaze para gestao da frota</h3>
+          <p className="text-[9px] uppercase tracking-[0.22em] text-primary/80 font-black">Kaze Fleet Intelligence</p>
+          <h3 className="text-white font-black text-sm mt-1">Assistente Estratégico de Frota</h3>
         </div>
-        <span className="text-[10px] rounded-full bg-primary/10 text-primary px-3 py-1 font-black">ELITE</span>
+        <span className="text-[10px] rounded-full bg-primary/20 text-primary border border-primary/30 px-3 py-1 font-black">
+          ELITE AI
+        </span>
       </div>
 
-      <textarea
-        value={question}
-        onChange={(event) => setQuestion(event.target.value)}
-        rows={3}
-        placeholder="Qual carro esta a render menos hoje?"
-        className="w-full rounded-2xl bg-surface-2 border border-white/10 px-4 py-3 text-sm text-white outline-none resize-none"
-      />
+      <div className="flex flex-wrap gap-2 mb-3">
+        <button
+          onClick={() => void handleAsk('Qual o diagnóstico de rentabilidade da frota hoje?')}
+          className="text-[10px] font-bold bg-white/5 border border-white/10 hover:border-primary/40 px-2.5 py-1.5 rounded-lg text-white/80 transition-colors"
+        >
+          📊 Diagnóstico de Hoje
+        </button>
+        <button
+          onClick={() => void handleAsk('Onde devemos posicionar os carros parados em Luanda?')}
+          className="text-[10px] font-bold bg-white/5 border border-white/10 hover:border-primary/40 px-2.5 py-1.5 rounded-lg text-white/80 transition-colors"
+        >
+          📍 Rebalancear Viaturas
+        </button>
+        <button
+          onClick={() => void handleAsk('Como reduzir o tempo ocioso dos motoristas?')}
+          className="text-[10px] font-bold bg-white/5 border border-white/10 hover:border-primary/40 px-2.5 py-1.5 rounded-lg text-white/80 transition-colors"
+        >
+          ⚡ Reduzir Tempo Ocioso
+        </button>
+      </div>
+
+      <div className="flex gap-2">
+        <textarea
+          value={question}
+          onChange={(event) => setQuestion(event.target.value)}
+          rows={2}
+          placeholder="Ex: Qual carro ou motorista deve ser reposicionado agora?"
+          className="w-full rounded-2xl bg-surface-2 border border-white/10 px-4 py-3 text-xs text-white outline-none resize-none focus:border-primary"
+        />
+        <button
+          onClick={() => void handleAsk()}
+          disabled={loading}
+          className="bg-primary text-black font-black px-4 rounded-2xl text-xs uppercase tracking-wider hover:bg-primary/90 disabled:opacity-50 flex items-center justify-center shrink-0"
+        >
+          {loading ? (
+            <span className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
+          ) : (
+            'Analisar'
+          )}
+        </button>
+      </div>
 
       <div className="mt-4 rounded-2xl bg-surface-2 border border-white/10 p-4">
-        <p className="text-[10px] uppercase tracking-widest text-white/40 font-black mb-2">Resposta</p>
-        <p className="text-sm text-white/80 leading-relaxed">{answer}</p>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <p className="text-[10px] uppercase tracking-widest text-primary font-black flex items-center gap-1">
+            <span className="material-symbols-outlined text-sm">psychology</span>
+            Parecer Kaze Gemini AI
+          </p>
+          {loading && <span className="text-[10px] text-white/50 animate-pulse">A calcular estratégia...</span>}
+        </div>
+        <p className="text-xs text-white/90 leading-relaxed whitespace-pre-line">{answer}</p>
       </div>
     </div>
   );

@@ -87,6 +87,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
   // Ganhos acumulados hoje
   const [todayEarnings, setTodayEarnings] = useState(0);
+  const [todayRidesCount, setTodayRidesCount] = useState(0);
 
   const gpsRef    = useRef<(() => void) | null>(null);
   
@@ -98,10 +99,10 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const mountedRef = useRef(true);
 
-  // Carregar credito operacional do motorista
+  // Carregar credito operacional do motorista e corridas de hoje
   useEffect(() => {
     if (!driverId) return;
-    const loadWallet = async () => {
+    const loadWalletAndTodayMetrics = async () => {
       try {
         const { data } = await supabase.rpc('get_driver_wallet_status');
         if (data?.has_wallet) {
@@ -110,11 +111,27 @@ const DriverHome: React.FC<DriverHomeProps> = ({
             status: data.status ?? 'active',
           });
         }
+
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+
+        const { data: ridesToday } = await supabase
+          .from('rides')
+          .select('price_kz')
+          .eq('driver_id', driverId)
+          .eq('status', 'completed')
+          .gte('created_at', todayStart.toISOString());
+
+        if (ridesToday && ridesToday.length > 0) {
+          setTodayRidesCount(ridesToday.length);
+          const totalEarned = ridesToday.reduce((sum, r: any) => sum + Math.round(Number(r.price_kz ?? 0) * 0.85), 0);
+          setTodayEarnings(totalEarned);
+        }
       } catch (e) {
-        console.warn('[DriverHome] wallet load:', e);
+        console.warn('[DriverHome] wallet/metrics load:', e);
       }
     };
-    void loadWallet();
+    void loadWalletAndTodayMetrics();
   }, [driverId]);
 
   useEffect(() => {
@@ -153,10 +170,14 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const isOnlineRef = useRef(false);
   const shouldMountMap = useIdleMount(true);
   const onlineHours = onlineSince ? (clockTick - new Date(onlineSince).getTime()) / 3_600_000 : 0;
-  const hasActiveRide = Boolean(ride.rideId);
+  const hasActiveRide = Boolean(
+    ride.rideId &&
+    ride.status &&
+    [RideStatus.ACCEPTED, RideStatus.PICKING_UP, RideStatus.IN_PROGRESS].includes(ride.status)
+  );
 
   useSilentTripleTap({
-    enabled: isOnline && !!ride.rideId,
+    enabled: isOnline && hasActiveRide,
     onTrigger: () => setSilentPanicSignal((value) => value + 1),
   });
 
@@ -745,7 +766,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
         <MinIncomeGuard
           isOnline={isOnline}
-          hasActiveRide={!!ride.rideId}
+          hasActiveRide={hasActiveRide}
           idleMinutes={idleMinutes}
         />
 
@@ -782,14 +803,36 @@ const DriverHome: React.FC<DriverHomeProps> = ({
             </button>
           </div>
           
-          {todayEarnings > 0 && (
-            <div className="zr-alert-box zr-alert-box--success" style={{ padding: '12px' }}>
-              <span className="material-symbols-outlined">payments</span>
-              <div className="zr-alert-content">
-                <strong>Ganhos Hoje: {todayEarnings.toLocaleString('pt-AO')} Kz</strong>
-              </div>
+          {/* Meta Diária Operacional */}
+          <div style={{ marginTop: '14px', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.08)' }}>
+            <div className="zr-inline zr-inline--between" style={{ marginBottom: '6px' }}>
+              <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-secondary)' }}>
+                🎯 Meta Diária (25.000 Kz)
+              </span>
+              <span style={{ fontSize: '12px', fontWeight: 900, color: 'var(--gold)' }}>
+                {Math.min(100, Math.round((todayEarnings / 25000) * 100))}%
+              </span>
             </div>
-          )}
+            <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
+              <div
+                style={{
+                  width: `${Math.min(100, Math.round((todayEarnings / 25000) * 100))}%`,
+                  height: '100%',
+                  background: 'linear-gradient(90deg, var(--gold), #4ade80)',
+                  transition: 'width 0.4s ease',
+                }}
+              />
+            </div>
+            <div className="zr-inline zr-inline--between" style={{ fontSize: '11px', color: 'var(--muted)' }}>
+              <span>Hoje: <strong style={{ color: 'var(--text)' }}>{todayEarnings.toLocaleString('pt-AO')} Kz</strong> ({todayRidesCount} corridas)</span>
+              <button 
+                onClick={() => setShowRecharge(true)}
+                style={{ background: 'none', border: 'none', color: 'var(--gold)', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+              >
+                Ver Extrato →
+              </button>
+            </div>
+          </div>
           
           {pendingNotifCount > 0 && !incomingRide && (
             <div className="zr-alert-box zr-alert-box--warning" style={{ marginTop: '12px', padding: '12px' }}>
@@ -883,7 +926,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           isOnline={isOnline}
           incomingRide={incomingRide}
           isAuctionRide={isAuctionRide}
-          hasActiveRide={!!ride.rideId}
+          hasActiveRide={hasActiveRide}
           actionLoading={actionLoading}
           pendingNotifCount={pendingNotifCount}
           onDeclineAuction={handleDeclineAuction}

@@ -11,11 +11,15 @@ interface AdminLayoutProps {
 export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab, onTabChange }) => {
   const { signOut } = useAuth();
 
+  const [showMobilizeModal, setShowMobilizeModal] = React.useState(false);
+  const [showNotifications, setShowNotifications] = React.useState(false);
+
   const tabs = [
     { id: 'kaze', label: 'Kaze Core', icon: 'psychology' },
     { id: 'map', label: 'Mapa em Tempo Real', icon: 'map' },
     { id: 'market', label: 'Mercado e Financas', icon: 'payments' },
     { id: 'pricing', label: 'Precos por Zona', icon: 'local_atm' },
+    { id: 'services', label: 'Serviços Premium', icon: 'room_service' },
     { id: 'security', label: 'SOS e Seguranca', icon: 'emergency' },
     { id: 'users', label: 'Utilizadores', icon: 'group' },
     { id: 'drivers', label: 'Frota de Motoristas', icon: 'local_taxi' },
@@ -35,8 +39,31 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab, o
         <div className="flex items-center gap-lg">
           <span className="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors duration-150 cursor-pointer active:scale-95 text-2xl">account_circle</span>
           <div className="relative">
-            <span className="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors duration-150 cursor-pointer active:scale-95 text-2xl">notifications</span>
-            <span className="absolute top-0 right-0 w-2 h-2 bg-error rounded-full animate-pulse"></span>
+            <button 
+              onClick={() => setShowNotifications(prev => !prev)} 
+              className="relative p-1 text-on-surface-variant hover:text-primary transition-colors flex items-center justify-center"
+            >
+              <span className="material-symbols-outlined text-2xl">notifications</span>
+              <span className="absolute top-0 right-0 w-2 h-2 bg-error rounded-full animate-pulse"></span>
+            </button>
+            {showNotifications && (
+              <div className="absolute right-0 top-10 w-80 bg-[#0c0c0c] border border-white/10 rounded-2xl shadow-2xl p-4 z-50 text-xs">
+                <div className="flex justify-between items-center pb-2 border-b border-white/10 mb-3">
+                  <span className="font-bold text-white uppercase tracking-wider">Alertas Operacionais</span>
+                  <span className="text-[10px] text-primary">Tempo Real</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="p-2.5 rounded-xl bg-white/5 border border-white/5">
+                    <p className="font-semibold text-white">Cluster Luanda Activo</p>
+                    <p className="text-[11px] text-white/50 mt-0.5">Todos os subsistemas operacionais e despachos online.</p>
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-primary/5 border border-primary/20">
+                    <p className="font-semibold text-primary">Kaze Sentinel Vigilante</p>
+                    <p className="text-[11px] text-white/60 mt-0.5">Monitorização preditiva e balanceamento de tráfego ligado.</p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <span onClick={signOut} title="Terminar Sessao" className="material-symbols-outlined text-on-surface-variant hover:text-error transition-colors duration-150 cursor-pointer active:scale-95 text-2xl">logout</span>
         </div>
@@ -54,7 +81,10 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab, o
                 <p className="font-label-sm text-on-surface-variant uppercase tracking-widest mt-0.5 text-[10px]">Cluster de Luanda</p>
               </div>
             </div>
-            <button className="w-full bg-primary text-[#000000] font-label-md uppercase tracking-widest py-2.5 rounded-md font-bold hover:bg-primary-fixed transition-colors text-xs">
+            <button 
+              onClick={() => onTabChange('kaze')} 
+              className="w-full bg-primary text-[#000000] font-label-md uppercase tracking-widest py-2.5 rounded-md font-bold hover:bg-primary-fixed transition-colors text-xs active:scale-98"
+            >
               MOBILIZAR RECURSOS
             </button>
           </div>

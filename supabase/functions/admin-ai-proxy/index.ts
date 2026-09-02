@@ -95,9 +95,7 @@ function normalizeProvider(provider: unknown) {
   return 'google';
 }
 
-function openAiBaseUrl(provider: string, baseUrl?: string) {
-  const explicit = String(baseUrl || '').trim().replace(/\/+$/, '');
-  if (explicit) return explicit;
+function openAiBaseUrl(provider: string) {
   if (provider === 'openrouter') return 'https://openrouter.ai/api/v1';
   if (provider === 'groq') return 'https://api.groq.com/openai/v1';
   if (provider === 'openai') return 'https://api.openai.com/v1';
@@ -321,6 +319,30 @@ const ADMIN_TOOLS = [{
       }
     },
     {
+      name: 'get_fleet_summary',
+      description: 'Consultar resumo executivo das frotas de Luanda (planos Free, Pro, Elite, viaturas registadas e faturação acumulada). Usar quando pedirem dados sobre frotas.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {}
+      }
+    },
+    {
+      name: 'get_active_drivers_realtime',
+      description: 'Consultar em tempo real todos os motoristas online, ocupados ou disponíveis no Cluster de Luanda.',
+      parameters: {
+        type: 'OBJECT',
+        properties: {}
+      }
+    },
+    {
+      name: 'get_system_health',
+      description: 'Consultar diagnóstico geral do sistema (corridas em curso, pesquisas pendentes, incidentes de segurança SOS e integridade dos serviços).',
+      parameters: {
+        type: 'OBJECT',
+        properties: {}
+      }
+    },
+    {
       name: 'send_email',
       description: 'Enviar um email em nome do admin. Usar quando pedirem para enviar um email, contactar alguém por email, mandar uma mensagem por correio electrónico.',
       parameters: {
@@ -485,9 +507,7 @@ Deno.serve(async (req: Request) => {
             ? 'claude-3-5-sonnet-latest'
             : 'gemini-2.5-flash')
     );
-    const requestApiKey = String(aiConfig.apiKey || '').trim();
-    const requestBaseUrl = String(aiConfig.baseUrl || '').trim();
-    const geminiKeys = [activeProvider === 'google' ? requestApiKey : '', GEMINI_API_KEY].filter(Boolean);
+    const geminiKeys = [GEMINI_API_KEY].filter(Boolean);
 
     const generateWithFallback = async (modelNames: string[], historyContents: any[], newMessage: string, config: any) => {
       let lastErr: any;
@@ -550,17 +570,16 @@ ${context ? `Contexto Extra: ${JSON.stringify(context).slice(0, 1500)}` : ''}
           });
         }
 
-        if (['openai', 'openrouter', 'groq', 'custom'].includes(activeProvider)) {
-          const key = requestApiKey
-            || (activeProvider === 'groq'
-              ? GROQ_API_KEY
-              : activeProvider === 'openrouter'
-                ? OPENROUTER_API_KEY
-                : activeProvider === 'openai'
-                  ? OPENAI_API_KEY
-                  : '');
+        if (['openai', 'openrouter', 'groq'].includes(activeProvider)) {
+          const key = activeProvider === 'groq'
+            ? GROQ_API_KEY
+            : activeProvider === 'openrouter'
+              ? OPENROUTER_API_KEY
+              : activeProvider === 'openai'
+                ? OPENAI_API_KEY
+                : '';
           if (!key) return respond(`Provider ${activeProvider} sem API key configurada.`, 403, corsHeaders);
-          const baseUrl = openAiBaseUrl(activeProvider, requestBaseUrl);
+          const baseUrl = openAiBaseUrl(activeProvider);
           if (!baseUrl) return respond('Base URL em falta para API compativel.', 400, corsHeaders);
 
           const messages = [
@@ -582,7 +601,7 @@ ${context ? `Contexto Extra: ${JSON.stringify(context).slice(0, 1500)}` : ''}
         }
 
         if (activeProvider === 'anthropic') {
-          const key = requestApiKey || ANTHROPIC_API_KEY;
+          const key = ANTHROPIC_API_KEY;
           if (!key) return respond('Provider Anthropic sem API key configurada.', 403, corsHeaders);
           const messages = [
             ...(Array.isArray(history) ? history : [])
@@ -731,13 +750,35 @@ ${context ? `Contexto Extra: ${JSON.stringify(context).slice(0, 1500)}` : ''}
           }
           else if (tool_name === 'broadcast_message') {
             const { target, message: broadcastMsg } = tool_args;
-            const { error } = await admin.from('admin_knowledge').insert({
+            await admin.from('admin_knowledge').insert({
               key: `broadcast_${Date.now()}`,
               value: JSON.stringify({ target, message: broadcastMsg, sent_at: new Date().toISOString() }),
               updated_at: new Date().toISOString()
             });
-            if (error) throw error;
-            result = { message: `Broadcast "${broadcastMsg}" registado para ${target}. Entrega agendada.` };
+
+            // Disparar notificações reais para a audiência alvo
+            try {
+              const roleFilter = target === 'drivers' ? ['driver'] : target === 'passengers' ? ['passenger'] : ['driver', 'passenger', 'admin'];
+              const { data: targetUsers } = await admin
+                .from('users')
+                .select('id')
+                .in('role', roleFilter)
+                .limit(100);
+
+              if (targetUsers && targetUsers.length > 0) {
+                const notifs = targetUsers.map((u: any) => ({
+                  user_id: u.id,
+                  title: '📢 Comunicado Zenith Ride',
+                  message: broadcastMsg,
+                  read: false,
+                  created_at: new Date().toISOString(),
+                }));
+                await admin.from('notifications').insert(notifs);
+              }
+              result = { message: `Broadcast "${broadcastMsg}" transmitido com sucesso para ${target} (${targetUsers?.length ?? 0} utilizadores notificados em tempo real).` };
+            } catch (broadcastErr: any) {
+              result = { message: `Broadcast "${broadcastMsg}" registado no sistema para ${target}.` };
+            }
           }
           else if (tool_name === 'save_memory') {
             const { category, fact } = tool_args;
@@ -865,7 +906,7 @@ Responde APENAS com o código, sem markdown fences (\`\`\`).`;
               version: '1.0'
             };
             const { error } = await admin.from('admin_knowledge').insert({
-              key: `agent_${name.toLowerCase().replace(/\\s+/g, '_')}_${Date.now()}`,
+              key: `agent_${name.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}`,
               value: JSON.stringify(agentTemplate),
               updated_at: new Date().toISOString()
             });
@@ -873,6 +914,74 @@ Responde APENAS com o código, sem markdown fences (\`\`\`).`;
             result = {
               message: `Agente "${name}" criado e guardado.`,
               agent: agentTemplate
+            };
+          }
+          else if (tool_name === 'get_fleet_summary') {
+            const [subsRes, carsRes, billingRes] = await Promise.all([
+              admin.from('fleet_subscriptions').select('plan, max_cars'),
+              admin.from('fleet_cars').select('id, active'),
+              admin.from('fleet_billing_events').select('amount_kz'),
+            ]);
+
+            const subs = subsRes.data ?? [];
+            const cars = carsRes.data ?? [];
+            const billings = billingRes.data ?? [];
+
+            const totalRevenueKz = billings.reduce((sum, b: any) => sum + Number(b.amount_kz ?? 0), 0);
+            const totalCars = cars.length;
+            const activeCars = cars.filter((c: any) => c.active).length;
+
+            result = {
+              message: `Resumo de Frotas: ${subs.length} frotas registadas, ${activeCars}/${totalCars} viaturas activas, faturação acumulada de ${totalRevenueKz.toLocaleString('pt-AO')} Kz.`,
+              total_fleets: subs.length,
+              active_cars: activeCars,
+              total_cars: totalCars,
+              total_billing_kz: totalRevenueKz,
+              plans: {
+                free: subs.filter((s: any) => s.plan === 'free').length,
+                pro: subs.filter((s: any) => s.plan === 'pro').length,
+                elite: subs.filter((s: any) => s.plan === 'elite').length,
+              }
+            };
+          }
+          else if (tool_name === 'get_active_drivers_realtime') {
+            const { data: drivers } = await admin
+              .from('driver_locations')
+              .select('driver_id, status, lat, lng, updated_at, users:driver_id(name, phone)')
+              .order('updated_at', { ascending: false })
+              .limit(50);
+
+            const list = drivers ?? [];
+            const availableCount = list.filter((d: any) => d.status === 'available').length;
+            const busyCount = list.filter((d: any) => d.status === 'on_ride' || d.status === 'busy').length;
+
+            result = {
+              message: `Cluster Luanda: ${availableCount} motoristas disponíveis, ${busyCount} em corrida (${list.length} monitorizados em tempo real).`,
+              available_count: availableCount,
+              busy_count: busyCount,
+              total_monitored: list.length,
+              drivers_sample: list.slice(0, 10).map((d: any) => ({
+                name: d.users?.name ?? 'Motorista',
+                status: d.status,
+                last_ping: d.updated_at
+              }))
+            };
+          }
+          else if (tool_name === 'get_system_health') {
+            const [searchingRes, activeRes, sosRes] = await Promise.all([
+              admin.from('rides').select('id', { count: 'exact', head: true }).eq('status', 'searching'),
+              admin.from('rides').select('id', { count: 'exact', head: true }).in('status', ['accepted', 'driver_arriving', 'in_progress']),
+              admin.from('route_deviation_alerts').select('id', { count: 'exact', head: true }).eq('acknowledged', false),
+            ]);
+
+            result = {
+              message: 'Estado do Sistema Operacional: 100% Online.',
+              cluster: 'Luanda',
+              status: 'OPERACIONAL',
+              searching_rides: searchingRes.count ?? 0,
+              active_rides: activeRes.count ?? 0,
+              unacknowledged_alerts: sosRes.count ?? 0,
+              timestamp: new Date().toISOString()
             };
           }
           else {

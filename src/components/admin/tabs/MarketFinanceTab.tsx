@@ -78,17 +78,21 @@ export const MarketFinanceTab: React.FC = () => {
   }, [period]);
 
   const averageTicket = completedRides > 0 ? Math.round(totalRevenue / completedRides) : 0;
+  const platformFee = Math.round(totalRevenue * 0.15);
+  const driverPayout = Math.round(totalRevenue * 0.85);
   const activePeriodLabel = PERIOD_OPTIONS.find((item) => item.id === period)?.label ?? '7D';
 
   const exportRows = () => {
     if (!data.length) return;
 
     const csv = [
-      ['origem', 'destino', 'valor_kz', 'data'],
+      ['origem', 'destino', 'valor_bruto_kz', 'comissao_zenith_15', 'repasse_motorista_85', 'data'],
       ...data.map((ride) => [
         ride.origin_address || 'Origem indisponivel',
         ride.dest_address || 'Destino indisponivel',
         Math.round(Number(ride.price_kz ?? 0)),
+        Math.round(Number(ride.price_kz ?? 0) * 0.15),
+        Math.round(Number(ride.price_kz ?? 0) * 0.85),
         new Date(ride.created_at).toISOString(),
       ]),
     ]
@@ -98,9 +102,11 @@ export const MarketFinanceTab: React.FC = () => {
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.href = url;
-    link.download = `market-finance-${period}.csv`;
+    link.setAttribute('href', url);
+    link.setAttribute('download', `zenith_financas_${period}_${Date.now()}.csv`);
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
@@ -117,19 +123,19 @@ export const MarketFinanceTab: React.FC = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end border-b border-outline-variant/30 pb-4 gap-4">
         <div>
           <h2 className="font-headline-xl text-on-surface tracking-tight">Mercado e Financas</h2>
-          <p className="font-body-md text-on-surface-variant mt-2">Visao Geral \ Cluster Luanda</p>
+          <p className="font-body-md text-on-surface-variant mt-2">Volume Transacionado & Divisão de Receitas \ Cluster Luanda</p>
         </div>
         <div className="flex gap-4">
           <button
             onClick={exportRows}
             disabled={loading || data.length === 0}
-            className="px-4 py-2 bg-transparent border border-primary/50 text-primary font-label-md uppercase tracking-widest rounded hover:bg-primary/10 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-2 bg-transparent border border-primary/50 text-primary font-label-md uppercase tracking-widest rounded hover:bg-primary/10 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed text-xs font-bold"
           >
-            <span className="material-symbols-outlined text-sm">download</span> Exportar
+            <span className="material-symbols-outlined text-sm">download</span> Exportar CSV
           </button>
           <button
             onClick={cyclePeriod}
-            className="px-4 py-2 bg-primary text-[#000000] font-label-md uppercase tracking-widest rounded font-bold hover:bg-primary-fixed transition-colors flex items-center gap-2"
+            className="px-4 py-2 bg-primary text-[#000000] font-label-md uppercase tracking-widest rounded font-bold hover:bg-primary-fixed transition-colors flex items-center gap-2 text-xs"
             title="Alternar periodo entre 24H, 7D e 30D"
           >
             <span className="material-symbols-outlined text-sm">filter_alt</span> {activePeriodLabel}
@@ -170,10 +176,11 @@ export const MarketFinanceTab: React.FC = () => {
         </div>
       ) : (
         <div className="space-y-6">
-          <div className="grid gap-4 md:grid-cols-3">
-            <MetricCard label={`Receita ${activePeriodLabel}`} value={`${Math.round(totalRevenue).toLocaleString('pt-AO')} Kz`} />
-            <MetricCard label="Corridas completas" value={String(completedRides)} />
-            <MetricCard label="Ticket medio" value={`${averageTicket.toLocaleString('pt-AO')} Kz`} />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <MetricCard label={`Volume Bruto (${activePeriodLabel})`} value={`${Math.round(totalRevenue).toLocaleString('pt-AO')} Kz`} />
+            <MetricCard label={`Comissão Zenith (15%)`} value={`${platformFee.toLocaleString('pt-AO')} Kz`} highlight />
+            <MetricCard label={`Repasse Motoristas (85%)`} value={`${driverPayout.toLocaleString('pt-AO')} Kz`} />
+            <MetricCard label="Ticket Médio / Corridas" value={`${averageTicket.toLocaleString('pt-AO')} Kz (${completedRides})`} />
           </div>
 
           {data.length === 0 ? (
@@ -208,11 +215,13 @@ export const MarketFinanceTab: React.FC = () => {
   );
 };
 
-function MetricCard({ label, value }: { label: string; value: string }) {
+function MetricCard({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <div className="rounded-xl border border-primary/15 bg-[#050505]/80 p-5">
-      <div className="font-label-sm uppercase tracking-widest text-on-surface-variant">{label}</div>
-      <div className="mt-3 text-2xl font-bold text-primary">{value}</div>
+    <div className={`rounded-xl border p-5 ${
+      highlight ? 'border-primary/50 bg-primary/10 shadow-[0_0_15px_rgba(233,195,73,0.15)]' : 'border-primary/15 bg-[#050505]/80'
+    }`}>
+      <div className="font-label-sm uppercase tracking-widest text-on-surface-variant text-[11px]">{label}</div>
+      <div className="mt-3 text-2xl font-black text-primary">{value}</div>
     </div>
   );
 }

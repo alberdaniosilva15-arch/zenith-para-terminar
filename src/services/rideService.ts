@@ -186,7 +186,9 @@ class RideService {
         }
 
         if (!data || (data as unknown[]).length === 0) {
-          console.log(`[rideService.getDriversH3] 0 motoristas em k=${k} — expandindo`);
+          if (import.meta.env.DEV) {
+            console.debug(`[rideService.getDriversH3] 0 motoristas em k=${k} — expandindo`);
+          }
           continue;
         }
 
@@ -224,7 +226,9 @@ class RideService {
         scored.sort((a, b) => a._score - b._score);
         const drivers: AuctionDriver[] = scored.map(({ _score: _, ...d }) => d);
 
-        console.log(`[rideService.getDriversH3] ${drivers.length} motoristas em k=${k}`);
+        if (import.meta.env.DEV) {
+          console.debug(`[rideService.getDriversH3] ${drivers.length} motoristas em k=${k}`);
+        }
         return drivers;
 
       } catch (err) {
@@ -400,6 +404,9 @@ class RideService {
         surge        = fallback.surge_multiplier;
       }
 
+      // Piso de segurança client-side: no mínimo 500 Kz
+      price_kz = Math.max(500, Math.round(price_kz));
+
       if (input.selected_driver_id) {
         const { data, error } = await supabase.rpc('create_selected_ride_atomic', {
           p_passenger_id: input.passenger_id,
@@ -436,7 +443,9 @@ class RideService {
           };
         }
 
-        console.log('[rideService.createRide] Corrida criada atomicamente:', (data as DbRide).id);
+        if (import.meta.env.DEV) {
+          console.debug('[rideService.createRide] Corrida criada atomicamente:', (data as DbRide).id);
+        }
         return { data: data as DbRide, error: null };
       }
 
@@ -470,7 +479,9 @@ class RideService {
         return { data: null, error: { code: error.code, message } };
       }
 
-      console.log('[rideService.createRide] Corrida criada:', (data as DbRide).id);
+      if (import.meta.env.DEV) {
+        console.debug('[rideService.createRide] Corrida criada:', (data as DbRide).id);
+      }
       void this.triggerDriverWhatsAppFallback((data as DbRide).id);
       return { data: data as DbRide, error: null };
     } catch (err) {
@@ -886,7 +897,9 @@ class RideService {
       const { data, error } = await supabase.rpc('get_active_ride');
       if (error) { console.error('[rideService.getActiveRide]', error); return null; }
       if (!data) return null;
-      return data as DbRide & { driver_name?: string; passenger_name?: string };
+      // FIX: get_active_ride agora retorna TABLE (array). Pegar o primeiro elemento
+      const rows = Array.isArray(data) ? data : [data];
+      return (rows[0] ?? null) as DbRide & { driver_name?: string; passenger_name?: string };
     } catch (err) {
       console.error('[rideService.getActiveRide] Excepção:', err);
       return null;
@@ -991,7 +1004,9 @@ class RideService {
           // Publicar novas corridas para a UI
           for (const ride of currentRides) {
             if (!knownRideIds.has(ride.id)) {
-              console.log('[rideService.polling] Nova corrida recebida via RPC:', ride.id);
+              if (import.meta.env.DEV) {
+                console.debug('[rideService.polling] Nova corrida recebida via RPC:', ride.id);
+              }
               onNew(ride);
             }
           }
@@ -1196,9 +1211,9 @@ class RideService {
   private _localPriceEstimate(origin: LatLng, dest: LatLng): PriceEstimate {
     const distanceKm  = Math.max(0.5, haversineMeters(origin.lat, origin.lng, dest.lat, dest.lng) / 1000);
     const durationMin = Math.ceil((distanceKm / 25) * 60);
-    const base_kz     = 150;
-    const per_km_kz   = Math.ceil(distanceKm * 200);
-    const total_kz    = Math.ceil(base_kz + per_km_kz);
+    const base_kz     = 350;
+    const per_km_kz   = Math.ceil(distanceKm * 250);
+    const total_kz    = Math.max(500, Math.ceil(base_kz + per_km_kz));
     return {
       price_kz: total_kz, distance_km: Math.round(distanceKm * 10) / 10,
       duration_min: durationMin, surge_multiplier: 1.0, traffic_level: 'low',

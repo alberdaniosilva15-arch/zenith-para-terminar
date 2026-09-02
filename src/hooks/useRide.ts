@@ -97,6 +97,8 @@ export function useRide(): UseRideReturn {
 
   // ── Detectar transição para COMPLETED → activar review ──────────────────
   // ✅ BUG #5 CORRIGIDO: setTimeout com cleanup e guarda de montagem
+  // ✅ BUG #3 CORRIGIDO: Só abre PostRideReview para o PASSAGEIRO.
+  //    Motorista limpa o estado imediatamente para receber novas corridas.
   useEffect(() => {
     const prev = prevStatusRef.current;
     const curr = ride.status;
@@ -109,6 +111,23 @@ export function useRide(): UseRideReturn {
       ride.rideId &&
       ride.driverId
     ) {
+      // FIX BUG 3: Se o utilizador actual é o MOTORISTA, não mostrar auto-review.
+      // Limpar estado imediatamente para desbloquear novas corridas.
+      const isDriver = dbUser?.id === ride.driverId;
+      if (isDriver) {
+        if (import.meta.env.DEV) {
+          console.debug('[useRide] Corrida concluída — motorista: a limpar estado sem review.');
+        }
+        // Delay curto para garantir que o realtime propaga o COMPLETED
+        const driverTimer = setTimeout(() => {
+          clearRideDetails();
+          resetRide();
+          showToast('Corrida concluída com sucesso! 🌟', 'success');
+        }, 1500);
+        return () => clearTimeout(driverTimer);
+      }
+
+      // É o PASSAGEIRO — activar PostRideReview normalmente
       let isMounted = true;
 
       const timer = setTimeout(() => {
@@ -136,7 +155,7 @@ export function useRide(): UseRideReturn {
         clearTimeout(timer);
       };
     }
-  }, [ride.status, setPostRide, ride.rideId, ride.driverId, ride.driverName, ride.driverRating, ride.priceKz]);
+  }, [ride.status, setPostRide, ride.rideId, ride.driverId, ride.driverName, ride.driverRating, ride.priceKz, dbUser?.id, clearRideDetails, resetRide, showToast]);
 
   useEffect(() => {
     const justStarted =
@@ -463,9 +482,19 @@ export function useRide(): UseRideReturn {
     }
   }, [showToast, ride.rideId]);
 
-  // ── submitReview ──────────────────────────────────────────────────────────
+  // ── submitReview ────────────────────────────────────────────────────────────
   const submitReview = useCallback(async (score: number, comment?: string) => {
     if (!dbUser?.id || !postRide.rideId || !postRide.driverId) return;
+    // FIX BUG 3: Impedir auto-avaliação (motorista avaliando a si mesmo)
+    if (dbUser.id === postRide.driverId) {
+      if (import.meta.env.DEV) {
+        console.warn('[useRide] submitReview bloqueado: motorista tentou avaliar a si mesmo.');
+      }
+      resetPostRide();
+      clearRideDetails();
+      resetRide();
+      return;
+    }
     try {
       const err = await rideService.submitRating({
         ride_id: postRide.rideId, from_user: dbUser.id, to_user: postRide.driverId, score, comment,

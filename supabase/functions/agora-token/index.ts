@@ -174,10 +174,13 @@ async function generateAgoraToken(
   const expireTs = issueTs + expireSeconds;
   const salt = Math.floor(Math.random() * 0xffffffff);
 
-  // Derivar UID numérico estável a partir do UUID
-  const hex = (userId || '').replace(/-/g, '').slice(0, 16) || '0';
-  const uidBig = BigInt('0x' + hex);
-  const uidInt = Number(uidBig % BigInt(0xffffffff));
+  // Derivar UID numérico estável a partir do hash SHA-256 do UUID
+  const hashBuffer = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(userId || '0')
+  );
+  const hashView = new DataView(hashBuffer);
+  const uidInt = (hashView.getUint32(0, true) % 0x7fffffff) + 1;
 
   const encoder = new TextEncoder();
 

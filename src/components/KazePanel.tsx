@@ -44,7 +44,7 @@ async function transcribeDirectGroq(blob: Blob, apiKey: string): Promise<string>
   formData.append('response_format', 'json');
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000); // 12s timeout para não prender o UI
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
     const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
@@ -59,6 +59,62 @@ async function transcribeDirectGroq(blob: Blob, apiKey: string): Promise<string>
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function transcribeDirectGemini(blob: Blob, apiKey: string): Promise<string> {
+  const arrayBuffer = await blob.arrayBuffer();
+  let binary = '';
+  const bytes = new Uint8Array(arrayBuffer);
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i] ?? 0);
+  }
+  const base64Audio = btoa(binary);
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: 'Transcreve o áudio em português com máxima precisão. Retorna APENAS o texto falado.' },
+              {
+                inline_data: {
+                  mime_type: blob.type || 'audio/webm',
+                  data: base64Audio,
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    }
+  );
+
+  if (!res.ok) throw new Error(`Gemini áudio HTTP ${res.status}`);
+  const data = await res.json();
+  return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+}
+
+async function transcribeAudioFlexible(blob: Blob): Promise<string> {
+  const groqKey = import.meta.env.VITE_GROQ_API_KEY;
+  if (groqKey) {
+    try {
+      const groqText = await transcribeDirectGroq(blob, groqKey);
+      if (groqText) return groqText;
+    } catch (e) {
+      console.warn('[KazePanel] Groq falhou, a tentar Gemini:', e);
+    }
+  }
+
+  const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (geminiKey) {
+    return await transcribeDirectGemini(blob, geminiKey);
+  }
+
+  throw new Error('Chave de IA para áudio indisponível.');
 }
 
 const CALIB_MS = 2500;
@@ -485,11 +541,9 @@ export default function KazePanel() {
       audioChunksRef.current = [];
 
       if (!processingRef.current) {
-        setDraftText('A transcrever áudio (Groq Whisper)...');
+        setDraftText('A processar áudio com IA...');
         try {
-          const apiKey = import.meta.env.VITE_GROQ_API_KEY;
-          if (!apiKey) throw new Error('Chave Groq não configurada.');
-          const text = await transcribeDirectGroq(audioBlob, apiKey);
+          const text = await transcribeAudioFlexible(audioBlob);
           if (text && text.trim() && text.trim().length > 1) {
             setDraftText('');
             void sendTranscriptToHermes(text.trim());
@@ -502,14 +556,14 @@ export default function KazePanel() {
             }
           }
         } catch (err: unknown) {
-          console.warn('[KazePanel] Erro no Groq Whisper:', err);
+          console.warn('[KazePanel] Erro na transcrição de áudio:', err);
           const errMsg = err instanceof Error
             ? err.name === 'AbortError' ? 'A transcrição demorou demasiado tempo.' : err.message
             : 'Erro desconhecido';
           setDraftText('');
-          setLastReply(`> KAZE: Erro na transcrição de áudio: ${errMsg}`);
+          setLastReply(`> KAZE: ${errMsg}`);
           setVoiceState('error');
-          await speakAndResume(`Não consegui ouvir bem, falha na transcrição: ${errMsg}`);
+          await speakAndResume(`Não consegui ouvir com clareza. Podes repetir, Comandante?`);
         }
       }
     };

@@ -1,10 +1,11 @@
 // =============================================================================
-// ZENITH RIDE v3.6 — ActiveRideCard.tsx
-// FIX v3.6:
-//   - BUG 4 RESOLVIDO: Removido estado intermédio "aguardar confirmação"
-//     accept_ride_atomic agora define driver_confirmed=true atomicamente
-//   - ACCEPTED mostra sempre o motorista confirmado + chat + chamada
-//   - Safety Shield mantido em ACCEPTED e IN_PROGRESS
+// ZENITH RIDE v3.7 — ActiveRideCard.tsx
+// FIX v3.7:
+//   - BUG 1 RESOLVIDO: Suporte completo a PICKING_UP — passageiro mantém chat,
+//     chamada, Safety Shield e SOS durante toda a fase "a caminho".
+//   - BUG 4 RESOLVIDO: ACCEPTED com driver_confirmed=false mostra estado
+//     "Aguardando confirmação" em vez de "Confirmado · Em rota".
+//   - Safety Shield mantido em ACCEPTED, PICKING_UP e IN_PROGRESS.
 // =============================================================================
 
 import React, { Suspense } from 'react';
@@ -30,9 +31,11 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
   onCancelRide,
   emergencyPhone,
 }) => {
+  // FIX BUG 1: Agora inclui PICKING_UP no guard
   if (
     ride.status !== RideStatus.SEARCHING &&
     ride.status !== RideStatus.ACCEPTED  &&
+    ride.status !== RideStatus.PICKING_UP &&
     ride.status !== RideStatus.IN_PROGRESS
   ) {
     return null;
@@ -45,6 +48,19 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
       onCancelRide('Cancelado pelo passageiro após aceitação');
     }
   };
+
+  // FIX BUG 4: Determinar se o motorista já confirmou (leilão vs fluxo normal)
+  const isDriverConfirmed = ride.driverConfirmed !== false; // undefined = true (fluxo normal)
+  // Determinar se estamos na fase "a caminho" (ACCEPTED confirmado OU PICKING_UP)
+  const isEnRoute = (ride.status === RideStatus.ACCEPTED && isDriverConfirmed) ||
+                     ride.status === RideStatus.PICKING_UP;
+
+  // Progresso visual: ACCEPTED aguardando = 1/6, ACCEPTED confirmado = 1/3, PICKING_UP = 2/3, IN_PROGRESS = full
+  const progressWidth =
+    ride.status === RideStatus.ACCEPTED && !isDriverConfirmed ? 'w-1/6' :
+    ride.status === RideStatus.ACCEPTED && isDriverConfirmed  ? 'w-1/3' :
+    ride.status === RideStatus.PICKING_UP                     ? 'w-2/3' :
+    'w-full';
 
   return (
     <div className="space-y-4">
@@ -71,8 +87,40 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
         </div>
       )}
 
-      {/* ── ACCEPTED — motorista confirmado e a caminho ─────────────────────── */}
-      {ride.status === RideStatus.ACCEPTED && (
+      {/* ── ACCEPTED (driver_confirmed=false) — Aguardando confirmação do motorista ── */}
+      {ride.status === RideStatus.ACCEPTED && !isDriverConfirmed && (
+        <div className="bg-surface-container-low border border-yellow-500/30 p-6 rounded-[2.5rem] vault-shadow space-y-4">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-12 h-12 bg-yellow-500/20 rounded-2xl flex items-center justify-center vault-shadow">
+              <span className="material-symbols-outlined text-2xl text-yellow-500 animate-pulse">hourglass_top</span>
+            </div>
+            <div>
+              <p className="font-black text-on-surface text-sm">{resolvedDriverName}</p>
+              <p className="text-[10px] font-label text-yellow-500/80 uppercase tracking-widest">Aguardando confirmação</p>
+            </div>
+          </div>
+
+          {/* Barra de progresso */}
+          <div className="vault-indicator-track">
+            <div className={`vault-indicator-fill ${progressWidth}`} style={{ backgroundColor: 'var(--warning, #eab308)' }} />
+          </div>
+
+          <p className="text-[10px] text-on-surface-variant/60 font-bold text-center">
+            O motorista selecionado foi notificado. Aguarde a confirmação…
+          </p>
+
+          <button
+            onClick={() => onCancelRide('Cancelado pelo passageiro — motorista não confirmou')}
+            className="zr-button zr-button--block zr-button--secondary"
+            style={{ color: 'var(--danger-soft)', borderColor: 'rgba(239, 68, 68, 0.35)' }}
+          >
+            Cancelar e escolher outro
+          </button>
+        </div>
+      )}
+
+      {/* ── ACCEPTED (confirmado) / PICKING_UP — motorista confirmou e está a caminho ── */}
+      {isEnRoute && (
         <div className="bg-surface-container-low border border-primary/20 p-6 rounded-[2.5rem] vault-shadow space-y-4">
           {/* Header — motorista */}
           <div className="flex items-center gap-3 mb-2">
@@ -81,13 +129,15 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
             </div>
             <div>
               <p className="font-black text-on-surface text-sm">{resolvedDriverName} a caminho</p>
-              <p className="text-[10px] font-label text-primary/70 uppercase tracking-widest">Confirmado · Em rota</p>
+              <p className="text-[10px] font-label text-primary/70 uppercase tracking-widest">
+                {ride.status === RideStatus.PICKING_UP ? 'A caminho · Recolha' : 'Confirmado · Em rota'}
+              </p>
             </div>
           </div>
 
           {/* Barra de progresso */}
           <div className="vault-indicator-track">
-            <div className="vault-indicator-fill w-1/3" />
+            <div className={`vault-indicator-fill ${progressWidth}`} />
           </div>
 
           {/* 🛡️ SAFETY SHIELD — partilha ao vivo */}

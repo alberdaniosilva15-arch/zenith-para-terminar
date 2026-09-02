@@ -4,21 +4,6 @@ const path = require('path');
 const http = require('http');
 const { spawn } = require('child_process');
 
-// Carregar variáveis de ambiente para o caso de ser executado manualmente (standalone)
-const envFiles = ['../../.env', '../../.env.local'];
-for (const relativeFile of envFiles) {
-  const envPath = path.join(__dirname, relativeFile);
-  if (!fs.existsSync(envPath)) continue;
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  envContent.split(/\r?\n/).forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const [key, ...value] = trimmed.split('=');
-    if (key && value.length > 0 && !process.env[key.trim()]) {
-      process.env[key.trim()] = value.join('=').trim().replace(/^['"]|['"]$/g, '');
-    }
-  });
-}
 
 const HOST = process.env.KAZE_EDGE_HOST || '127.0.0.1';
 const PORT = parseInt(process.env.KAZE_EDGE_PORT || '4010', 10);

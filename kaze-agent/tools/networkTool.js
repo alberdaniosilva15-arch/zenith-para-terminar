@@ -4,19 +4,6 @@
 const path = require('path');
 const fs = require('fs');
 
-const rootEnvPath = path.join(__dirname, '../../.env');
-const envMap = {};
-if (fs.existsSync(rootEnvPath)) {
-  const raw = fs.readFileSync(rootEnvPath, 'utf8');
-  raw.split(/\r?\n/).forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const [key, ...rest] = trimmed.split('=');
-    if (!key || rest.length === 0) return;
-    envMap[key.trim()] = rest.join('=').trim().replace(/^['"]|['"]$/g, '');
-  });
-}
-
 function hostnameFromUrl(value) {
   try {
     return new URL(value).hostname;
@@ -29,8 +16,8 @@ const ALLOWED_DOMAINS = [
   'localhost',
   '127.0.0.1',
   '::1',
-  hostnameFromUrl(process.env.VITE_SUPABASE_URL || envMap.VITE_SUPABASE_URL || ''),
-  hostnameFromUrl(process.env.SUPABASE_URL || envMap.SUPABASE_URL || ''),
+  hostnameFromUrl(process.env.VITE_SUPABASE_URL || ''),
+  hostnameFromUrl(process.env.SUPABASE_URL || ''),
 ].filter(Boolean);
 
 function isDomainAllowed(url) {

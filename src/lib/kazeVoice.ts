@@ -312,6 +312,93 @@ async function speakWindowsFallback(text: string, preferredVoice = resolveStored
   });
 }
 
+function pcm24kToWavBlob(base64Pcm: string, sampleRate = 24000): Blob {
+  const binaryString = atob(base64Pcm);
+  const len = binaryString.length;
+  const buffer = new ArrayBuffer(44 + len);
+  const view = new DataView(buffer);
+
+  // "RIFF"
+  view.setUint32(0, 0x52494646, false);
+  view.setUint32(4, 36 + len, true);
+  // "WAVE"
+  view.setUint32(8, 0x57415645, false);
+  // "fmt "
+  view.setUint32(12, 0x666d7420, false);
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, 1, true); // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // 16-bit
+  // "data"
+  view.setUint32(36, 0x64617461, false);
+  view.setUint32(40, len, true);
+
+  const pcmBytes = new Uint8Array(buffer, 44);
+  for (let i = 0; i < len; i++) {
+    pcmBytes[i] = binaryString.charCodeAt(i);
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+export async function speakGoogleGenAIVoice(text: string, voiceName: 'Charon' | 'Puck' | 'Fenrir' = 'Charon') {
+  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
+  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY não configurada.');
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName,
+              },
+            },
+          },
+        },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    throw new Error(`Google GenAI TTS HTTP ${res.status}: ${errBody}`);
+  }
+
+  const data = await res.json();
+  const inlineData = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+  if (!inlineData?.data) {
+    throw new Error('Sem áudio na resposta do Google GenAI');
+  }
+
+  const wavBlob = pcm24kToWavBlob(inlineData.data, 24000);
+  const audioUrl = URL.createObjectURL(wavBlob);
+  const audio = new Audio(audioUrl);
+
+  await new Promise<void>((resolve, reject) => {
+    audio.onended = () => {
+      URL.revokeObjectURL(audioUrl);
+      resolve();
+    };
+    audio.onerror = (e) => {
+      URL.revokeObjectURL(audioUrl);
+      reject(e);
+    };
+    audio.play().catch(reject);
+  });
+
+  return { source: 'google_genai_voice' as const };
+}
+
 export function getKazeVoicePreference() {
   return resolveStoredVoicePreference();
 }
@@ -327,34 +414,34 @@ export async function kazeSpeak(text: string, elevenLabsApiKey: string | null = 
   if (!text?.trim()) return;
 
   const clean = text
-    .replace(/```[\s\S]*?```/g, 'codigo omitido')
-    .replace(/[#*_`[\]]/g, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/[*_#`[\]()]/g, '')
+    .replace(/https?:\/\/\S+/g, '')
     .trim()
     .substring(0, 500);
-  const preferredVoice = resolveStoredVoicePreference();
 
-  // Prefer the local Edge TTS server because it uses known male voices.
+  // 1. Google GenAI Real-Time Neural Voice (JARVIS - Charon Voice) — PRIORIDADE #1
   try {
-    return await speakLocalTTS(clean, preferredVoice);
-  } catch (localErr: any) {
-    console.warn('[KAZE Voice] Servidor local falhou:', localErr?.message || localErr);
+    return await speakGoogleGenAIVoice(clean, 'Charon');
+  } catch (genaiErr: any) {
+    console.warn('[KAZE Voice] Google GenAI TTS falhou:', genaiErr?.message || genaiErr);
   }
 
-  // Then try Windows SAPI only when a likely male voice exists.
-  try {
-    const sapiResult = await speakWindowsFallback(clean, preferredVoice);
-    if (sapiResult.source !== 'none') return sapiResult;
-  } catch (sapiErr: any) {
-    console.warn('[KAZE Voice] Windows SAPI falhou:', sapiErr?.message || sapiErr);
-  }
-
-  // ElevenLabs is a last explicit fallback because arbitrary saved voices can be feminine.
+  // 2. ElevenLabs se configurado
   if (elevenLabsApiKey) {
     try {
       return await speakElevenLabs(clean, elevenLabsApiKey);
     } catch (elevenErr: any) {
       console.warn('[KAZE Voice] ElevenLabs falhou:', elevenErr?.message || elevenErr);
     }
+  }
+
+  // 3. Fallback browser SAPI se offline
+  try {
+    const sapiResult = await speakWindowsFallback(clean);
+    if (sapiResult.source !== 'none') return sapiResult;
+  } catch (sapiErr: any) {
+    console.warn('[KAZE Voice] Windows SAPI falhou:', sapiErr?.message || sapiErr);
   }
 
   return { source: 'none' as const };
@@ -364,27 +451,20 @@ export async function kazeSpeakOnline(text: string, elevenLabsApiKey: string | n
   if (!text?.trim()) return;
 
   const clean = text
-    .replace(/```[\s\S]*?```/g, 'codigo omitido')
-    .replace(/[#*_`[\]]/g, '')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/[*_#`[\]()]/g, '')
+    .replace(/https?:\/\/\S+/g, '')
     .trim()
     .substring(0, 700);
 
-  // 1. Local TTS
+  // 1. Google GenAI Real-Time Neural Voice (JARVIS - Charon Voice) — PRIORIDADE #1
   try {
-    return await speakLocalTTS(clean, resolveStoredVoicePreference());
-  } catch (localErr: any) {
-    console.warn('[KAZE Voice] Servidor local falhou:', localErr?.message || localErr);
+    return await speakGoogleGenAIVoice(clean, 'Charon');
+  } catch (genaiErr: any) {
+    console.warn('[KAZE Voice] Google GenAI TTS falhou, tentando fallback:', genaiErr?.message || genaiErr);
   }
 
-  // 2. Windows SAPI
-  try {
-    const sapiResult = await speakWindowsFallback(clean);
-    if (sapiResult.source !== 'none') return sapiResult;
-  } catch (sapiErr: any) {
-    console.warn('[KAZE Voice] Windows SAPI falhou:', sapiErr?.message || sapiErr);
-  }
-
-  // 3. ElevenLabs
+  // 2. ElevenLabs se chave presente
   const elevenLabsKey = elevenLabsApiKey || getElevenLabsConfig().apiKey;
   if (elevenLabsKey) {
     try {
@@ -394,11 +474,19 @@ export async function kazeSpeakOnline(text: string, elevenLabsApiKey: string | n
     }
   }
 
-  // 4. Edge TTS via Supabase (Último recurso)
+  // 3. Local TTS
   try {
-    return await speakAdminEdgeTTS(clean);
-  } catch (edgeErr: any) {
-    console.warn('[KAZE Voice] TTS online admin falhou:', edgeErr?.message || edgeErr);
+    return await speakLocalTTS(clean, resolveStoredVoicePreference());
+  } catch (localErr: any) {
+    // Silencioso
+  }
+
+  // 4. Fallback browser SAPI se offline
+  try {
+    const sapiResult = await speakWindowsFallback(clean);
+    if (sapiResult.source !== 'none') return sapiResult;
+  } catch (sapiErr: any) {
+    console.warn('[KAZE Voice] Windows SAPI falhou:', sapiErr?.message || sapiErr);
   }
 
   return { source: 'none' as const };

@@ -12,21 +12,6 @@ const hermesService = {
   execute: async () => ({ success: false, error: 'Hermes moved to gemini-proxy' })
 };
 
-const envFiles = ['../.env', '../.env.local'];
-for (const relativeFile of envFiles) {
-  const envPath = path.join(__dirname, relativeFile);
-  if (!fs.existsSync(envPath)) continue;
-
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  envContent.split(/\r?\n/).forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) return;
-    const [key, ...value] = trimmed.split('=');
-    if (key && value.length > 0 && !process.env[key.trim()]) {
-      process.env[key.trim()] = value.join('=').trim().replace(/^['"]|['"]$/g, '');
-    }
-  });
-}
 
 const PORT = parseInt(process.env.KAZE_PORT || '3847', 10);
 const BIND_ADDRESS = '127.0.0.1';
@@ -119,14 +104,34 @@ async function verifySupabaseToken(token) {
   }
 
   try {
-    const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
       headers: {
         apikey: supabaseAnonKey,
         Authorization: `Bearer ${token}`,
       },
     });
 
-    const valid = response.ok;
+    if (!userRes.ok) {
+      authCache.set(token, { valid: false, expiresAt: Date.now() + 10_000 });
+      return false;
+    }
+
+    const userData = await userRes.json();
+    if (!userData?.id) {
+      authCache.set(token, { valid: false, expiresAt: Date.now() + 10_000 });
+      return false;
+    }
+
+    // Role check: apenas administradores podem controlar o agente local
+    const roleRes = await fetch(`${supabaseUrl}/rest/v1/users?select=role&id=eq.${userData.id}`, {
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const rows = await roleRes.json();
+    const valid = roleRes.ok && Array.isArray(rows) && rows[0]?.role === 'admin';
+
     authCache.set(token, {
       valid,
       expiresAt: Date.now() + (valid ? 60_000 : 10_000),
@@ -307,6 +312,12 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  const authenticated = await authenticate(req);
+  if (!authenticated) {
+    sendJson(res, 401, { error: 'Token inválido' });
+    return;
+  }
+
   if (req.method === 'POST' && req.url === '/transcribe-audio') {
     const ip = normalizeIp(req);
     if (isRateLimited(ip)) {
@@ -321,12 +332,6 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       sendJson(res, 500, { ok: false, error: error.message });
     }
-    return;
-  }
-
-  const authenticated = await authenticate(req);
-  if (!authenticated) {
-    sendJson(res, 401, { error: 'Token inválido' });
     return;
   }
 

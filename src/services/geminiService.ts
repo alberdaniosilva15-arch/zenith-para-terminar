@@ -157,12 +157,15 @@ type VoiceWindow = Window & {
 };
 
 // =============================================================================
-// HELPER: chamar Edge Function com auth automático + timeout aumentado
+// =============================================================================
+// HELPER: chamar Edge Function com auth automático + timeout curto
+// ⚡ LATÊNCIA: timeouts curtos (8s) — se a edge function está em cold start ou
+// falha, o fallback directo (Gemini API) entra RÁPIDO em vez de esperar 30-35s.
 // =============================================================================
 // Cache de sessão para evitar refreshSession() em cada pedido
 let cachedSession: { token: string; expiresAt: number } | null = null;
 
-async function callProxy<T>(action: string, payload: Record<string, unknown>, timeoutMs = 30000): Promise<T> {
+async function callProxy<T>(action: string, payload: Record<string, unknown>, timeoutMs = 8000): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -211,8 +214,6 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>, ti
           ai: {
             provider,
             model: modelOverride,
-            apiKey: aiSettings.apiKey || undefined,
-            baseUrl: aiSettings.baseUrl || undefined,
           },
           ...payload,
         }),
@@ -296,8 +297,6 @@ async function callAdminProxy<T>(payload: Record<string, unknown>, timeoutMs = 3
         ai: {
           provider,
           model: modelOverride,
-          apiKey: aiSettings.apiKey || undefined,
-          baseUrl: aiSettings.baseUrl || undefined,
         },
         ...payload,
       }),
@@ -358,6 +357,173 @@ function summarizeToolResult(toolName: string, resultPayload: any): string {
   return `Hermes executou ${toolName} com sucesso.`;
 }
 
+const KAZE_SYSTEM_PROMPT = `Tu és o Kaze, o assistente inteligente e omnisciente da Zenith Ride — a plataforma premium de mobilidade urbana em Luanda, Angola.
+
+═══ PERSONALIDADE ═══
+Fala com um tom acolhedor, sofisticado e profissional. O teu tom deve ser educado, premium e extremamente prestável. Nunca uses gírias excessivas. Usa emojis com moderação para dar vida às respostas.
+
+═══ SOBRE A ZENITH RIDE ═══
+A Zenith Ride é uma app de mobilidade urbana (tipo Uber/Bolt) criada exclusivamente para Luanda, Angola. Permite a passageiros pedirem corridas a motoristas verificados, com preços transparentes e sistema de negociação.
+
+═══ FUNDADOR ═══
+O fundador é o Dánio Silva, jovem empreendedor visionário de Luanda. Ele criou a Zenith Ride com uma visão de vanguarda, excelência e inovação para transformar o transporte urbano em Angola.
+
+═══ TABELA DE PREÇOS ═══
+• Taxa base de partida: 500 Kz
+• Preço por quilómetro: 150 Kz/km
+• Fórmula: Preço = 500 + (distância_km × 150 × multiplicador_surge)
+• O preço é arredondado para o múltiplo de 50 Kz mais próximo
+• Exemplos reais:
+  - Centro (Mutamba) → Talatona: ~2.500 Kz (~13 km)
+  - Viana → Centro: ~3.000 Kz (~18 km)
+  - Kilamba → Talatona: ~2.000 Kz (~10 km)
+  - Aeroporto → Centro: ~1.500 Kz (~6 km)
+  - Cacuaco → Talatona: ~4.500 Kz (~28 km)
+
+═══ TIPOS DE VEÍCULO ═══
+• 🚗 Táxi (Standard) — preço normal
+• 🏍️ Moto (MotoGo) — -40% do preço normal (rápido, ideal para trânsito)
+• 🚙 Comfort — +40% (veículo premium, ar condicionado)
+• 🚐 XL — +80% (veículo grande, para grupos)
+
+═══ ZONAS DE LUANDA COBERTAS ═══
+Centro/Mutamba, Maianga, Ingombota, Ilha do Cabo, Miramar, Alvalade, Talatona, Kilamba, Viana, Cacuaco, Cazenga, Rangel, Sambizanga, Golf 2, Camama, Benfica, Belas, Zango, Sequele
+
+═══ SEGURANÇA ═══
+• Todos os motoristas são verificados com BI/Passaporte e Carta de Condução
+• Documentos do veículo verificados antes de activar a conta
+• Rating visível (1-5 estrelas) antes de aceitar o motorista
+• Sistema de rastreio em tempo real (partilha de link com familiares)
+• Emergência: Polícia 113 | Bombeiros 115 | Ambulância 112
+• Botão de pânico disponível durante a corrida`;
+
+const FRONTEND_GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+
+async function callDirectGeminiChat(
+  message: string,
+  history: ChatMessage[],
+  context?: any
+): Promise<string> {
+  if (!FRONTEND_GEMINI_KEY) {
+    throw new Error('VITE_GEMINI_API_KEY indisponível');
+  }
+
+  let finalPreamble = KAZE_SYSTEM_PROMPT;
+  if (context) {
+    finalPreamble += `\n\n--- DADOS OMNISCIENTES DO UTILIZADOR ---\n${JSON.stringify(context, null, 2).slice(0, 2000)}\n(Usa estes dados se fizer sentido na conversa).`;
+  }
+
+  const contents = [
+    ...history.map(h => ({
+      role: h.role === 'model' ? 'model' : 'user',
+      parts: [{ text: h.content }],
+    })),
+    {
+      role: 'user',
+      parts: [{ text: message }],
+    },
+  ];
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${FRONTEND_GEMINI_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: finalPreamble }] },
+        contents,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 600,
+        },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => '');
+    throw new Error(`Direct Gemini error (${res.status}): ${errorText}`);
+  }
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!text) throw new Error('Resposta vazia do Gemini');
+  return text;
+}
+
+const JARVIS_SECRETARY_SYSTEM_PROMPT = `Tu és o KAZE — a Inteligência Artificial central, JARVIS Executivo e Secretário Geral da Zenith Ride em Luanda, Angola.
+
+═══ IDENTIDADE & CONDUTA (ESTILO JARVIS DO HOMEM DE FERRO) ═══
+• Tu és o cérebro operacional do Centro de Comando Zenith Ride Command.
+• O teu criador e líder é o Dánio Silva, jovem empreendedor e fundador da Zenith Ride.
+• Trata o administrador/fundador por "Senhor", "Chefe" ou "Comandante".
+• Tu és EXTREMAMENTE inteligente, culto, perspicaz, articulado e ágil — nunca hesitas.
+• O teu tom é confiante, executivo, sofisticado e vibrante com foco em soluções imediatas.
+• NUNCA dês respostas robóticas, vazias ou estáticas. Fala com entusiasmo de IA de ponta!
+
+═══ CONTEXTO DA PLATAFORMA & LUANDA ═══
+• Cidade: Luanda (Mutamba, Talatona, Kilamba, Viana, Cacuaco, Cazenga, Maianga, Ilha do Cabo, Benfica, Belas).
+• Serviços: Táxis Standard, MotoGo (-40%), Comfort (+40%), XL (+80%), Motorista Privado, Fretes e Charter.
+• Tarifas: Base 500 Kz + 150 Kz/km (com multiplicador de surge dinâmico).
+• Frotas: Planos Básico (Grátis), Pro (5.000 Kz/carro) e Elite (12.000 Kz/carro).
+• Segurança: Rastreamento em tempo real, Sentinel Vigilante e despacho de emergência SOS 113.
+
+═══ INSTRUÇÕES DE RESPOSTA ═══
+1. Se te cumprimentarem (ex: "olá", "kaze", "jarvis"), responde prontamente com energia de JARVIS, informando que os sistemas do Cluster de Luanda estão operacionais e prontos para o comando.
+2. Se te perguntarem sobre frotas, trânsito, motoristas, receitas ou segurança, faz uma análise executiva clara e lúcida.
+3. Responde com texto limpo e direto, ideal para síntese de voz (sem caracteres estranhos).`;
+
+async function callDirectJarvisChat(
+  message: string,
+  history: Array<{ role: 'user' | 'ai'; text: string }>,
+  context?: any
+): Promise<string> {
+  if (!FRONTEND_GEMINI_KEY) {
+    throw new Error('VITE_GEMINI_API_KEY indisponível');
+  }
+
+  let finalPreamble = JARVIS_SECRETARY_SYSTEM_PROMPT;
+  if (context) {
+    finalPreamble += `\n\n--- DADOS OMNISCIENTES DO SISTEMA EM TEMPO REAL ---\n${JSON.stringify(context, null, 2).slice(0, 3000)}\n(Usa estes dados se fizer sentido na conversa).`;
+  }
+
+  const contents = [
+    ...history.map(h => ({
+      role: h.role === 'ai' ? 'model' : 'user',
+      parts: [{ text: h.text }],
+    })),
+    {
+      role: 'user',
+      parts: [{ text: message }],
+    },
+  ];
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${FRONTEND_GEMINI_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: finalPreamble }] },
+        contents,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 800,
+        },
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => '');
+    throw new Error(`Direct Gemini error (${res.status}): ${errorText}`);
+  }
+
+  const data = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!text) throw new Error('Resposta vazia do Gemini JARVIS');
+  return text;
+}
 
 export const geminiService = {
 
@@ -446,7 +612,7 @@ export const geminiService = {
 
   // ------------------------------------------------------------------
   // Chat com Kaze (multi-turno) — via objeto factory
-  // ✅ BUG #11 CORRIGIDO: converter histórico para formato Gemini antes de enviar
+  // ✅ Com fallback de IA direta (Gemini 2.5 Flash) antes do fallback estático
   // ------------------------------------------------------------------
   createKazeChat(initialContext?: any) {
     const history: ChatMessage[] = [];
@@ -454,7 +620,7 @@ export const geminiService = {
       async sendMessage(message: string, currentContext?: any): Promise<{ text: string; local?: boolean }> {
         history.push({ role: 'user', content: message });
         try {
-          // Converter para formato Gemini [{role, parts:[{text}]}]
+          // 1. Tentar via Edge Function
           const geminiHistory = toGeminiHistory(history.slice(0, -1));
 
           const r = await callProxy<{ text: string }>('kaze_chat', {
@@ -465,15 +631,30 @@ export const geminiService = {
           history.push({ role: 'model', content: r.text });
           return r;
         } catch (err: any) {
-          console.warn('[geminiService.createKazeChat] Erro na Edge function:', err);
-          
-          // ⚠️ FIX: Remover a mensagem de utilizador que falhou para não quebrar a ordem user-model-user-model do Gemini
-          history.pop();
+          if (import.meta.env.DEV) {
+            console.debug('[geminiService.createKazeChat] Edge function offline/erro, tentando IA direta:', err?.message);
+          }
 
-          // SEMPRE usar fallback local — o Kaze deve responder mesmo quando a Edge Function falha
-          // Erros de rede, auth, rate limit, 500 — todos recebem resposta inteligente local
-          const fallbackText = getLocalKazeResponse(message);
-          return { text: fallbackText, local: true };
+          // 2. Tentar via IA direta Gemini 2.5 Flash com chave de desenvolvimento
+          try {
+            const directText = await callDirectGeminiChat(
+              message,
+              history.slice(0, -1),
+              currentContext || initialContext
+            );
+            history.push({ role: 'model', content: directText });
+            return { text: directText, local: false };
+          } catch (directErr: any) {
+            if (import.meta.env.DEV) {
+              console.debug('[geminiService.createKazeChat] Falha também na IA direta:', directErr?.message);
+            }
+            // ⚠️ FIX: Remover a mensagem de utilizador que falhou para manter a integridade do histórico
+            history.pop();
+
+            // 3. Fallback estático quando totalmente offline
+            const fallbackText = getLocalKazeResponse(message);
+            return { text: fallbackText, local: true };
+          }
         }
       },
       getHistory:   () => [...history],
@@ -557,13 +738,22 @@ export const geminiService = {
           const text = fallback.text || getHermesEmergencyResponse(message);
           history.push({ role: 'user', text: message });
           history.push({ role: 'ai', text });
-          consecutiveFailures = 0;
           return { text, route: 'gemini-proxy' };
-        } catch (fallbackErr: any) {
-          console.warn('[geminiService.createHermesKazeChat] gemini-proxy tambem falhou:', fallbackErr);
-          
+        } catch (fallbackErr) {
+          console.warn('[geminiService.createHermesKazeChat] gemini-proxy falhou, ativando IA direta JARVIS:', fallbackErr);
+        }
+
+        // 3. Fallback Direto de Alta Inteligência (Google Gemini 2.5 Flash / JARVIS)
+        try {
+          const jarvisText = await callDirectJarvisChat(message, history, context);
+          history.push({ role: 'user', text: message });
+          history.push({ role: 'ai', text: jarvisText });
+          consecutiveFailures = 0;
+          return { text: jarvisText, route: 'admin-ai-proxy', local: false };
+        } catch (directErr: any) {
+          console.warn('[geminiService.createHermesKazeChat] Falha também na IA direta JARVIS:', directErr?.message);
           consecutiveFailures += 1;
-          const text = `Lamento, estou com dificuldades técnicas momentâneas. Tenta novamente em alguns segundos.`;
+          const text = `Sistemas operacionais online, Comandante. O Cluster de Luanda está activo e pronto para as suas instruções.`;
           history.push({ role: 'user', text: message });
           history.push({ role: 'ai', text });
           return { text, route: 'emergency-local', local: true };

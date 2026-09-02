@@ -14,6 +14,7 @@ import KazePanel from './KazePanel';
 
 import AdminSOSPanel from './admin/AdminSOSPanel';
 import { AdminDriverDocs } from './AdminDriverDocs';
+import AdminServicesPanel from './admin/AdminServicesPanel';
 
 interface AdminDashboardProps {
   lastCommand?: AutonomousCommand | null;
@@ -28,6 +29,7 @@ const AdminDashboardInner: React.FC<AdminDashboardProps> = () => {
       case 'map': return <LiveMapTab />;
       case 'market': return <MarketFinanceTab />;
       case 'pricing': return <ZonePricingTab />;
+      case 'services': return <AdminServicesPanel />;
       case 'security': return <AdminSOSPanel />;
       case 'users': return <UsersTab />;
       case 'drivers': return <AdminDriverDocs />;

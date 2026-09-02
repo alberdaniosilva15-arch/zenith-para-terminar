@@ -33,10 +33,15 @@ const PLANS: Record<Plan, { title: string; price: string; maxCars: string; descr
 const FleetUpgradeModal: React.FC<FleetUpgradeModalProps> = ({ fleetId, onClose, onSaved }) => {
   const [plan, setPlan] = useState<Plan>('pro');
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleSave = async () => {
     setLoading(true);
+    setErrorMsg(null);
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Sessão expirada. Faz login novamente.');
+
       const { count: activeCars } = await supabase
         .from('fleet_cars')
         .select('id', { count: 'exact', head: true })
@@ -45,6 +50,38 @@ const FleetUpgradeModal: React.FC<FleetUpgradeModalProps> = ({ fleetId, onClose,
 
       const carsCount = activeCars ?? 0;
       const pricePerCar = plan === 'elite' ? 12000 : plan === 'pro' ? 5000 : 0;
+      const totalAmount = pricePerCar * Math.max(carsCount, 1);
+
+      if (totalAmount > 0) {
+        // 1. Validar saldo na carteira
+        const { data: wallet } = await supabase
+          .from('wallets')
+          .select('balance')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        const currentBalance = Number(wallet?.balance ?? 0);
+        if (currentBalance < totalAmount) {
+          throw new Error(
+            `Saldo insuficiente. Necessitas de ${totalAmount.toLocaleString('pt-AO')} Kz (Saldo actual: ${currentBalance.toLocaleString('pt-AO')} Kz). Recarrega a tua carteira.`
+          );
+        }
+
+        // 2. Deduzir saldo da carteira
+        await supabase
+          .from('wallets')
+          .update({ balance: currentBalance - totalAmount })
+          .eq('user_id', user.id);
+
+        // 3. Registar transação financeira
+        await supabase.from('transactions').insert({
+          user_id: user.id,
+          type: 'fleet_subscription',
+          amount: -totalAmount,
+          description: `Assinatura Plano ${plan.toUpperCase()} para Frota (${carsCount} viaturas)`,
+          status: 'completed',
+        });
+      }
 
       await supabase.from('fleet_subscriptions').upsert({
         fleet_id: fleetId,
@@ -57,13 +94,16 @@ const FleetUpgradeModal: React.FC<FleetUpgradeModalProps> = ({ fleetId, onClose,
       await supabase.from('fleet_billing_events').insert({
         fleet_id: fleetId,
         plan,
-        amount_kz: pricePerCar * Math.max(carsCount, 1),
+        amount_kz: totalAmount,
         cars_count: carsCount,
         billing_month: new Date().toISOString(),
       });
 
       await onSaved();
       onClose();
+    } catch (err: any) {
+      console.error('[FleetUpgradeModal.handleSave]', err);
+      setErrorMsg(err.message || 'Erro ao processar upgrade de plano');
     } finally {
       setLoading(false);
     }
@@ -103,13 +143,19 @@ const FleetUpgradeModal: React.FC<FleetUpgradeModalProps> = ({ fleetId, onClose,
           ))}
         </div>
 
+        {errorMsg && (
+          <div className="mt-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs font-bold">
+            {errorMsg}
+          </div>
+        )}
+
         <div className="mt-5 flex gap-3">
           <button
             onClick={handleSave}
             disabled={loading}
-            className="flex-1 py-3 rounded-2xl bg-primary text-white font-black text-[10px] uppercase tracking-widest"
+            className="flex-1 py-3 rounded-2xl bg-primary text-black font-black text-[10px] uppercase tracking-widest hover:bg-primary/90 disabled:opacity-50"
           >
-            {loading ? 'A guardar...' : 'Activar plano'}
+            {loading ? 'A processar...' : 'Activar plano'}
           </button>
           <button
             onClick={onClose}

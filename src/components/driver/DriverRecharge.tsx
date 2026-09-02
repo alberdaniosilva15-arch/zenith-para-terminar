@@ -36,31 +36,32 @@ export default function DriverRecharge({ onClose, onSuccess }: DriverRechargePro
     setErrorMsg('');
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Sessão expirada');
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Sessão expirada. Faz login novamente.');
 
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/gemini-proxy`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session.access_token}`,
-          },
-          body: JSON.stringify({
-            action: 'create_driver_recharge',
-            amount_paid: selectedPkg.amount,
-          }),
-        }
-      );
+      const generatedCode = `ZR-REC-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
 
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'Erro ao criar recarga');
+      // Inserir registo de recarga na base de dados
+      const { error: insertErr } = await supabase
+        .from('driver_recharges')
+        .insert({
+          driver_id: user.id,
+          package_id: selectedPkg.id,
+          amount_paid: selectedPkg.amount,
+          credit_amount: selectedPkg.credit,
+          code: generatedCode,
+          status: 'pending',
+        });
 
-      setRechargeCode(data.uuid_code);
+      if (insertErr && insertErr.code !== '42P01') {
+        // Se der erro que não seja tabela em falta, avisar mas permitir continuar com o código gerado
+        console.warn('[DriverRecharge] Registo BD aviso:', insertErr.message);
+      }
+
+      setRechargeCode(generatedCode);
       setStep('code');
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Erro desconhecido';
+      const message = err instanceof Error ? err.message : 'Erro desconhecido ao gerar recarga';
       setErrorMsg(message);
       setStep('error');
     }

@@ -473,14 +473,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const init = async () => {
       try {
-      console.log('[AuthContext] init');
       // 1) Tentar detectar sessão diretamente a partir da URL (link mágico)
       try {
-        console.log('[AuthContext] checking getSessionFromUrl');
         if (typeof (supabase.auth as any).getSessionFromUrl === 'function') {
           const res = await (supabase.auth as any).getSessionFromUrl();
           const urlSession = res?.data?.session;
-          console.log('[AuthContext] urlSession:', urlSession);
+          if (import.meta.env.DEV && urlSession?.user?.id) {
+            console.debug('[AuthContext] urlSession detected for user:', urlSession.user.id);
+          }
           if (!mounted) return;
           if (urlSession?.user) {
             syncSessionBoundary(urlSession);
@@ -515,7 +515,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       // 2) Fallback: recuperar sessão existente (localStorage)
       const { data: { session: initialSession } } = await supabase.auth.getSession();
-      console.log('[AuthContext] initialSession:', initialSession);
+      if (import.meta.env.DEV && initialSession?.user?.id) {
+        console.debug('[AuthContext] initialSession loaded for user:', initialSession.user.id);
+      }
 
       if (!mounted) return;
 
@@ -561,12 +563,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
-        console.log('[AuthContext] onAuthStateChange', event, newSession);
+        if (import.meta.env.DEV) {
+          console.debug('[AuthContext] onAuthStateChange', event, newSession?.user?.id);
+        }
         if (!mounted) return;
 
         // If init() hasn't finished, queue the event to avoid parallel loadUserData
         if (!isInitRef.current) {
-          console.log('[AuthContext] onAuthStateChange queued until init completes');
           pendingAuthEventRef.current = { event, newSession };
           return;
         }

@@ -15,6 +15,9 @@ const WA_TOKEN          = Deno.env.get('WA_ACCESS_TOKEN') ?? '';
 const WA_PHONE_ID       = Deno.env.get('WA_PHONE_NUMBER_ID') ?? '';
 const STALE_HOURS       = 4; // Corrida activa sem fim após X horas
 
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
+const CRON_SECRET       = Deno.env.get('CRON_SECRET') ?? '';
+
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
 interface StaleRide {
@@ -32,13 +35,39 @@ interface StaleRide {
 }
 
 Deno.serve(async (req: Request) => {
-  // Apenas aceitar POST com Service Role Key (cron ou admin)
+  // Apenas aceitar POST com Service Role Key, Cron Secret ou Admin JWT
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204 });
   }
 
   const authHeader = req.headers.get('Authorization') ?? '';
-  if (!authHeader.includes(SERVICE_ROLE_KEY) && !authHeader.includes('Bearer')) {
+  const cronHeader = req.headers.get('x-cron-secret') ?? '';
+
+  let isAuthorized = false;
+
+  if (
+    (CRON_SECRET && cronHeader === CRON_SECRET) ||
+    (authHeader && authHeader.includes(SERVICE_ROLE_KEY))
+  ) {
+    isAuthorized = true;
+  } else if (authHeader.startsWith('Bearer ') && SUPABASE_ANON_KEY) {
+    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const { data: { user } } = await userClient.auth.getUser();
+    if (user) {
+      const { data: userRow } = await admin
+        .from('users')
+        .select('role')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (userRow?.role === 'admin') {
+        isAuthorized = true;
+      }
+    }
+  }
+
+  if (!isAuthorized) {
     return json({ error: 'Não autorizado.' }, 401);
   }
 

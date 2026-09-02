@@ -55,9 +55,7 @@ function normalizeProvider(provider: unknown) {
   return 'google';
 }
 
-function openAiBaseUrl(provider: string, baseUrl?: string) {
-  const explicit = String(baseUrl || '').trim().replace(/\/+$/, '');
-  if (explicit) return explicit;
+function openAiBaseUrl(provider: string) {
   if (provider === 'openrouter') return 'https://openrouter.ai/api/v1';
   if (provider === 'groq') return 'https://api.groq.com/openai/v1';
   if (provider === 'openai') return 'https://api.openai.com/v1';
@@ -253,8 +251,7 @@ Deno.serve(async (req: Request) => {
     req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
     'unknown'
   );
-
-  if (!(await checkIpRateLimit(clientIp))) {
+  if (!(await checkIpRateLimit(clientIp))) {
     return err('Demasiados pedidos. Aguarda um minuto.', 429);
   }
 
@@ -265,19 +262,13 @@ Deno.serve(async (req: Request) => {
     // ----------------------------------------------------------------
     const authHeader = req.headers.get('Authorization');
     if (!authHeader?.startsWith('Bearer ')) return err('Token em falta.', 401);
-    const token = authHeader.split(' ')[1];
 
     const supabaseUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    // Note: the SDK reads the token from the Authorization header passed
-    // in the client; passing the token as an argument to getUser() is
-    // ignored by @supabase/supabase-js v2. Call without the token arg.
     const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
     if (authErr || !user) {
-      // AUDIT LOG: registar tentativa de acesso com token inválido
-      const clientIp = req.headers.get('cf-connecting-ip') ?? req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
       supabaseAdmin.from('ai_usage_logs').insert({
         user_id: 'anonymous',
         action: 'auth_failure',
@@ -286,17 +277,16 @@ Deno.serve(async (req: Request) => {
     }
 
     // ----------------------------------------------------------------
-    // 2. RATE LIMITING — in-memory (rápido) + log async para DB
+    // 2. RATE LIMITING — in-memory (rápido) + autoritativo via DB (ai_usage_logs)
     // ----------------------------------------------------------------
     const body   = await req.json();
     const action = body.action as string;
 
     if (!action) return err('Campo "action" em falta.', 400);
 
-    // Rate limit in-memory por user+action (rápido, sem DB query)
+    const userLimit = RATE_LIMITS[action] ?? RATE_LIMITS['_default'];
     const userLimitKey = `${user.id}:${action}`;
     const userLimitEntry = userCounters.get(userLimitKey);
-    const userLimit = RATE_LIMITS[action] ?? RATE_LIMITS['_default'];
 
     if (userLimitEntry && (Date.now() - userLimitEntry.windowStart) < USER_WINDOW_MS) {
       if (userLimitEntry.count >= userLimit) {
@@ -307,10 +297,21 @@ Deno.serve(async (req: Request) => {
       userCounters.set(userLimitKey, { count: 1, windowStart: Date.now() });
     }
 
-    // Log do request (não bloqueia — fire and forget)
+    const oneHourAgo = new Date(Date.now() - USER_WINDOW_MS).toISOString();
+    const { count: dbCount } = await supabaseAdmin
+      .from('ai_usage_logs')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('action', action)
+      .gte('created_at', oneHourAgo);
+
+    if (typeof dbCount === 'number' && dbCount >= userLimit) {
+      return err(`Limite de ${userLimit} pedidos/hora para "${action}" atingido. Aguarda um momento.`, 429);
+    }
+
     supabaseAdmin.from('ai_usage_logs').insert({
       user_id: user.id, action, created_at: new Date().toISOString()
-    }).then(() => {});
+    }).catch(() => {});
 
     // ----------------------------------------------------------------
     // 3. ROTEAMENTO
@@ -324,7 +325,7 @@ Deno.serve(async (req: Request) => {
       case 'search_locations': {
         const { query } = payload as { query: string };
         const res = await ai.models.generateContent({
-          model: 'gemini-flash-latest',
+          model: 'gemini-2.5-flash',
           contents: `Localize pontos de interesse em Luanda, Angola: "${query}".
 Retorna APENAS JSON (sem markdown), com campo "locations": array de objectos com:
 name (string), type (bairro|restaurante|rua|monumento|servico|hospital|escola),
@@ -362,7 +363,7 @@ Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
       case 'explore_luanda': {
         const { query } = payload as { query: string };
         const res = await ai.models.generateContent({
-          model: 'gemini-flash-latest',
+          model: 'gemini-2.5-flash',
           contents: `Informações actualizadas sobre: "${query}" em Luanda, Angola.`,
           config: { tools: [{ googleSearch: {} }], systemInstruction: KAZE_SYSTEM_PROMPT },
         });
@@ -378,7 +379,7 @@ Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
           role: string; status: string; name?: string; extraText?: string;
         }};
         const res = await ai.models.generateContent({
-          model: 'gemini-flash-latest',
+          model: 'gemini-2.5-flash',
           contents: `Insight curto (máx 2 frases) para ${context.name ?? 'utilizador'}
 (role: ${context.role}, status: ${context.status}${context.extraText ? `, contexto: ${context.extraText}` : ''}) da MotoGo Luanda.
 JSON: { text: string, type: "info"|"motivation"|"safety" }`,
@@ -432,22 +433,18 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
               ? 'gpt-4o'
               : activeProvider === 'anthropic'
                 ? 'claude-3-5-sonnet-latest'
-                : 'gemini-flash-latest')
+                : 'gemini-2.5-flash')
         );
-        const requestApiKey = String(aiConfig.apiKey || '').trim();
-        const requestBaseUrl = String(aiConfig.baseUrl || '').trim();
-        
         // 3. Roteamento Universal: APIs OpenAI-compatible
-        if (['groq', 'openai', 'openrouter', 'custom'].includes(activeProvider)) {
-           const baseUrl = openAiBaseUrl(activeProvider, requestBaseUrl);
-           const key = requestApiKey
-             || (activeProvider === 'groq'
-               ? GROQ_API_KEY
-               : activeProvider === 'openrouter'
-                 ? OPENROUTER_API_KEY
-                 : activeProvider === 'openai'
-                   ? OPENAI_API_KEY
-                   : '');
+        if (['groq', 'openai', 'openrouter'].includes(activeProvider)) {
+           const baseUrl = openAiBaseUrl(activeProvider);
+           const key = activeProvider === 'groq'
+             ? GROQ_API_KEY
+             : activeProvider === 'openrouter'
+               ? OPENROUTER_API_KEY
+               : activeProvider === 'openai'
+                 ? OPENAI_API_KEY
+                 : '';
            if (!key) {
              return err(`Provider ${activeProvider} sem API key configurada.`, 403);
            }
@@ -483,7 +480,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
         }
 
         if (activeProvider === 'anthropic') {
-          const key = requestApiKey || ANTHROPIC_API_KEY;
+          const key = ANTHROPIC_API_KEY;
           if (!key) return err('Provider Anthropic sem API key configurada.', 403);
 
           const mappedHistory = (Array.isArray(history) ? history : []).map(entry => {
@@ -531,7 +528,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
               return { role, parts: [{ text }] };
             }).filter(Boolean) as Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>;
 
-          const gKey = requestApiKey || GEMINI_API_KEY?.trim();
+          const gKey = GEMINI_API_KEY?.trim();
           if (!gKey) return err('Gateway sem chave do Gemini. Contacta o suporte.', 500);
 
           const aiClient = new GoogleGenerativeAI(gKey);
@@ -586,7 +583,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           driverProfile: { rating: number; totalRides: number; level: string };
         };
         const res = await ai.models.generateContent({
-          model: 'gemini-flash-latest',
+          model: 'gemini-2.5-flash',
           contents: `Ganhos realistas para mototaxista em Luanda:
 Rating: ${driverProfile.rating}/5 | Corridas: ${driverProfile.totalRides} | Nível: ${driverProfile.level}.
 JSON: { dailyEstimateKz: number, weeklyEstimateKz: number, bestZones: string[], tips: string }`,
@@ -599,7 +596,7 @@ JSON: { dailyEstimateKz: number, weeklyEstimateKz: number, bestZones: string[], 
       case 'autonomous_decisions': {
         const { context } = payload;
         const res = await ai.models.generateContent({
-          model: 'gemini-flash-latest',
+          model: 'gemini-2.5-flash',
           contents: `SISTEMA VIGILANTE MOTOGO LUANDA. Contexto: ${JSON.stringify(context)}.
 JSON: { commands: Array<{ id, type: REALLOCATE|SURGE_PRICE|SECURITY_DISPATCH|ROUTE_OPTIMIZE,
 target, reason, intensity, timestamp, status: EXECUTED|LOGGED }> }`,
@@ -636,7 +633,7 @@ JSON: { text: string }`,
         };
 
         const res = await ai.models.generateContent({
-          model: 'gemini-flash-latest',
+          model: 'gemini-2.5-flash',
           contents: prompts[step] ?? prompts.opening,
           config: { responseMimeType: 'application/json', systemInstruction: KAZE_SYSTEM_PROMPT },
         });

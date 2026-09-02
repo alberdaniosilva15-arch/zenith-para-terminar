@@ -1,19 +1,5 @@
 import os
-import ssl
 import sys
-
-
-def _patch_ssl():
-    original_create_default_context = ssl.create_default_context
-
-    def insecure_default_context(*args, **kwargs):
-        context = original_create_default_context(*args, **kwargs)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        return context
-
-    ssl._create_default_https_context = ssl._create_unverified_context
-    ssl.create_default_context = insecure_default_context
 
 
 def main():
@@ -33,7 +19,6 @@ def main():
 
     sys.path.insert(0, kazeEdge_repo)
     os.chdir(kazeEdge_repo)
-    _patch_ssl()
 
     from kazeEdge_cli.main import main as kazeEdge_main
 

@@ -42,6 +42,14 @@ function isDevOrigin(origin: string): boolean {
     return true;
   }
 
+  const allowDev =
+    Deno.env.get('ALLOW_DEV_ORIGINS') === 'true' ||
+    (Deno.env.get('DENO_ENV') !== 'production' && Deno.env.get('ENVIRONMENT') !== 'production');
+
+  if (!allowDev) {
+    return false;
+  }
+
   try {
     const url = new URL(origin);
     const isLocalHost =

@@ -15,7 +15,7 @@ const RECOVERY_PATH = '/login?type=recovery';
 const ROLE_INTENT_STORAGE_KEY = 'auth_role_intent';
 const LEGACY_ROLE_INTENT_STORAGE_KEY = 'oauth_role_intent';
 const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_target';
-const CRM_ADMIN_ORIGIN = import.meta.env.VITE_CRM_ADMIN_ORIGIN ?? 'http://127.0.0.1:4000';
+const CRM_ADMIN_ORIGIN = import.meta.env.VITE_CRM_ADMIN_ORIGIN ?? (import.meta.env.PROD ? 'https://admin.zenithride.ao' : 'http://127.0.0.1:4000');
 
 function readRedirectTarget(): string | null {
   if (typeof window === 'undefined') return null;
@@ -108,20 +108,9 @@ const Login: React.FC = () => {
     };
   }, []);
 
-  // Rate limit client-side: 5 tentativas falhadas bloqueia por 5 minutos
-  const loginAttempts = useRef<{ count: number; blockedUntil: number }>({ count: 0, blockedUntil: 0 });
-
   const handleSignIn = async () => {
     if (!email || !password) {
       setError('Preenche email e palavra-passe.');
-      return;
-    }
-
-    // Verificar rate limit
-    const now = Date.now();
-    if (now < loginAttempts.current.blockedUntil) {
-      const remaining = Math.ceil((loginAttempts.current.blockedUntil - now) / 1000);
-      setError(`Demasiadas tentativas falhadas. Aguarda ${remaining} segundos.`);
       return;
     }
 
@@ -132,16 +121,7 @@ const Login: React.FC = () => {
     setLoading(false);
 
     if (err) {
-      loginAttempts.current.count += 1;
-      if (loginAttempts.current.count >= 5) {
-        loginAttempts.current.blockedUntil = Date.now() + 5 * 60 * 1000; // 5 minutos
-        loginAttempts.current.count = 0;
-        setError('Demasiadas tentativas falhadas. Conta bloqueada temporariamente (5 minutos).');
-      } else {
-        setError(err.message);
-      }
-    } else {
-      loginAttempts.current.count = 0; // Reset no sucesso
+      setError(err.message);
     }
   };
 
