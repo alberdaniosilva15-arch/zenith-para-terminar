@@ -2,7 +2,7 @@
 // ZENITH RIDE v3.9 — KazeMascot.tsx
 // KAZE OPERACIONAL — AGENTE EXECUTIVO NO APP
 // Capacidades:
-//   1. Microfone com transcrição nativa via Gemini 2.5 Flash (funciona em qualquer navegador)
+//   1. Microfone com reconhecimento de fala em tempo real (Web Speech API com transcrição ao vivo)
 //   2. Pedir / criar corrida por voz e texto com rotas e preços corretos em Luanda
 //   3. Agendar corridas futuras (grava em scheduled_rides)
 //   4. Criar contratos (escolar/familiar/corporativo)
@@ -12,7 +12,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { geminiService, getLocalKazeResponse } from '../services/geminiService';
 import { kazeAppAgent, KazeProposedAction } from '../services/kazeAppAgent';
-import { transcribeAudioWithGemini } from '../lib/kazeAudioTranscribe';
 import { kazeSpeak } from '../lib/kazeVoice';
 import { UserRole, RideStatus, LatLng } from '../types';
 import { supabase } from '../lib/supabase';
@@ -93,28 +92,25 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   const [kazeOnline,      setKazeOnline]      = useState<boolean | null>(true);
   const [voiceEnabled,    setVoiceEnabled]    = useState(true);
   const [isListeningMic,  setIsListeningMic]  = useState(false);
-  const [isTranscribing,  setIsTranscribing]  = useState(false);
   const [actionExecuting, setActionExecuting] = useState(false);
   const [pendingAction,   setPendingAction]   = useState<KazeProposedAction | null>(null);
 
-  const chatRef          = useRef<ReturnType<typeof geminiService.createKazeChat> | null>(null);
   const liveSessionRef   = useRef<{ close: () => void } | null>(null);
   const scrollRef        = useRef<HTMLDivElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef   = useRef<Blob[]>([]);
+  const recognitionRef   = useRef<any>(null);
   const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Auto-scroll ao adicionar mensagens
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, isThinking, pendingAction, isTranscribing]);
+  }, [messages, isThinking, pendingAction, isListeningMic]);
 
   useEffect(() => () => {
     liveSessionRef.current?.close();
     liveSessionRef.current = null;
     if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* ignore */ }
     }
   }, []);
 
@@ -318,7 +314,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
         if (voiceEnabled) await kazeSpeak(result.text);
       } else {
-        // Passar pelo Kaze App Agent operacional com localização atual
+        // Passar pelo Kaze App Agent operacional com localização actual de Luanda
         const agentResult = await kazeAppAgent.processUserMessage(userText, {
           userId,
           userRole: role,
@@ -372,80 +368,107 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     }
   };
 
-  // ── Reconhecimento de Fala pelo Microfone (MediaRecorder + Gemini Transcribe) ─
+  // ── Reconhecimento de Fala pelo Microfone com Feedback em Tempo Real ─────────
   const toggleMicListening = async () => {
-    // 1. Se já está a gravar, parar e transcrever
-    if (isListeningMic && mediaRecorderRef.current) {
+    // 1. Se já está a ouvir, parar
+    if (isListeningMic) {
       if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
-      if (mediaRecorderRef.current.state !== 'inactive') {
-        try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
+      if (recognitionRef.current) {
+        try { recognitionRef.current.stop(); } catch { /* ignore */ }
       }
       setIsListeningMic(false);
       return;
     }
 
-    // 2. Verificar suporte do navegador
-    if (!navigator.mediaDevices?.getUserMedia) {
-      showToast('O teu navegador não suporta acesso ao microfone.', 'info');
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      showToast('O teu navegador não suporta reconhecimento de voz. Usa o Chrome ou digita no teclado!', 'info');
       return;
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
-
-      audioChunksRef.current = [];
-      let recorder: MediaRecorder;
-      try {
-        recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      } catch {
-        recorder = new MediaRecorder(stream);
+      // Pedir permissão de microfone se necessário (mostra o popup do browser)
+      if (navigator.mediaDevices?.getUserMedia) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          stream.getTracks().forEach(t => t.stop());
+        } catch (permErr: any) {
+          if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
+            showToast('Permissão de microfone negada. Permite o microfone no navegador.', 'error');
+            return;
+          }
+        }
       }
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      const recognition = new SpeechRecognition();
+      // Usar idioma do sistema ou português
+      const sysLang = navigator.language || 'pt-PT';
+      recognition.lang = sysLang.startsWith('pt') ? sysLang : 'pt-PT';
+      recognition.continuous = false;
+      recognition.interimResults = true; // Transcrição ao vivo na tela!
+      recognition.maxAlternatives = 1;
+
+      let capturedText = '';
+
+      recognition.onstart = () => {
+        setIsListeningMic(true);
+        setInputValue('');
       };
 
-      recorder.onstop = async () => {
-        stream.getTracks().forEach((track) => track.stop());
+      recognition.onresult = (event: any) => {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const trans = event.results[i][0]?.transcript || '';
+          if (event.results[i].isFinal) {
+            capturedText += trans;
+          } else {
+            interim += trans;
+          }
+        }
+
+        const liveText = (capturedText || interim).trim();
+        if (liveText) {
+          setInputValue(liveText);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.warn('[KazeMascot] Speech recognition error:', event.error);
         setIsListeningMic(false);
 
-        if (audioChunksRef.current.length === 0) return;
-
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        audioChunksRef.current = [];
-
-        setIsTranscribing(true);
-        try {
-          const spokenText = await transcribeAudioWithGemini(audioBlob);
-          if (spokenText && spokenText.trim().length > 1) {
-            void handleSendText(undefined, spokenText.trim());
-          } else {
-            showToast('Não consegui ouvir nada. Tenta falar mais perto do microfone.', 'info');
+        if (event.error === 'not-allowed') {
+          showToast('Permissão de microfone negada.', 'error');
+        } else if (event.error === 'no-speech') {
+          if (capturedText.trim().length > 1) {
+            void handleSendText(undefined, capturedText.trim());
+            return;
           }
-        } catch (err: any) {
-          console.warn('[KazeMascot] Erro ao transcrever áudio:', err);
-          showToast('Erro ao transcrever áudio. Podes usar o teclado!', 'info');
-        } finally {
-          setIsTranscribing(false);
+          showToast('Não ouvi nenhuma voz. Toca no microfone e fala mais alto.', 'info');
         }
       };
 
-      mediaRecorderRef.current = recorder;
-      recorder.start();
-      setIsListeningMic(true);
-
-      // Auto-parar após 7 segundos de fala se o utilizador não tocar em parar
-      autoStopTimerRef.current = setTimeout(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-          try { mediaRecorderRef.current.stop(); } catch { /* ignore */ }
+      recognition.onend = () => {
+        setIsListeningMic(false);
+        const textToSend = (capturedText || inputValue).trim();
+        if (textToSend.length > 1) {
+          void handleSendText(undefined, textToSend);
         }
-      }, 7000);
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+
+      // Parar automaticamente após 10 segundos
+      autoStopTimerRef.current = setTimeout(() => {
+        if (recognitionRef.current) {
+          try { recognitionRef.current.stop(); } catch { /* ignore */ }
+        }
+      }, 10000);
     } catch (err: any) {
-      console.warn('[KazeMascot] getUserMedia error:', err);
-      showToast('Permissão de microfone negada. Permite o microfone no navegador.', 'info');
+      console.warn('[KazeMascot] Erro ao iniciar voz:', err);
       setIsListeningMic(false);
+      showToast('Erro ao activar o microfone. Podes escrever no teclado!', 'info');
     }
   };
 
@@ -645,17 +668,19 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                   </div>
                 ))}
 
-                {isThinking && (
-                  <div className="zr-bubble zr-bubble--other" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <div className="zr-loading-dots"><span></span><span></span><span></span></div>
-                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>Kaze a calcular...</span>
+                {isListeningMic && (
+                  <div className="zr-bubble zr-bubble--other" style={{ display: 'flex', alignItems: 'center', gap: '8px', border: '1px solid #ef4444' }}>
+                    <span className="w-2.5 h-2.5 rounded-full animate-ping" style={{ backgroundColor: '#ef4444' }} />
+                    <span className="zr-meta" style={{ margin: 0, color: '#ef4444', fontWeight: 'bold' }}>
+                      A ouvir... Fala o teu pedido!
+                    </span>
                   </div>
                 )}
 
-                {isTranscribing && (
+                {isThinking && (
                   <div className="zr-bubble zr-bubble--other" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span className="w-2 h-2 rounded-full animate-ping" style={{ backgroundColor: 'var(--gold)' }} />
-                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>A transcrever a tua fala com IA...</span>
+                    <div className="zr-loading-dots"><span></span><span></span><span></span></div>
+                    <span className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>Kaze a calcular rota e valores...</span>
                   </div>
                 )}
               </>
@@ -691,17 +716,16 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                   className="zr-input"
                   style={{ flex: 1, fontSize: '13px', padding: '10px 14px' }}
                   placeholder={
-                    isListeningMic ? '🎙️ A ouvir... Toca no mic para enviar!' :
-                    isTranscribing ? 'A processar a tua voz...' :
+                    isListeningMic ? '🎙️ A ouvir... Fala agora!' :
                     mode === 'explore' ? 'Onde há trânsito agora?' :
                     'Ex: "Pede um táxi para o Belas Shopping"...'
                   }
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
-                  disabled={isThinking || isListeningMic || isTranscribing}
+                  disabled={isThinking}
                 />
 
-                {/* Botão de Microfone de Alta Precisão (MediaRecorder + Gemini Transcribe) */}
+                {/* Botão de Microfone em Tempo Real */}
                 <button
                   type="button"
                   onClick={toggleMicListening}
@@ -717,7 +741,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                     transition: 'all 0.2s ease',
                     position: 'relative',
                   }}
-                  title={isListeningMic ? 'Toca para parar e enviar' : 'Falar com o Kaze'}
+                  title={isListeningMic ? 'Toca para parar' : 'Falar com o Kaze'}
                 >
                   <span className={`material-symbols-outlined ${isListeningMic ? 'animate-pulse' : ''}`} style={{ fontSize: '20px' }}>
                     {isListeningMic ? 'mic' : 'mic_none'}
@@ -742,7 +766,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                 {/* Botão de Enviar */}
                 <button
                   type="submit"
-                  disabled={!inputValue.trim() || isThinking || isListeningMic || isTranscribing}
+                  disabled={!inputValue.trim() || isThinking}
                   className="zr-icon-button"
                   style={{
                     background: 'var(--gold)',
@@ -750,7 +774,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                     width: '42px',
                     height: '42px',
                     borderRadius: '12px',
-                    opacity: (!inputValue.trim() || isThinking || isListeningMic || isTranscribing) ? 0.4 : 1,
+                    opacity: (!inputValue.trim() || isThinking) ? 0.4 : 1,
                   }}
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>send</span>
