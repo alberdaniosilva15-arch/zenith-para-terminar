@@ -138,44 +138,6 @@ export default function AuthenticatedApp() {
       userName={profile?.name}
       userRating={profile?.rating}
     >
-      {typeof window !== 'undefined' && window.location.hostname === 'zenith-ride-build.vercel.app' && (
-        <aside
-          aria-label="Aviso de ambiente de desenvolvimento"
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            background: 'linear-gradient(90deg, #d97706, #b45309)',
-            color: '#fff',
-            padding: '6px 12px',
-            fontSize: '11px',
-            fontWeight: 'bold',
-            zIndex: 9999,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
-          }}
-        >
-          <span>Estás na versão Vercel.</span>
-          <a
-            href="http://localhost:5174/"
-            style={{
-              background: '#000',
-              color: '#e6c364',
-              padding: '3px 8px',
-              borderRadius: '6px',
-              textDecoration: 'none',
-              fontWeight: 800,
-            }}
-          >
-            Abrir Localhost (5174) 🚀
-          </a>
-        </aside>
-      )}
-
       {hasVisitedHome && (
         <TabAwarePanel activeTab={activeTab} thisTab="home">
           <Suspense
