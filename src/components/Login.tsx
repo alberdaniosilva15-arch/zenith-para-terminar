@@ -365,21 +365,17 @@ const Login: React.FC = () => {
                       <label className="zr-label">Email</label>
                       <input className="zr-input" placeholder="exemplo@zenithride.ao" value={email} onChange={e => setEmail(e.target.value)} />
                     </div>
-                    {isPasswordAuthRole && (
-                      <div>
-                        <label className="zr-label">Palavra-passe</label>
-                        <input className="zr-input" type="password" placeholder="A tua palavra-passe" value={password} onChange={e => setPassword(e.target.value)} />
-                      </div>
-                    )}
+                    <div>
+                      <label className="zr-label">Palavra-passe</label>
+                      <input className="zr-input" type="password" placeholder="A tua palavra-passe" value={password} onChange={e => setPassword(e.target.value)} />
+                    </div>
+
+                    <button onClick={handleSignIn} disabled={loading} className="zr-button zr-button--block">Entrar com Palavra-passe</button>
+
                     {!isPasswordAuthRole && (
-                      <p className="zr-copy">
-                        Os passageiros entram com link mágico enviado por email.
-                      </p>
-                    )}
-                    {isPasswordAuthRole ? (
-                      <button onClick={handleSignIn} disabled={loading} className="zr-button zr-button--block">Entrar</button>
-                    ) : (
-                      <button onClick={handleSendMagicLink} disabled={loading} className="zr-button zr-button--block">Enviar link mágico</button>
+                      <button onClick={handleSendMagicLink} disabled={loading} className="zr-button zr-button--ghost zr-button--block" style={{ marginTop: '4px', fontSize: '11px' }}>
+                        Ou enviar link mágico por email
+                      </button>
                     )}
 
                     <div className="relative flex items-center py-2">

@@ -30,6 +30,33 @@
       href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined&display=block"
       rel="stylesheet"
     />
+    <script>
+      /* Auto-bridge para Desenvolvimento: Se o Supabase Auth redirecionar para a Vercel,
+         mas o dev server estiver a correr em localhost, devolve a sessão ao localhost imediatamente. */
+      (function() {
+        if (window.location.hostname === 'zenith-ride-build.vercel.app') {
+          var hash = window.location.hash || '';
+          var search = window.location.search || '';
+          var isAuth = hash.indexOf('access_token=') !== -1 || hash.indexOf('type=recovery') !== -1 || search.indexOf('code=') !== -1;
+          var ports = [5174, 5173, 3000];
+          function probeDev(idx) {
+            if (idx >= ports.length) return;
+            var port = ports[idx];
+            var img = new Image();
+            img.onload = function() {
+              window.location.replace('http://localhost:' + port + '/' + search + hash);
+            };
+            img.onerror = function() {
+              probeDev(idx + 1);
+            };
+            img.src = 'http://localhost:' + port + '/vite.svg?t=' + Date.now();
+          }
+          if (isAuth) {
+            probeDev(0);
+          }
+        }
+      })();
+    </script>
     <style>
       /* Hide Material Symbol icon names until the font loads */
       .material-symbols-outlined {
