@@ -16,6 +16,13 @@ import { kazeSpeak } from '../lib/kazeVoice';
 import { UserRole, RideStatus, LatLng } from '../types';
 import { supabase } from '../lib/supabase';
 import { useAppStore } from '../store/useAppStore';
+import { transcribeAudioWithGemini, AudioTranscribeResult } from '../lib/kazeAudioTranscribe';
+import { mapService } from '../services/mapService';
+import {
+  KazeAudioCapture,
+  getAvailableMicrophones,
+  AudioInputDevice,
+} from '../lib/kazeAudioRecorder';
 
 interface KazeMascotProps {
   role:            UserRole;
@@ -92,25 +99,72 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   const [kazeOnline,      setKazeOnline]      = useState<boolean | null>(true);
   const [voiceEnabled,    setVoiceEnabled]    = useState(true);
   const [isListeningMic,  setIsListeningMic]  = useState(false);
+  const [liveVolume,      setLiveVolume]      = useState(0);
+  const [micDiagnostics,  setMicDiagnostics]  = useState<{
+    title: string;
+    details: string;
+    type: 'warning' | 'error' | 'info';
+    technical?: Record<string, any>;
+  } | null>(null);
+  const [showMicSettings, setShowMicSettings] = useState(false);
+  const [availableMics,   setAvailableMics]   = useState<AudioInputDevice[]>([]);
+  const [selectedMicId,   setSelectedMicId]   = useState<string>(() => {
+    return localStorage.getItem('zenith_selected_mic') || '';
+  });
+  const [activeMicLabel,  setActiveMicLabel]  = useState<string>('Microfone Padrão');
+  const [isTestingMic,    setIsTestingMic]    = useState(false);
+  const [testMicVolume,   setTestMicVolume]   = useState(0);
   const [actionExecuting, setActionExecuting] = useState(false);
   const [pendingAction,   setPendingAction]   = useState<KazeProposedAction | null>(null);
 
+  const [liveGpsCoords,   setLiveGpsCoords]   = useState<LatLng | null>(userLocation || null);
+  const [liveGpsAddress,  setLiveGpsAddress]  = useState<string | null>(null);
+
   const liveSessionRef   = useRef<{ close: () => void } | null>(null);
   const scrollRef        = useRef<HTMLDivElement>(null);
-  const recognitionRef   = useRef<any>(null);
   const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const audioCaptureRef  = useRef<KazeAudioCapture | null>(null);
+  const testCaptureRef   = useRef<KazeAudioCapture | null>(null);
+  const speechRecognitionRef = useRef<any>(null);
+  const speechRecognizedTextRef = useRef<string>('');
+
+  // Sincronizar localização precisa do utilizador (GPS + Bairro) em segundo plano
+  useEffect(() => {
+    let active = true;
+    const fetchRealLocation = async () => {
+      try {
+        const coords = await mapService.getCurrentPosition();
+        if (!active) return;
+        setLiveGpsCoords(coords);
+        const address = await mapService.reverseGeocode(coords);
+        if (!active) return;
+        setLiveGpsAddress(address);
+      } catch (err) {
+        console.warn('[KazeMascot] Não foi possível obter GPS inicial:', err);
+      }
+    };
+    fetchRealLocation();
+    return () => { active = false; };
+  }, []);
 
   // Auto-scroll ao adicionar mensagens
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [messages, isThinking, pendingAction, isListeningMic]);
+  }, [messages, isThinking, pendingAction, isListeningMic, micDiagnostics]);
 
   useEffect(() => () => {
     liveSessionRef.current?.close();
     liveSessionRef.current = null;
     if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch { /* ignore */ }
+    if (audioCaptureRef.current) {
+      audioCaptureRef.current.cancel();
+    }
+    if (testCaptureRef.current) {
+      testCaptureRef.current.cancel();
+    }
+    if (speechRecognitionRef.current) {
+      try { speechRecognitionRef.current.stop(); } catch {}
+      speechRecognitionRef.current = null;
     }
   }, []);
 
@@ -314,11 +368,24 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
         if (voiceEnabled) await kazeSpeak(result.text);
       } else {
-        // Passar pelo Kaze App Agent operacional com localização actual de Luanda
+        // Obter GPS fresco se ainda não tivermos
+        let effectiveCoords = liveGpsCoords || userLocation || null;
+        let effectiveAddress = liveGpsAddress || null;
+        if (!effectiveCoords) {
+          try {
+            effectiveCoords = await mapService.getCurrentPosition();
+            effectiveAddress = await mapService.reverseGeocode(effectiveCoords);
+            setLiveGpsCoords(effectiveCoords);
+            setLiveGpsAddress(effectiveAddress);
+          } catch { /* ignore */ }
+        }
+
+        // Passar pelo Kaze App Agent operacional com localização actual precisa de Luanda
         const agentResult = await kazeAppAgent.processUserMessage(userText, {
           userId,
           userRole: role,
-          userLocation,
+          userLocation: effectiveCoords,
+          userAddress: effectiveAddress || undefined,
           hasActiveRide: rideStatus !== RideStatus.IDLE,
           pendingAction,
         });
@@ -368,107 +435,271 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     }
   };
 
-  // ── Reconhecimento de Fala pelo Microfone com Feedback em Tempo Real ─────────
-  const toggleMicListening = async () => {
-    // 1. Se já está a ouvir, parar
-    if (isListeningMic) {
-      if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
-      if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch { /* ignore */ }
+  // ── Gestão e Teste de Microfones Disponíveis ──
+  const openMicSettings = async () => {
+    setShowMicSettings(true);
+    const mics = await getAvailableMicrophones();
+    setAvailableMics(mics);
+  };
+
+  const selectMicrophone = (deviceId: string) => {
+    setSelectedMicId(deviceId);
+    localStorage.setItem('zenith_selected_mic', deviceId);
+  };
+
+  const toggleTestMic = async () => {
+    if (isTestingMic) {
+      if (testCaptureRef.current) {
+        await testCaptureRef.current.cancel();
+        testCaptureRef.current = null;
       }
-      setIsListeningMic(false);
-      return;
-    }
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      showToast('O teu navegador não suporta reconhecimento de voz. Usa o Chrome ou digita no teclado!', 'info');
+      setIsTestingMic(false);
+      setTestMicVolume(0);
       return;
     }
 
     try {
-      // Pedir permissão de microfone se necessário (mostra o popup do browser)
-      if (navigator.mediaDevices?.getUserMedia) {
+      const capture = new KazeAudioCapture();
+      testCaptureRef.current = capture;
+      setIsTestingMic(true);
+      await capture.start(selectedMicId || undefined, (vol) => {
+        setTestMicVolume(vol);
+      });
+    } catch (err: any) {
+      setIsTestingMic(false);
+      setTestMicVolume(0);
+      showToast(`Erro ao testar microfone: ${err?.message || err}`, 'error');
+    }
+  };
+
+  // ── Reconhecimento de Fala pelo Microfone com Diagnóstico Transparente ──
+  const stopAndProcessRecording = async () => {
+    if (autoStopTimerRef.current) {
+      clearTimeout(autoStopTimerRef.current);
+      autoStopTimerRef.current = null;
+    }
+    setIsListeningMic(false);
+    setLiveVolume(0);
+
+    if (speechRecognitionRef.current) {
+      try { speechRecognitionRef.current.stop(); } catch {}
+      speechRecognitionRef.current = null;
+    }
+
+    if (!audioCaptureRef.current || !audioCaptureRef.current.isRecording) return;
+
+    // Se o reconhecimento nativo do navegador já captou a fala em português
+    const recognizedLive = speechRecognizedTextRef.current?.trim();
+    if (recognizedLive) {
+      console.log('[KazeMascot] Fala reconhecida nativamente pelo navegador:', recognizedLive);
+      try {
+        await audioCaptureRef.current.stop();
+      } catch {}
+      setInputValue(recognizedLive);
+      setMicDiagnostics(null);
+      await handleSendText(undefined, recognizedLive);
+      return;
+    }
+
+    try {
+      const rec = await audioCaptureRef.current.stop();
+      const { wavBlob, durationMs, peakVolume, avgVolume, deviceLabel, isTrackMuted } = rec;
+      setActiveMicLabel(deviceLabel);
+
+      // Se a gravação foi curtíssima e vazia
+      if (durationMs < 400 && wavBlob.size < 500) {
+        setMicDiagnostics({
+          title: 'Gravação Muito Curta',
+          details: 'Toca no microfone, fala o teu pedido e toca novamente para enviar.',
+          type: 'info',
+          technical: { durationMs, bytes: wavBlob.size, deviceLabel },
+        });
+        return;
+      }
+
+      // Se o microfone não captou som (mudo no Windows/teclado)
+      if (peakVolume < 0.02 && avgVolume < 0.01) {
+        setMicDiagnostics({
+          title: 'Microfone Mudo ou Sem Sinal (0% Volume)',
+          details: 'O áudio gravado está em silêncio absoluto. Verifica se o microfone não está mutado no teu teclado (tecla F4 / Fn+F4) ou aumenta o volume para 100% nas Definições de Som do Windows.',
+          type: 'warning',
+          technical: { durationMs, peakVolume: `${(peakVolume * 100).toFixed(1)}%`, deviceLabel },
+        });
+        setInputValue('');
+        return;
+      }
+
+      // Enviar áudio captado para transcrição com Gemini
+      setInputValue('🎙️ Kaze a transcrever voz...');
+      setIsThinking(true);
+
+      const aiRes = await transcribeAudioWithGemini(wavBlob);
+
+      if (aiRes.status === 'success' && aiRes.text) {
+        setInputValue(aiRes.text);
+        setMicDiagnostics(null);
+        await handleSendText(undefined, aiRes.text);
+      } else if (aiRes.status === 'empty') {
+        setMicDiagnostics({
+          title: 'Voz Não Detectada',
+          details: aiRes.errorMessage || 'Não conseguimos ouvir a tua fala com clareza. Podes tentar falar mais alto e perto do microfone, ou escrever a tua mensagem abaixo.',
+          type: 'warning',
+          technical: {
+            duracaoMs: durationMs,
+            tamanhoBytes: wavBlob.size,
+            volumePico: `${(peakVolume * 100).toFixed(1)}%`,
+            volumeMedio: `${(avgVolume * 100).toFixed(1)}%`,
+            microfone: deviceLabel,
+            respostaModelo: aiRes.rawText || '[VAZIO]',
+          },
+        });
+        setInputValue('');
+      } else {
+        setMicDiagnostics({
+          title: 'Erro na Transcrição de Áudio (Gemini)',
+          details: aiRes.errorMessage || 'Ocorreu um erro ao comunicar com a API do Gemini.',
+          type: 'error',
+          technical: {
+            httpStatus: aiRes.httpStatus || 'Erro de Rede/Cliente',
+            erroReal: aiRes.errorMessage,
+            respostaBruta: aiRes.rawText,
+            tamanhoBytes: wavBlob.size,
+            duracaoMs: durationMs,
+            microfone: deviceLabel,
+          },
+        });
+        setInputValue('');
+      }
+    } catch (recErr: any) {
+      setMicDiagnostics({
+        title: 'Erro no Processamento de Áudio',
+        details: recErr?.message || String(recErr),
+        type: 'error',
+        technical: { error: String(recErr) },
+      });
+      setInputValue('');
+    } finally {
+      setIsThinking(false);
+    }
+  };
+
+  const toggleMicListening = async () => {
+    if (isListeningMic) {
+      await stopAndProcessRecording();
+      return;
+    }
+
+    // HTTPS check — navigator.mediaDevices is undefined on non-secure origins (except localhost)
+    const isSecure = window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+    if (!isSecure) {
+      setMicDiagnostics({
+        title: 'Conexão Não Segura (HTTP)',
+        details: 'O microfone só funciona em HTTPS ou localhost. Estás a aceder via HTTP. Para resolver, acede ao app via HTTPS ou usa localhost no computador.',
+        type: 'error',
+        technical: {
+          protocol: location.protocol,
+          hostname: location.hostname,
+          isSecureContext: window.isSecureContext,
+          solucao: 'No vite.config.ts, adiciona server: { https: true } ou acede pelo endereço localhost.',
+        },
+      });
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setMicDiagnostics({
+        title: 'Navegador Sem Suporte de Áudio',
+        details: 'O teu navegador não suporta a API de áudio navigator.mediaDevices.getUserMedia. Tenta usar o Chrome ou Edge.',
+        type: 'error',
+        technical: {
+          mediaDevices: !!navigator.mediaDevices,
+          getUserMedia: !!(navigator.mediaDevices?.getUserMedia),
+          userAgent: navigator.userAgent,
+        },
+      });
+      return;
+    }
+
+    setMicDiagnostics(null);
+    console.log('[KazeMascot] A iniciar gravação de microfone...', { selectedMicId, isSecure, protocol: location.protocol });
+
+    try {
+      const capture = new KazeAudioCapture();
+      audioCaptureRef.current = capture;
+
+      const { deviceLabel } = await capture.start(selectedMicId || undefined, (vol) => {
+        setLiveVolume(vol);
+      });
+
+      console.log('[KazeMascot] Microfone iniciado com sucesso:', deviceLabel);
+      setActiveMicLabel(deviceLabel);
+      setIsListeningMic(true);
+      setInputValue('');
+
+      // Iniciar reconhecimento nativo em tempo real no Edge/Chrome se disponível
+      speechRecognizedTextRef.current = '';
+      const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognitionClass) {
         try {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          stream.getTracks().forEach(t => t.stop());
-        } catch (permErr: any) {
-          if (permErr.name === 'NotAllowedError' || permErr.name === 'PermissionDeniedError') {
-            showToast('Permissão de microfone negada. Permite o microfone no navegador.', 'error');
-            return;
-          }
+          const speechRec = new SpeechRecognitionClass();
+          speechRec.lang = 'pt-BR';
+          speechRec.continuous = true;
+          speechRec.interimResults = true;
+          speechRec.maxAlternatives = 3;
+          speechRec.onresult = (event: any) => {
+            let fullText = '';
+            for (let i = 0; i < event.results.length; i++) {
+              fullText += event.results[i][0].transcript + ' ';
+            }
+            const trimmed = fullText.trim();
+            if (trimmed) {
+              speechRecognizedTextRef.current = trimmed;
+              setInputValue(trimmed);
+            }
+          };
+          speechRec.onerror = (e: any) => {
+            console.log('[KazeMascot] SpeechRecognition status:', e.error);
+          };
+          speechRec.start();
+          speechRecognitionRef.current = speechRec;
+        } catch (e) {
+          console.warn('[KazeMascot] Falha ao iniciar SpeechRecognition nativo:', e);
         }
       }
 
-      const recognition = new SpeechRecognition();
-      // Usar idioma do sistema ou português
-      const sysLang = navigator.language || 'pt-PT';
-      recognition.lang = sysLang.startsWith('pt') ? sysLang : 'pt-PT';
-      recognition.continuous = false;
-      recognition.interimResults = true; // Transcrição ao vivo na tela!
-      recognition.maxAlternatives = 1;
-
-      let capturedText = '';
-
-      recognition.onstart = () => {
-        setIsListeningMic(true);
-        setInputValue('');
-      };
-
-      recognition.onresult = (event: any) => {
-        let interim = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          const trans = event.results[i][0]?.transcript || '';
-          if (event.results[i].isFinal) {
-            capturedText += trans;
-          } else {
-            interim += trans;
-          }
-        }
-
-        const liveText = (capturedText || interim).trim();
-        if (liveText) {
-          setInputValue(liveText);
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        console.warn('[KazeMascot] Speech recognition error:', event.error);
-        setIsListeningMic(false);
-
-        if (event.error === 'not-allowed') {
-          showToast('Permissão de microfone negada.', 'error');
-        } else if (event.error === 'no-speech') {
-          if (capturedText.trim().length > 1) {
-            void handleSendText(undefined, capturedText.trim());
-            return;
-          }
-          showToast('Não ouvi nenhuma voz. Toca no microfone e fala mais alto.', 'info');
-        }
-      };
-
-      recognition.onend = () => {
-        setIsListeningMic(false);
-        const textToSend = (capturedText || inputValue).trim();
-        if (textToSend.length > 1) {
-          void handleSendText(undefined, textToSend);
-        }
-      };
-
-      recognitionRef.current = recognition;
-      recognition.start();
-
-      // Parar automaticamente após 10 segundos
+      // Auto-stop após 12 segundos
       autoStopTimerRef.current = setTimeout(() => {
-        if (recognitionRef.current) {
-          try { recognitionRef.current.stop(); } catch { /* ignore */ }
+        if (audioCaptureRef.current?.isRecording) {
+          stopAndProcessRecording();
         }
-      }, 10000);
+      }, 12000);
     } catch (err: any) {
-      console.warn('[KazeMascot] Erro ao iniciar voz:', err);
+      console.error('[KazeMascot] Erro ao iniciar microfone:', err);
       setIsListeningMic(false);
-      showToast('Erro ao activar o microfone. Podes escrever no teclado!', 'info');
+      setLiveVolume(0);
+
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setMicDiagnostics({
+          title: 'Permissão de Microfone Negada',
+          details: 'O navegador ou o sistema bloqueou o acesso ao microfone. Clica no ícone de cadeado na barra do navegador para permitir.',
+          type: 'error',
+          technical: { errorName: err.name, message: err.message },
+        });
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setMicDiagnostics({
+          title: 'Nenhum Microfone Encontrado',
+          details: 'O navegador não encontrou nenhum microfone no teu dispositivo. Verifica se tens um microfone ligado.',
+          type: 'error',
+          technical: { errorName: err.name, message: err.message },
+        });
+      } else {
+        setMicDiagnostics({
+          title: 'Erro ao Aceder ao Microfone',
+          details: `Não foi possível abrir o dispositivo: ${err.message || err}`,
+          type: 'error',
+          technical: { errorName: err.name, message: err.message, userAgent: navigator.userAgent },
+        });
+      }
     }
   };
 
@@ -541,6 +772,14 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                 </div>
               </div>
               <div className="zr-inline" style={{ gap: '4px' }}>
+                <button
+                  onClick={openMicSettings}
+                  className="zr-icon-button"
+                  style={{ width: '36px', height: '36px', color: 'var(--gold)' }}
+                  title="Configurar e Testar Microfone"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>tune</span>
+                </button>
                 <button
                   onClick={() => setVoiceEnabled(!voiceEnabled)}
                   className="zr-icon-button"
@@ -708,9 +947,314 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
             )}
           </div>
 
-          {/* Barra de Input */}
+          {/* Barra de Input & Diagnóstico de Áudio */}
           {mode !== 'voice' && (
-            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--surface-3)', background: 'var(--surface-2)' }}>
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--surface-3)', background: 'var(--surface-2)', position: 'relative' }}>
+              
+              {/* MODAL / POPOVER DE CONFIGURAÇÃO DE MICROFONE */}
+              {showMicSettings && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: '100%',
+                    left: 0,
+                    right: 0,
+                    background: 'rgba(15, 15, 20, 0.98)',
+                    backdropFilter: 'blur(16px)',
+                    borderTop: '1px solid var(--gold-soft)',
+                    borderBottom: '1px solid var(--surface-3)',
+                    padding: '16px',
+                    zIndex: 700,
+                    boxShadow: '0 -10px 30px rgba(0,0,0,0.8)',
+                    maxHeight: '340px',
+                    overflowY: 'auto',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span className="material-symbols-outlined" style={{ color: 'var(--gold)', fontSize: '20px' }}>tune</span>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>Definições de Microfone</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setShowMicSettings(false);
+                        if (isTestingMic && testCaptureRef.current) {
+                          testCaptureRef.current.cancel();
+                          setIsTestingMic(false);
+                          setTestMicVolume(0);
+                        }
+                      }}
+                      style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '18px' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <p style={{ fontSize: '11px', color: 'var(--copy-muted)', marginBottom: '10px' }}>
+                    Microfone ativo no momento: <strong style={{ color: 'var(--gold)' }}>{activeMicLabel}</strong>
+                  </p>
+
+                  {/* Lista de microfones */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '14px' }}>
+                    <label
+                      onClick={() => selectMicrophone('')}
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: '8px',
+                        background: !selectedMicId ? 'rgba(230,195,100,0.15)' : 'rgba(255,255,255,0.04)',
+                        border: !selectedMicId ? '1px solid var(--gold)' : '1px solid transparent',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                      }}
+                    >
+                      <input type="radio" checked={!selectedMicId} readOnly />
+                      <span>Padrão do Sistema (Windows Default)</span>
+                    </label>
+
+                    {availableMics.map((mic) => {
+                      const isSelected = selectedMicId === mic.deviceId;
+                      return (
+                        <label
+                          key={mic.deviceId}
+                          onClick={() => selectMicrophone(mic.deviceId)}
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            background: isSelected ? 'rgba(230,195,100,0.15)' : 'rgba(255,255,255,0.04)',
+                            border: isSelected ? '1px solid var(--gold)' : '1px solid transparent',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <input type="radio" checked={isSelected} readOnly />
+                          <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>
+                            {mic.label}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  {/* Teste em Tempo Real */}
+                  <div style={{ background: 'rgba(0,0,0,0.4)', borderRadius: '10px', padding: '10px', marginBottom: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#fff' }}>Teste de Nível de Entrada:</span>
+                      <button
+                        type="button"
+                        onClick={toggleTestMic}
+                        className="zr-badge"
+                        style={{
+                          background: isTestingMic ? '#ef4444' : 'var(--gold)',
+                          color: isTestingMic ? '#fff' : '#000',
+                          border: 'none',
+                          cursor: 'pointer',
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {isTestingMic ? 'Parar Teste' : 'Testar Entrada'}
+                      </button>
+                    </div>
+
+                    <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${Math.min(100, testMicVolume * 100)}%`,
+                          height: '100%',
+                          background: testMicVolume > 0.6 ? '#ef4444' : testMicVolume > 0.05 ? 'var(--gold)' : '#555',
+                          transition: 'width 0.08s ease',
+                        }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '9px', color: '#888' }}>
+                      <span>0 dB (Silêncio)</span>
+                      <span>{(testMicVolume * 100).toFixed(0)}%</span>
+                      <span>Pico Máximo</span>
+                    </div>
+                  </div>
+
+                  <p style={{ fontSize: '10px', color: '#888', lineHeight: 1.35, margin: 0 }}>
+                    💡 Dica: Se a barra não se mover enquanto falas, abre as Definições de Som do Windows e aumenta o volume do microfone para 100%.
+                  </p>
+                </div>
+              )}
+
+              {/* HUD VISUAL DE GRAVAÇÃO AO VIVO COM MEDIDOR DE VOLUME */}
+              {isListeningMic && (
+                <div
+                  style={{
+                    padding: '8px 12px',
+                    marginBottom: '8px',
+                    borderRadius: '12px',
+                    background: 'rgba(20, 20, 26, 0.95)',
+                    border: liveVolume > 0.05 ? '1px solid rgba(230, 195, 100, 0.6)' : '1px solid rgba(239, 68, 68, 0.5)',
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.7)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span
+                      className="material-symbols-outlined animate-pulse"
+                      style={{ color: liveVolume > 0.05 ? 'var(--gold)' : '#ef4444', fontSize: '18px' }}
+                    >
+                      {liveVolume > 0.05 ? 'graphic_eq' : 'mic'}
+                    </span>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#fff' }}>
+                      {liveVolume > 0.05
+                        ? `A detetar voz (${(liveVolume * 100).toFixed(0)}%)`
+                        : '0% de volume — Fala agora ao microfone!'}
+                    </span>
+                  </div>
+
+                  {/* Barras dinâmicas de frequência/volume */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', height: '16px' }}>
+                    {[0.05, 0.15, 0.3, 0.5, 0.7].map((threshold, idx) => {
+                      const active = liveVolume >= threshold;
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            width: '3.5px',
+                            height: active ? `${Math.min(16, 5 + idx * 2.5)}px` : '3.5px',
+                            borderRadius: '2px',
+                            background: active ? 'var(--gold)' : 'rgba(255,255,255,0.2)',
+                            transition: 'height 0.08s ease, background 0.08s ease',
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={toggleMicListening}
+                    className="zr-badge"
+                    style={{
+                      background: '#ef4444',
+                      color: '#fff',
+                      border: 'none',
+                      cursor: 'pointer',
+                      padding: '3px 8px',
+                      fontSize: '10.5px',
+                      fontWeight: 700,
+                    }}
+                  >
+                    Concluir
+                  </button>
+                </div>
+              )}
+
+              {/* CARD DE DIAGNÓSTICO HONESTO E TRANSPARENTE DE ÁUDIO */}
+              {micDiagnostics && (
+                <div
+                  style={{
+                    padding: '12px 14px',
+                    marginBottom: '10px',
+                    borderRadius: '12px',
+                    background: micDiagnostics.type === 'error' ? 'rgba(38, 12, 12, 0.95)' : 'rgba(30, 24, 10, 0.95)',
+                    border: micDiagnostics.type === 'error' ? '1px solid rgba(239, 68, 68, 0.6)' : '1px solid rgba(230, 195, 100, 0.5)',
+                    backdropFilter: 'blur(12px)',
+                    boxShadow: '0 6px 24px rgba(0,0,0,0.6)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span
+                        className="material-symbols-outlined"
+                        style={{ fontSize: '20px', color: micDiagnostics.type === 'error' ? '#ef4444' : 'var(--gold)' }}
+                      >
+                        {micDiagnostics.type === 'error' ? 'error' : 'warning'}
+                      </span>
+                      <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#fff' }}>
+                        {micDiagnostics.title}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setMicDiagnostics(null)}
+                      style={{ background: 'transparent', border: 'none', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', padding: '2px' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <p style={{ margin: '6px 0 8px 0', fontSize: '11.5px', color: 'rgba(255,255,255,0.85)', lineHeight: 1.4 }}>
+                    {micDiagnostics.details}
+                  </p>
+
+                  {micDiagnostics.technical && (
+                    <details style={{ marginTop: '4px', fontSize: '10.5px', color: 'rgba(255,255,255,0.6)' }}>
+                      <summary style={{ cursor: 'pointer', outline: 'none', color: 'var(--gold)', fontWeight: 600 }}>
+                        Ver Diagnóstico Técnico Detalhado
+                      </summary>
+                      <pre
+                        style={{
+                          marginTop: '6px',
+                          padding: '8px',
+                          background: 'rgba(0,0,0,0.5)',
+                          borderRadius: '6px',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-all',
+                          fontSize: '10px',
+                          lineHeight: 1.35,
+                          color: '#e2e8f0',
+                        }}
+                      >
+                        {JSON.stringify(micDiagnostics.technical, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMicDiagnostics(null);
+                        openMicSettings();
+                      }}
+                      className="zr-badge"
+                      style={{
+                        background: 'rgba(255,255,255,0.12)',
+                        color: 'var(--gold)',
+                        border: '1px solid rgba(230, 195, 100, 0.4)',
+                        cursor: 'pointer',
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      ⚙️ Escolher / Testar Microfone
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleMicListening()}
+                      className="zr-badge"
+                      style={{
+                        background: 'var(--gold)',
+                        color: '#000',
+                        border: 'none',
+                        cursor: 'pointer',
+                        padding: '4px 10px',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                      }}
+                    >
+                      🎙️ Tentar Gravar Novamente
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* FORMULÁRIO DE INPUT */}
               <form onSubmit={e => handleSendText(e)} className="zr-inline" style={{ gap: '8px' }}>
                 <input
                   className="zr-input"
@@ -741,7 +1285,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                     transition: 'all 0.2s ease',
                     position: 'relative',
                   }}
-                  title={isListeningMic ? 'Toca para parar' : 'Falar com o Kaze'}
+                  title={isListeningMic ? 'Toca para concluir e transcrever' : 'Falar com o Kaze'}
                 >
                   <span className={`material-symbols-outlined ${isListeningMic ? 'animate-pulse' : ''}`} style={{ fontSize: '20px' }}>
                     {isListeningMic ? 'mic' : 'mic_none'}
@@ -785,48 +1329,43 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         </div>
       )}
 
-      {/* Botão flutuante do Kaze Mascot */}
+      {/* Botão flutuante do Kaze Mascot (Jewel Bubble com Emblema Z) */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="zr-icon-button"
+        className="jewel-bubble-btn pointer-events-auto transition transform active:scale-95 shadow-2xl relative flex items-center justify-center"
         style={{
-          width: '56px',
-          height: '56px',
-          borderRadius: '28px',
-          pointerEvents: 'auto',
+          width: '54px',
+          height: '54px',
+          borderRadius: '27px',
           zIndex: 601,
-          background: isOpen ? 'var(--gold)' : 'var(--surface-3)',
-          border: isOpen ? 'none' : '2px solid var(--surface-1)',
-          boxShadow: isOpen ? '0 10px 30px rgba(230,195,100,0.4)' : '0 10px 20px rgba(0,0,0,0.5)',
-          position: 'relative',
+          border: '1px solid rgba(245, 215, 130, 0.7)',
         }}
-        title="Abrir Kaze"
+        title="Abrir Kaze AI"
       >
-        <span
-          className="material-symbols-outlined"
-          style={{
-            fontSize: '28px',
-            color: isOpen ? '#000' : 'var(--gold)',
-            transform: (isOpen || isThinking) ? 'scale(1.1)' : 'none',
-            transition: 'transform 0.3s',
-          }}
-        >
-          {isThinking ? 'graphic_eq' : 'auto_awesome'}
-        </span>
-        {kazeOnline === true && (
-          <span
-            style={{
-              position: 'absolute',
-              bottom: '8px',
-              right: '8px',
-              width: '10px',
-              height: '10px',
-              borderRadius: '50%',
-              background: 'var(--success, #22c55e)',
-              boxShadow: '0 0 8px var(--success, #22c55e)',
-            }}
-          />
-        )}
+        <div className="w-[46px] h-[46px] rounded-full bg-[#0E0D0A]/95 flex items-center justify-center border border-[#FBE096]/50 shadow-inner relative overflow-hidden">
+          {/* Geometric Z Shield Emblem or Audio Wave when thinking */}
+          {isThinking ? (
+            <span className="material-symbols-outlined text-[#F5DE9E] text-2xl animate-pulse">graphic_eq</span>
+          ) : (
+            <svg
+              className="w-6 h-6 text-[#F5DE9E] filter drop-shadow-[0_0_5px_rgba(245,222,158,0.75)] transition transform hover:scale-105"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              viewBox="0 0 24 24"
+            >
+              <polygon points="12 2 21.5 7.5 21.5 16.5 12 22 2.5 16.5 2.5 7.5 12 2" />
+              <path d="M8.5 8.5h7l-7 7h7" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.3" />
+            </svg>
+          )}
+
+          {/* Online status indicator dot */}
+          {kazeOnline === true && (
+            <span
+              className="absolute bottom-1 right-2 w-2 h-2 rounded-full bg-[#22c55e] shadow-[0_0_6px_#22c55e]"
+            />
+          )}
+        </div>
       </button>
     </div>
   );

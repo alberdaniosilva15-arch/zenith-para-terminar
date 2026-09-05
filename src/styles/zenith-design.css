@@ -110,7 +110,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 18px 18px 110px;
+  padding: 18px 16px calc(68px + env(safe-area-inset-bottom, 8px));
 }
 
 .zr-main--tight {
@@ -672,48 +672,85 @@
   position: fixed;
   left: 50%;
   bottom: 0;
-  z-index: 15;
+  z-index: 500;
   width: 100%;
   max-width: 430px;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  justify-content: space-around;
-  gap: 4px;
-  padding: 10px 10px 18px;
-  background: rgba(3, 3, 3, 0.92);
-  backdrop-filter: blur(18px);
-  border-top: 1px solid rgba(230, 195, 100, 0.16);
+  justify-content: space-between;
+  gap: 5px;
+  padding: 6px 8px calc(10px + env(safe-area-inset-bottom, 6px));
+  background: rgba(3, 3, 4, 0.88);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .zr-nav-link {
   flex: 1;
   min-width: 0;
+  height: 52px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 12px 0;
-  color: rgba(245, 239, 228, 0.34);
-  font-size: 11px;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px 2px;
+  
+  /* Quadrado Liquid Glass Fosco em até 40% com fundo parecendo preto mesmo */
+  background: rgba(10, 10, 14, 0.40);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.65), inset 0 1px 1px rgba(255, 255, 255, 0.08);
+  
+  color: rgba(245, 239, 228, 0.42);
+  font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.06em;
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  cursor: pointer;
 }
 
-.zr-nav-link .material-symbols-outlined {
-  font-size: 26px;
+.zr-nav-link:hover {
+  background: rgba(22, 22, 28, 0.45);
+  border-color: rgba(230, 195, 100, 0.25);
+  color: rgba(245, 239, 228, 0.85);
+  transform: translateY(-2px);
+}
+
+.zr-nav-link:active {
+  transform: scale(0.96);
 }
 
 .zr-nav-link.is-active {
+  /* Liquid Glass Ativo com reflexo dourado sutil e fundo preto fusco */
+  background: linear-gradient(180deg, rgba(230, 195, 100, 0.16) 0%, rgba(10, 10, 14, 0.40) 100%);
+  border: 1px solid rgba(230, 195, 100, 0.48);
+  box-shadow: 0 0 16px rgba(230, 195, 100, 0.25), inset 0 1px 2px rgba(230, 195, 100, 0.38);
   color: var(--gold);
 }
 
+.zr-nav-link .material-symbols-outlined {
+  font-size: 21px;
+  transition: transform 0.2s ease;
+}
+
+.zr-nav-link.is-active .material-symbols-outlined {
+  transform: scale(1.1);
+  color: var(--gold);
+  filter: drop-shadow(0 0 6px rgba(230, 195, 100, 0.45));
+}
+
 .zr-nav-label {
-  font-size: 9px;
-  font-weight: 700;
+  font-size: 8px;
+  font-weight: 800;
   letter-spacing: 0.04em;
-  margin-top: 2px;
+  line-height: 1;
 }
 
 .zr-scroll-hint {

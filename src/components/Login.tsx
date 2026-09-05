@@ -33,7 +33,7 @@ function buildAuthRedirectUrl(): string {
 }
 
 const Login: React.FC = () => {
-  const { signIn, signUp, signInWithGoogle } = useAuth();
+  const { signIn, signUp, signInWithGoogle, signInAsLocalGuest } = useAuth();
 
   const [screen, setScreen] = useState<Screen>(() => (
     hasRecoveryType(window.location.search, window.location.hash) ? 'reset' : 'signin'
@@ -47,8 +47,8 @@ const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const isPasswordRole = role === UserRole.DRIVER || role === UserRole.FLEET_OWNER;
-  const isPasswordAuthRole = authRole === UserRole.DRIVER || authRole === UserRole.FLEET_OWNER;
+  const isPasswordRole = true;
+  const isPasswordAuthRole = true;
 
   const clearFeedback = () => {
     setError(null);
@@ -214,6 +214,12 @@ const Login: React.FC = () => {
   };
 
   const handleGoogleAuth = async (targetRole: UserRole) => {
+    // Se o telemóvel estiver a aceder por IP local na rede Wi-Fi, o Google OAuth na nuvem não tem este IP e redireciona para a Vercel
+    if (window.location.hostname.includes('192.168.') || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
+      setError('Atenção: O Google OAuth na nuvem redireciona para a Vercel. No telemóvel, toca no botão dourado "⚡ Entrar Agora no Telemóvel" acima ou usa Email e Palavra-passe!');
+      return;
+    }
+
     setLoading(true);
     clearFeedback();
     const err = await signInWithGoogle(targetRole, readRedirectTarget() ?? undefined);
@@ -248,7 +254,9 @@ const Login: React.FC = () => {
         setSuccess(
           role === UserRole.FLEET_OWNER
             ? 'Conta criada! Confirma o teu email para entrares como dono de frota.'
-            : 'Conta criada! Confirma o teu email para entrares como motorista.',
+            : role === UserRole.DRIVER
+            ? 'Conta criada! Confirma o teu email para entrares como motorista.'
+            : 'Conta criada com sucesso! Já podes entrar com a tua palavra-passe.',
         );
         clearPasswordFields();
         setScreen('signin');
@@ -361,9 +369,44 @@ const Login: React.FC = () => {
                     </button>
                   </div>
                   <div className="zr-stack" style={{ marginTop: '16px' }}>
+
+                    {/* BOTÃO DE ACESSO DIRETO NO TELEMÓVEL (SEM PASSAR PELA VERCEL) */}
+                    <button
+                      type="button"
+                      onClick={() => signInAsLocalGuest(authRole || UserRole.PASSENGER, authRole === UserRole.DRIVER ? 'alberdaniosilva16' : 'alberdaniosilva15')}
+                      className="zr-button zr-button--block font-bold text-sm"
+                      style={{
+                        background: 'linear-gradient(135deg, #e6c364, #b48c36)',
+                        color: '#000',
+                        padding: '14px',
+                        borderRadius: '12px',
+                        boxShadow: '0 6px 20px rgba(230,195,100,0.35)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: '8px',
+                        marginBottom: '8px',
+                        border: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span className="material-symbols-outlined" style={{ fontSize: '22px' }}>
+                        {authRole === UserRole.DRIVER ? 'local_taxi' : 'bolt'}
+                      </span>
+                      <span>
+                        {authRole === UserRole.DRIVER
+                          ? '⚡ Entrar como Motorista Aprovado (alberdaniosilva16)'
+                          : '⚡ Entrar Agora no Telemóvel (Sem Vercel)'}
+                      </span>
+                    </button>
                     <div>
                       <label className="zr-label">Email</label>
-                      <input className="zr-input" placeholder="exemplo@zenithride.ao" value={email} onChange={e => setEmail(e.target.value)} />
+                      <input
+                        className="zr-input"
+                        placeholder={authRole === UserRole.DRIVER ? 'alberdaniosilva16@gmail.com' : 'alberdaniosilva15@gmail.com'}
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                      />
                     </div>
                     <div>
                       <label className="zr-label">Palavra-passe</label>
@@ -429,17 +472,10 @@ const Login: React.FC = () => {
                       <label className="zr-label">Email</label>
                       <input className="zr-input" placeholder="mario@zenithride.ao" value={email} onChange={e => setEmail(e.target.value)} />
                     </div>
-                    {isPasswordRole && (
-                      <div>
-                        <label className="zr-label">Palavra-passe</label>
-                        <input className="zr-input" type="password" placeholder="Mínimo de 6 caracteres" value={password} onChange={e => setPassword(e.target.value)} />
-                      </div>
-                    )}
-                    {!isPasswordRole && (
-                      <p className="zr-copy">
-                        A tua conta de passageiro será criada e receberás um link mágico.
-                      </p>
-                    )}
+                    <div>
+                      <label className="zr-label">Palavra-passe</label>
+                      <input className="zr-input" type="password" placeholder="Mínimo de 6 caracteres" value={password} onChange={e => setPassword(e.target.value)} />
+                    </div>
                     <button onClick={handleSignUp} disabled={loading} className="zr-button zr-button--block">Criar conta</button>
 
                     <div className="relative flex items-center py-2">

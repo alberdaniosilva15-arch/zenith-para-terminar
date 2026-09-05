@@ -17,7 +17,7 @@ const { runAutoOperator } = require('./core/autoOperator');
 const MAX_TOOLS_PER_COMMAND = 5;
 const GEMINI_MODEL_CHAIN = (
   process.env.KAZE_MODEL_CHAIN ||
-  'models/gemini-2.5-flash,models/gemini-2.0-flash,models/gemini-1.5-flash'
+  'models/gemini-2.5-flash'
 )
   .split(',')
   .map((model) => model.trim())

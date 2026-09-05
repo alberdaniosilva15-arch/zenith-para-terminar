@@ -213,7 +213,7 @@ export default function AuthenticatedApp() {
             onRequestRide={requestRide}
             onCancelRide={cancelRide}
             onNavigate={(path) => navigate(path)}
-            userLocation={ride.pickupCoords || null}
+            userLocation={ride.pickupCoords || (profile?.last_known_lat && profile?.last_known_lng ? { lat: profile.last_known_lat, lng: profile.last_known_lng } : null)}
           />
         </Suspense>
       )}

@@ -15,7 +15,7 @@ interface AuthSlice {
   role:     UserRole;
   setUser:  (user: DbUser | null, profile: DbProfile | null) => void;
   clearUser: () => void;
-  updateProfile: (data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone'>>) => void;
+  updateProfile: (data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone' | 'emergency_contact_phone'>>) => void;
 }
 
 interface RideSlice {

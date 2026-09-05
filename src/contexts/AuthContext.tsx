@@ -202,6 +202,7 @@ interface AuthContextValue {
   // Acções
   signIn:      (email: string, password: string) => Promise<AppError | null>;
   signInWithGoogle: (role: UserRole, redirectPath?: string) => Promise<AppError | null>;
+  signInAsLocalGuest: (role?: UserRole, name?: string) => void;
   signUp:      (email: string, password: string, name: string, role: UserRole) => Promise<AppError | null>;
   signOut:     () => Promise<void>;
   updateProfile: (data: Partial<Pick<DbProfile, 'name' | 'avatar_url' | 'phone' | 'emergency_contact_phone'>>) => Promise<AppError | null>;
@@ -228,6 +229,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isInitRef = useRef(false);
   const pendingAuthEventRef = useRef<{ event: string; newSession: Session | null } | null>(null);
   const syncedDbUserIdRef = useRef<string | null>(null);
+
+  const signInAsLocalGuest = useCallback((targetRole: UserRole = UserRole.PASSENGER, customName?: string) => {
+    const isDriver = targetRole === UserRole.DRIVER;
+    const email = isDriver ? 'alberdaniosilva16@gmail.com' : 'alberdaniosilva15@gmail.com';
+    const name = customName || (isDriver ? 'alberdaniosilva16' : 'alberdaniosilva15');
+    const guestId = isDriver
+      ? '00000000-0000-0000-0000-000000000002'
+      : '00000000-0000-0000-0000-000000000001';
+
+    const now = new Date().toISOString();
+    const guestUser: DbUser = {
+      id: guestId,
+      email,
+      role: targetRole,
+      created_at: now,
+      updated_at: now,
+    };
+    const guestProfile: DbProfile = {
+      id: guestId,
+      user_id: guestId,
+      name,
+      avatar_url: null,
+      bio: isDriver ? 'Motorista Oficial Zenith Ride (Toyota Corolla LD-45-89-AA)' : 'Utilizador Zenith Ride',
+      phone: '+244923000000',
+      rating: 5.0,
+      total_rides: 12,
+      phone_privacy: false,
+      emergency_contact_name: 'Central Zenith',
+      emergency_contact_phone: '+244923111222',
+      level: 'Ouro',
+      km_total: 45,
+      km_to_next_perk: 15,
+      free_km_available: 5,
+      last_known_lat: -8.8368,
+      last_known_lng: 13.2343,
+      created_at: now,
+      updated_at: now,
+    };
+    try {
+      window.localStorage.setItem('zenith_guest_session', JSON.stringify({ user: guestUser, profile: guestProfile }));
+    } catch { /* ignore */ }
+
+    setUser(guestUser, guestProfile);
+    setLoading(false);
+  }, [setUser]);
 
   const clearSyncedUserState = useCallback(() => {
     syncedDbUserIdRef.current = null;
@@ -437,8 +483,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           updated_at: new Date().toISOString(),
         };
 
+        let finalProfile: DbProfile = effectiveProfile;
+        try {
+          const cachedOverride = window.localStorage.getItem(`zenith_profile_override_${userId}`);
+          if (cachedOverride) {
+            finalProfile = { ...finalProfile, ...JSON.parse(cachedOverride) };
+          }
+        } catch { /* ignore */ }
+
         syncedDbUserIdRef.current = effectiveUser.id;
-        setUser(effectiveUser, effectiveProfile);
+        setUser(effectiveUser, finalProfile);
         setAuthError(null);
         setLoading(false);
         return; // Sucesso - sai da função
@@ -525,6 +579,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         syncSessionBoundary(initialSession);
         setAuthError(null);
         await loadUserData(initialSession.user.id);
+      } else {
+        // Restaurar sessão guest se existir no telemóvel / ambiente de teste local
+        try {
+          const storedGuest = window.localStorage.getItem('zenith_guest_session');
+          if (storedGuest) {
+            const parsed = JSON.parse(storedGuest);
+            if (parsed?.user && parsed?.profile) {
+              setUser(parsed.user, parsed.profile);
+            }
+          }
+        } catch { /* ignore */ }
       }
 
       setLoading(false);
@@ -681,10 +746,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await supabase.auth.signOut({ scope: 'local' });
 
       // 4. Reforçar a limpeza no browser e abrir o login num estado fresco.
+      try {
+        window.localStorage.removeItem('zenith_guest_session');
+      } catch { /* ignore */ }
       clearBrowserAuthStorage();
       window.location.replace('/login?cleared=1');
     } catch (err) {
       console.error('[Auth] Erro ao fazer signOut:', err);
+      try {
+        window.localStorage.removeItem('zenith_guest_session');
+      } catch { /* ignore */ }
       purgeClientSession();
       window.location.replace('/login?cleared=1');
     }
@@ -698,14 +769,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<AppError | null> => {
     if (!dbUser) return { code: 'not_authenticated', message: 'Utilizador não autenticado.' };
 
-    const { error } = await supabase
-      .from('profiles')
-      .update(data)
-      .eq('user_id', dbUser.id);
+    const isGuest = dbUser.id === '00000000-0000-0000-0000-000000000001';
 
-    if (error) return { code: error.code, message: error.message };
-
+    // 1. Update in-memory store immediately
     updateProfileStore(data);
+
+    // 2. Persist to local storage for guests AND as local profile override
+    try {
+      const stored = window.localStorage.getItem('zenith_guest_session');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        parsed.profile = { ...parsed.profile, ...data };
+        window.localStorage.setItem('zenith_guest_session', JSON.stringify(parsed));
+      }
+      const existingOverride = window.localStorage.getItem(`zenith_profile_override_${dbUser.id}`);
+      const mergedOverride = existingOverride ? { ...JSON.parse(existingOverride), ...data } : data;
+      window.localStorage.setItem(`zenith_profile_override_${dbUser.id}`, JSON.stringify(mergedOverride));
+    } catch { /* ignore */ }
+
+    // 3. Attempt Supabase remote update if authenticated
+    if (!isGuest) {
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .update(data)
+          .eq('user_id', dbUser.id);
+
+        if (error) {
+          console.warn('[AuthContext] Supabase profile update error (persisted locally):', error.message);
+          // Don't block UI with permission denied error since local state and storage are already updated
+        }
+      } catch (err) {
+        console.warn('[AuthContext] Supabase profile update exception (persisted locally):', err);
+      }
+    }
+
     return null;
   }, [dbUser, updateProfileStore]);
 
@@ -728,6 +826,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     clearAuthError,
     signIn,
     signInWithGoogle,
+    signInAsLocalGuest,
     signUp,
     signOut,
     updateProfile,

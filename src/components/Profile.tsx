@@ -93,8 +93,8 @@ const Profile: React.FC<ProfileProps> = ({ dbUser, profile, onSignOut }) => {
       console.log('[Profile] A guardar:', { name: editName?.trim(), phone: normalizedPhone, emergency: normalizedEmergency });
       const err = await updateProfile({ 
         name: editName.trim(), 
-        phone: normalizedPhone || undefined,
-        emergency_contact_phone: normalizedEmergency || undefined,
+        phone: normalizedPhone ?? null,
+        emergency_contact_phone: normalizedEmergency ?? null,
       });
       if (!err) {
         setEditPhone(normalizedPhone || '');

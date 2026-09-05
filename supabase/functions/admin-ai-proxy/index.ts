@@ -12,7 +12,6 @@
 // ==========================================================================
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { GoogleGenerativeAI } from 'https://esm.sh/@google/generative-ai@0.24.0';
-import { encodeBase64 } from 'https://deno.land/std@0.224.0/encoding/base64.ts';
 import {
   applyCors,
   corsForbidden,
@@ -493,7 +492,7 @@ Deno.serve(async (req: Request) => {
     admin.from('ai_usage_logs').insert({
       user_id: user.id,
       action: 'admin_sentinel',
-    }).then(null, (err) => console.warn('[admin-ai-proxy] rate log:', err));
+    }).then(null, (err: any) => console.warn('[admin-ai-proxy] rate log:', err));
 
     const aiConfig = aiOverride && typeof aiOverride === 'object' ? aiOverride : {};
     const activeProvider = normalizeProvider(aiConfig.provider || 'google');
@@ -559,7 +558,7 @@ ${context ? `Contexto Extra: ${JSON.stringify(context).slice(0, 1500)}` : ''}
 `;
 
         // O startChat recebe o histórico SEPARADO da mensagem actual
-        const formattedHistory = [];
+        const formattedHistory: any[] = [];
         if (history && Array.isArray(history)) {
           history.forEach((h: any) => {
             if (!h.text || h.role === 'system') return;
@@ -927,7 +926,7 @@ Responde APENAS com o código, sem markdown fences (\`\`\`).`;
             const cars = carsRes.data ?? [];
             const billings = billingRes.data ?? [];
 
-            const totalRevenueKz = billings.reduce((sum, b: any) => sum + Number(b.amount_kz ?? 0), 0);
+            const totalRevenueKz = billings.reduce((sum: number, b: any) => sum + Number(b.amount_kz ?? 0), 0);
             const totalCars = cars.length;
             const activeCars = cars.filter((c: any) => c.active).length;
 

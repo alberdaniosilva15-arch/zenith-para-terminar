@@ -187,7 +187,7 @@ function cleanTranscript(text) {
 
 function normalizeGeminiModelName(model) {
   const value = String(model || '').trim();
-  if (!value) return 'models/gemini-2.0-flash';
+  if (!value) return 'models/gemini-2.5-flash';
   return value.startsWith('models/') ? value : `models/${value}`;
 }
 
@@ -206,7 +206,7 @@ async function transcribeAudioPayload(payload) {
     throw new Error('Audio invalido ou vazio.');
   }
 
-  const model = normalizeGeminiModelName(payload.model || process.env.KAZE_STT_MODEL || 'gemini-2.0-flash');
+  const model = normalizeGeminiModelName(payload.model || process.env.KAZE_STT_MODEL || 'gemini-2.5-flash');
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`,
     {

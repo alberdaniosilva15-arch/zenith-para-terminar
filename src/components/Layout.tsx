@@ -56,35 +56,46 @@ const Layout: React.FC<LayoutProps> = ({
     ? ['home', 'profile']
     : isDriver
       ? ['home', 'social', 'rides', 'wallet', 'profile']
-      : ['home', 'social', 'precos', 'contrato', 'rides', 'wallet', 'profile'];
+      : ['home', 'social', 'precos', 'rides', 'wallet', 'profile'];
 
   return (
     <div className="zr-shell">
       <div className="zr-app">
-      <header className="fixed top-0 z-50 flex w-full max-w-md items-center justify-between bg-[#0A0A0A] px-5 py-4 shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
-        <div className="flex items-center gap-3">
-          <div className="golden-gradient gold-box-glow rounded-full px-4 py-1.5 text-sm font-bold italic tracking-tighter shadow-glow">
-            Zenith Ride
+      <header className="fixed top-0 z-50 flex w-full max-w-md items-center justify-between bg-[#040406]/92 backdrop-blur-2xl border-b border-white/[0.08] px-4 py-3 shadow-[0_10px_30px_rgba(0,0,0,0.6)]">
+        <div className="flex items-center space-x-2.5">
+          {/* Hexagonal Z Shield Liquid Glass Bubble */}
+          <div className="w-9 h-9 rounded-xl liquid-glass-subcard border-t-[rgba(255,245,210,0.5)] border-[#DDB658]/40 flex items-center justify-center p-0.5 shadow-md shadow-black/80">
+            <svg className="w-5 h-5 text-[#F0D082] filter drop-shadow-[0_2px_4px_rgba(220,175,60,0.45)]" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.2" viewBox="0 0 24 24">
+              <polygon points="12 2 21.5 7.5 21.5 16.5 12 22 2.5 16.5 2.5 7.5 12 2"></polygon>
+              <path d="M8 8.5h8l-8 7h8" strokeWidth="2.4"></path>
+            </svg>
+          </div>
+          <div>
+            <h1 className="font-serif text-[17px] tracking-wide text-white font-semibold leading-tight">Zenith Ride</h1>
+            <p className="font-sans text-[8px] uppercase tracking-[0.24em] font-bold gold-gradient-text">PREMIUM MOBILITY</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          {typeof userRating === 'number' && (
-            <span className="text-[9px] font-black uppercase tracking-widest text-primary/70">
-              * {userRating.toFixed(1)}
-            </span>
-          )}
+        <div className="flex items-center space-x-1.5">
+          {/* Rating Pill (Glass Bubble) */}
+          <div className="liquid-glass-subcard flex flex-col items-center justify-center px-2 py-0.5 rounded-full border-t-white/30">
+            <div className="flex items-center space-x-1 text-[10.5px] font-bold text-white">
+              <span className="text-[#E8C268] text-[10px] filter drop-shadow-[0_0_4px_rgba(232,194,104,0.6)]">★</span>
+              <span>{typeof userRating === 'number' ? userRating.toFixed(1) : '5.0'}</span>
+            </div>
+            <span className="text-[6.5px] tracking-widest uppercase text-neutral-400 font-semibold">AVALIAÇÃO</span>
+          </div>
 
           <button
             onClick={onDataSaverToggle}
             title={dataSaver ? 'Modo dados activo' : 'Activar modo dados'}
-            className={`flex h-7 w-7 items-center justify-center rounded-full transition-all ${
-              dataSaver ? 'bg-primary/20 text-primary' : 'text-on-surface-variant'
+            className={`w-8 h-8 rounded-full liquid-glass-subcard flex items-center justify-center transition-all ${
+              dataSaver ? 'border-[#DDB658]/60 text-primary' : 'text-neutral-400 hover:text-white'
             }`}
           >
             <span
               className="material-symbols-outlined"
-              style={{ fontSize: 16, fontVariationSettings: dataSaver ? "'FILL' 1" : "'FILL' 0" }}
+              style={{ fontSize: 15, fontVariationSettings: dataSaver ? "'FILL' 1" : "'FILL' 0" }}
             >
               signal_cellular_alt
             </span>
@@ -93,13 +104,13 @@ const Layout: React.FC<LayoutProps> = ({
           <button
             onClick={onKazeSilentToggle}
             title={kazeSilent ? 'Kaze silenciado' : 'Kaze activo'}
-            className={`flex h-7 w-7 items-center justify-center rounded-full transition-all ${
-              kazeSilent ? 'text-on-surface-variant/40' : 'text-primary'
+            className={`w-8 h-8 rounded-full liquid-glass-subcard flex items-center justify-center transition-all ${
+              kazeSilent ? 'text-neutral-500' : 'text-primary'
             }`}
           >
             <span
               className="material-symbols-outlined"
-              style={{ fontSize: 16, fontVariationSettings: kazeSilent ? "'FILL' 0" : "'FILL' 1" }}
+              style={{ fontSize: 15, fontVariationSettings: kazeSilent ? "'FILL' 0" : "'FILL' 1" }}
             >
               smart_toy
             </span>
@@ -116,7 +127,7 @@ const Layout: React.FC<LayoutProps> = ({
       <DevQRCode />
 
       <nav className="zr-bottom-nav">
-        {tabs.map((tab) => {
+        {tabs.map((tab, idx) => {
           const active = location.pathname === TAB_ROUTES[tab];
           const labels: Record<TabType, string> = {
             home: 'Home',
@@ -128,19 +139,22 @@ const Layout: React.FC<LayoutProps> = ({
             precos: 'Preços',
             admin: 'Admin',
           };
+          const isCenter = !isFleetOwner && idx === 3;
           return (
-            <button
-              key={tab}
-              onClick={() => navigate(TAB_ROUTES[tab])}
-              className={`zr-nav-link ${active ? 'is-active' : ''}`}
-              aria-label={labels[tab]}
-              title={labels[tab]}
-            >
-              <span className="material-symbols-outlined">
-                {TAB_ICONS[tab]}
-              </span>
-              <span className="zr-nav-label">{labels[tab]}</span>
-            </button>
+            <React.Fragment key={tab}>
+              {isCenter && <div style={{ width: '56px', flexShrink: 0 }} aria-hidden="true" />}
+              <button
+                onClick={() => navigate(TAB_ROUTES[tab])}
+                className={`zr-nav-link ${active ? 'is-active' : ''}`}
+                aria-label={labels[tab]}
+                title={labels[tab]}
+              >
+                <span className="material-symbols-outlined">
+                  {TAB_ICONS[tab]}
+                </span>
+                <span className="zr-nav-label">{labels[tab]}</span>
+              </button>
+            </React.Fragment>
           );
         })}
       </nav>

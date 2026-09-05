@@ -157,6 +157,34 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     },
   });
 
+  // ── Sincronizar rota proposta pelo Kaze ou corrida ativa ──────────────────
+  useEffect(() => {
+    const handleSetRoute = (e: any) => {
+      const { pickup, pickupCoords: pCoords, dest, destCoords: dCoords } = e.detail || {};
+      if (pickup) setPickupName(pickup);
+      if (pCoords) setPickupCoords(pCoords);
+      if (dest) setDestName(dest);
+      if (dCoords) setDestCoords(dCoords);
+    };
+    window.addEventListener('zenith:set-route', handleSetRoute);
+    return () => window.removeEventListener('zenith:set-route', handleSetRoute);
+  }, []);
+
+  useEffect(() => {
+    if (ride.pickup && ride.pickup !== pickupName) {
+      setPickupName(ride.pickup);
+    }
+    if (ride.pickupCoords && (!pickupCoords || pickupCoords.lat !== ride.pickupCoords.lat || pickupCoords.lng !== ride.pickupCoords.lng)) {
+      setPickupCoords(ride.pickupCoords);
+    }
+    if (ride.destination && ride.destination !== destName) {
+      setDestName(ride.destination);
+    }
+    if (ride.destCoords && (!destCoords || destCoords.lat !== ride.destCoords.lat || destCoords.lng !== ride.destCoords.lng)) {
+      setDestCoords(ride.destCoords);
+    }
+  }, [ride.pickup, ride.pickupCoords, ride.destination, ride.destCoords]);
+
   // ── Quando destino muda: calcular ROTA REAL via Mapbox Directions ──────────
   useEffect(() => {
     if (!isVisible || !pickupCoords || !destCoords) {
@@ -691,8 +719,6 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           />
         )}
 
-        <div className="flex-1" />
-
         {/* Acções */}
         {!selecting && (
           <div className="space-y-4">
@@ -706,34 +732,126 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                 <FreePerkBanner userId={userId} />
 
                 {/* ── ZONA DE CONTRATOS E SERVIÇOS ── */}
-                <section className="zr-card">
-                  <div className="zr-inline zr-inline--between">
-                    <div>
-                      <p className="zr-kicker">Acesso rapido</p>
-                      <h2 className="zr-section-title">Overlays e modais do passageiro</h2>
-                    </div>
-                    <span className="material-symbols-outlined" style={{color:'var(--gold)'}}>widgets</span>
-                  </div>
+                <section className="liquid-glass-card rounded-[28px] p-5 relative overflow-hidden" data-purpose="quick-access">
+                  <span className="text-[9px] font-bold tracking-[0.26em] uppercase gold-gradient-text block">
+                    ACESSO RÁPIDO
+                  </span>
+                  <h2 className="font-serif text-[19px] text-white font-normal mt-0.5 mb-3.5">
+                    Tudo que precisas, rápido e fácil
+                  </h2>
                   <div className="zr-scroll-hint">
-                    <div className="zr-scroll-x" style={{ marginTop: '14px' }} ref={scrollRef}>
-                      <button className="zr-option" onClick={() => navigate('/contrato')}>
-                        <strong>Contratos</strong><span>Escolar, Familiar e Empresas</span>
-                      </button>
-                      <button className="zr-option" onClick={() => setShowReferral(true)}>
-                        <strong>Traz o Mano</strong><span>Ganha 500 Kz por convite</span>
-                      </button>
+                    <div
+                      ref={scrollRef}
+                      className="zr-scroll-x flex items-center space-x-2.5 overflow-x-auto pb-2 scrollbar-none"
+                      style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
+                    >
+                      {/* Contratos */}
                       <button
-                        className="zr-option"
+                        type="button"
+                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
+                        onClick={() => navigate('/contrato')}
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
+                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>description</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <p className="text-[11.5px] font-semibold text-white leading-tight">Contratos</p>
+                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Escolar e Empresas</p>
+                        </div>
+                      </button>
+
+                      {/* Traz o Mano */}
+                      <button
+                        type="button"
+                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
+                        onClick={() => setShowReferral(true)}
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
+                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>redeem</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <p className="text-[11.5px] font-semibold text-white leading-tight">Traz o Mano</p>
+                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Ganha 500 Kz</p>
+                        </div>
+                      </button>
+
+                      {/* Agendamentos */}
+                      <button
+                        type="button"
+                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
                         onClick={() => {
                           if (!ensureEmergencyContact('Define um contacto de emergência antes de agendar corridas.')) return;
                           setScheduleDefaults(null);
                           setShowSchedule(true);
                         }}
                       >
-                        <strong>Agendar</strong><span>Data, hora e recorrencia</span>
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
+                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>calendar_month</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <p className="text-[11.5px] font-semibold text-white leading-tight">Agendar</p>
+                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Data e hora</p>
+                        </div>
                       </button>
-                      <button className="zr-option" onClick={() => navigate('/pos_viagem_review')}>
-                        <strong>Pos-viagem</strong><span>Avaliacao e recibo</span>
+
+                      {/* Pós-viagem */}
+                      <button
+                        type="button"
+                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
+                        onClick={() => navigate('/pos_viagem_review')}
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
+                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>rate_review</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <p className="text-[11.5px] font-semibold text-white leading-tight">Pós-viagem</p>
+                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Avaliação e recibo</p>
+                        </div>
+                      </button>
+
+                      {/* Privado 24h */}
+                      <button
+                        type="button"
+                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
+                        onClick={() => setOpenPremiumService('private_driver')}
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
+                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>shield_person</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <p className="text-[11.5px] font-semibold text-white leading-tight">Privado 24h</p>
+                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Motorista dedicado</p>
+                        </div>
+                      </button>
+
+                      {/* Fretamento */}
+                      <button
+                        type="button"
+                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
+                        onClick={() => setOpenPremiumService('charter')}
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
+                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>directions_bus</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <p className="text-[11.5px] font-semibold text-white leading-tight">Fretamento</p>
+                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Viagens e vans</p>
+                        </div>
+                      </button>
+
+                      {/* Mercadorias */}
+                      <button
+                        type="button"
+                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
+                        onClick={() => setOpenPremiumService('cargo')}
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
+                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>inventory_2</span>
+                        </div>
+                        <div className="mt-1.5">
+                          <p className="text-[11.5px] font-semibold text-white leading-tight">Mercadorias</p>
+                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Cargas e entregas</p>
+                        </div>
                       </button>
                     </div>
                   </div>
@@ -779,8 +897,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               </div>
             )}
 
-            {/* Adicionado espaço livre para quando a doca inferior com o Kaze está presente */}
-            <div className="h-10" />
+            {/* Doca inferior e margem ajustada */}
           </div>
         )}
 

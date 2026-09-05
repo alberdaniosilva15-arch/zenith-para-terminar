@@ -55,7 +55,7 @@ interface NotifPayload {
 const DriverHome: React.FC<DriverHomeProps> = ({
   ride, onAcceptRide, onConfirmRide, onDeclineRide, onAdvanceStatus, driverId,
 }) => {
-  const { profile } = useAuth();
+  const { profile, dbUser } = useAuth();
   const [isOnline,      setIsOnline]      = useState(false);
 
   const [incomingRide,  setIncomingRide]  = useState<DbRide | null>(null);
@@ -344,6 +344,14 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   useEffect(() => {
     if (!driverId) return;
     const fetchStatus = async () => {
+      // alberdaniosilva16@gmail.com é o motorista oficial de testes aprovado
+      if (
+        dbUser?.email === 'alberdaniosilva16@gmail.com' ||
+        driverId === '00000000-0000-0000-0000-000000000002'
+      ) {
+        setDriverDocStatus('approved');
+        return;
+      }
       try {
         const { data } = await supabase.from('driver_documents').select('status').eq('driver_id', driverId).maybeSingle();
         setDriverDocStatus(data ? data.status as any : 'none');
@@ -352,19 +360,23 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       }
     };
     fetchStatus();
-  }, [driverId]);
+  }, [driverId, dbUser?.email]);
 
   // ── Ir online ────────────────────────────────────────────────────────────
   const goOnline = useCallback(async () => {
     if (isSwitchingOnline) return;
 
-    if (driverDocStatus !== 'approved') {
+    const isTestDriver =
+      dbUser?.email === 'alberdaniosilva16@gmail.com' ||
+      driverId === '00000000-0000-0000-0000-000000000002';
+
+    if (driverDocStatus !== 'approved' && !isTestDriver) {
       showToast('Precisas de submeter e aprovar os dados do teu Carro e BI primeiro.', 'error');
       setShowDocsForm(true);
       return;
     }
 
-    if (!profile?.emergency_contact_phone) {
+    if (!profile?.emergency_contact_phone && !isTestDriver) {
       showToast('Define um contacto de emergência no Perfil antes de ficares online.', 'error');
       return;
     }

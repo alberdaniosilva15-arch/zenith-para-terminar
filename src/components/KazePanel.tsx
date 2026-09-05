@@ -5,6 +5,7 @@ import ErrorBoundary from './ErrorBoundary';
 import { supabase } from '../lib/supabase';
 import { geminiService } from '../services/geminiService';
 import { kazeSpeakOnline } from '../lib/kazeVoice';
+import { transcribeAudioFlexible } from '../lib/kazeAudioTranscribe';
 
 // ── Tipos auxiliares ────────────────────────────────────────────────────────
 type AudioStats = {
@@ -36,86 +37,8 @@ type WindowWithWebkitAudioContext = Window & typeof globalThis & {
 
 type KazeChat = ReturnType<typeof geminiService.createHermesKazeChat>;
 
-async function transcribeDirectGroq(blob: Blob, apiKey: string): Promise<string> {
-  const formData = new FormData();
-  formData.append('file', blob, 'audio.webm');
-  formData.append('model', 'whisper-large-v3-turbo');
-  formData.append('language', 'pt');
-  formData.append('response_format', 'json');
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
-
-  try {
-    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: formData,
-      signal: controller.signal,
-    });
-    if (!res.ok) throw new Error(`Groq HTTP ${res.status}`);
-    const data = await res.json();
-    return data.text || '';
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-async function transcribeDirectGemini(blob: Blob, apiKey: string): Promise<string> {
-  const arrayBuffer = await blob.arrayBuffer();
-  let binary = '';
-  const bytes = new Uint8Array(arrayBuffer);
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i] ?? 0);
-  }
-  const base64Audio = btoa(binary);
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: 'Transcreve o áudio em português com máxima precisão. Retorna APENAS o texto falado.' },
-              {
-                inline_data: {
-                  mime_type: blob.type || 'audio/webm',
-                  data: base64Audio,
-                },
-              },
-            ],
-          },
-        ],
-      }),
-    }
-  );
-
-  if (!res.ok) throw new Error(`Gemini áudio HTTP ${res.status}`);
-  const data = await res.json();
-  return data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
-}
-
-async function transcribeAudioFlexible(blob: Blob): Promise<string> {
-  const groqKey = import.meta.env.VITE_GROQ_API_KEY;
-  if (groqKey) {
-    try {
-      const groqText = await transcribeDirectGroq(blob, groqKey);
-      if (groqText) return groqText;
-    } catch (e) {
-      console.warn('[KazePanel] Groq falhou, a tentar Gemini:', e);
-    }
-  }
-
-  const geminiKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (geminiKey) {
-    return await transcribeDirectGemini(blob, geminiKey);
-  }
-
-  throw new Error('Chave de IA para áudio indisponível.');
-}
+// Funções locais de transcrição removidas — usando módulo centralizado
+// kazeAudioTranscribe.ts com Groq Whisper prioritário + Gemini fallback
 
 const CALIB_MS = 2500;
 const GATE_RATIO = 2.5; // Reduzido para ouvir melhor a voz normal
@@ -598,7 +521,10 @@ export default function KazePanel() {
     const AudioContextCtor = window.AudioContext || (window as WindowWithWebkitAudioContext).webkitAudioContext;
     if (!AudioContextCtor) throw new Error('AudioContext indisponivel');
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false,
+    });
     const audioCtx = new AudioContextCtor();
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();

@@ -152,3 +152,192 @@
 .mapboxgl-canvas-container {
   background: #0f172a;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ZENITH RIDE — LIQUID GLASS LUXURY STYLES (MFUMU & CHAMPAGNE EDITION)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Metallic Champagne Gold Text Gradient */
+.gold-gradient-text {
+  background: linear-gradient(135deg, #FFF1CE 0%, #E6C268 35%, #BA8B26 70%, #F5DE9E 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* True 3D Tactile Liquid Glass Bubble Card */
+.liquid-glass-card {
+  position: relative;
+  background: radial-gradient(120% 120% at 50% -10%, rgba(255, 255, 255, 0.11) 0%, rgba(255, 255, 255, 0.02) 40%, rgba(13, 13, 16, 0.88) 90%);
+  backdrop-filter: blur(28px) saturate(190%);
+  -webkit-backdrop-filter: blur(28px) saturate(190%);
+  border-top: 1px solid rgba(255, 255, 255, 0.38);
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(212, 175, 55, 0.18);
+  box-shadow: 
+    0 24px 48px -12px rgba(0, 0, 0, 0.92),
+    0 8px 18px -6px rgba(0, 0, 0, 0.75),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.45),
+    inset 0 -1px 3px 0 rgba(0, 0, 0, 0.8),
+    inset 0 0 20px rgba(220, 180, 80, 0.06);
+}
+
+.liquid-glass-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.65) 50%, transparent 100%);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Liquid Glass Subcard (Capsule / Pill) */
+.liquid-glass-subcard {
+  position: relative;
+  background: radial-gradient(130% 120% at 50% 0%, rgba(255, 255, 255, 0.09) 0%, rgba(22, 22, 27, 0.72) 60%, rgba(10, 10, 13, 0.88) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid rgba(255, 255, 255, 0.28);
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.65);
+  box-shadow: 
+    0 8px 20px -4px rgba(0, 0, 0, 0.65),
+    inset 0 1px 1px rgba(255, 255, 255, 0.3),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.7);
+}
+
+/* Active State Liquid Glass Capsule */
+.liquid-glass-subcard-active {
+  position: relative;
+  background: radial-gradient(140% 130% at 50% -10%, rgba(245, 218, 142, 0.22) 0%, rgba(45, 33, 12, 0.75) 50%, rgba(16, 14, 10, 0.92) 100%);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border-top: 1px solid rgba(255, 240, 190, 0.6);
+  border-left: 1px solid rgba(220, 180, 80, 0.4);
+  border-right: 1px solid rgba(220, 180, 80, 0.2);
+  border-bottom: 1px solid rgba(130, 95, 20, 0.4);
+  box-shadow: 
+    0 10px 24px -5px rgba(200, 150, 40, 0.25),
+    inset 0 1px 2px rgba(255, 255, 255, 0.6),
+    inset 0 0 14px rgba(225, 185, 75, 0.15);
+}
+
+/* Rich Metallic Champagne CTA Button */
+.champagne-gold-cta {
+  position: relative;
+  background: linear-gradient(180deg, #FBE096 0%, #DCB354 42%, #B88924 75%, #926715 100%);
+  box-shadow: 
+    0 14px 30px -6px rgba(212, 170, 50, 0.5),
+    0 4px 12px rgba(0, 0, 0, 0.6),
+    inset 0 1.5px 1.5px rgba(255, 255, 255, 0.8),
+    inset 0 -2px 3px rgba(90, 60, 10, 0.6);
+  border-top: 1px solid rgba(255, 255, 255, 0.7);
+  border-bottom: 1px solid rgba(110, 80, 15, 0.8);
+  overflow: hidden;
+}
+
+.champagne-gold-cta::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 48%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.38) 0%, rgba(255, 255, 255, 0.04) 100%);
+  border-radius: 9999px 9999px 0 0;
+  pointer-events: none;
+}
+
+/* Luxury Car Backdrop Inside Card (Smooth, No Vertical Seams) */
+.car-backdrop-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: hidden;
+  border-radius: 28px;
+  z-index: 1;
+}
+
+.car-backdrop-img {
+  position: absolute;
+  right: -10px;
+  top: -12px;
+  width: 290px;
+  max-width: none;
+  height: auto;
+  object-fit: contain;
+  filter: contrast(1.15) saturate(1.1) brightness(0.95);
+  transform: rotate(-0.5deg);
+  mix-blend-mode: lighten;
+}
+
+.car-backdrop-gradient-left {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to right, rgba(4, 4, 6, 0.98) 0%, rgba(4, 4, 6, 0.92) 32%, rgba(4, 4, 6, 0.45) 62%, transparent 88%);
+}
+
+.car-backdrop-gradient-bottom {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 68%;
+  background: linear-gradient(to top, rgba(4, 4, 6, 0.99) 0%, rgba(4, 4, 6, 0.92) 45%, rgba(4, 4, 6, 0.35) 75%, transparent 100%);
+}
+
+.sheen-overlay {
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 45%,
+    rgba(255, 255, 255, 0.25) 50%,
+    rgba(255, 255, 255, 0.08) 55%,
+    transparent 100%
+  );
+  animation: sheenSweep 6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes sheenSweep {
+  0% { transform: translateX(-100%) rotate(25deg); }
+  100% { transform: translateX(200%) rotate(25deg); }
+}
+
+/* Liquid Glass Floating Bottom Dock */
+.liquid-glass-dock {
+  background: radial-gradient(150% 120% at 50% 0%, rgba(35, 35, 42, 0.92) 0%, rgba(10, 10, 13, 0.96) 80%);
+  backdrop-filter: blur(30px) saturate(200%);
+  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  border-top: 1px solid rgba(255, 255, 255, 0.28);
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.8);
+  box-shadow: 
+    0 -12px 36px rgba(0, 0, 0, 0.85),
+    inset 0 1px 1.5px rgba(255, 255, 255, 0.35),
+    inset 0 0 20px rgba(0, 0, 0, 0.7);
+}
+
+/* Jewel Bubble Center Emblem */
+.jewel-bubble-btn {
+  background: radial-gradient(circle at 35% 30%, #4D3B18 0%, #2A1F0B 50%, #0E0C07 100%);
+  box-shadow: 
+    0 0 28px rgba(225, 180, 60, 0.5),
+    0 8px 20px rgba(0, 0, 0, 0.8),
+    inset 0 1.5px 2px rgba(255, 245, 210, 0.7),
+    inset 0 -2px 3px rgba(0, 0, 0, 0.8);
+  border: 1px solid rgba(245, 215, 130, 0.7);
+}
+

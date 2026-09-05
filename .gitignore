@@ -135,3 +135,6 @@ dist-admin/
 KAZE_CORE_BACKUP.md
 
 .vercel
+dist-codex-kaze-audit/
+*.tsbuildinfo
+scratch_*

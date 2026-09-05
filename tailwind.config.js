@@ -54,6 +54,9 @@ export default {
         "primary-fixed-dim": "#e9c349"
       },
       fontFamily: {
+        serif: ['"Playfair Display"', 'Georgia', 'serif'],
+        cinzel: ['"Cinzel"', 'serif'],
+        sans: ['"Plus Jakarta Sans"', 'Inter', 'sans-serif'],
         headline: ['"Hanken Grotesk"', 'Georgia', 'serif'],
         "headline-xl": ["Hanken Grotesk"],
         "display-lg": ["Hanken Grotesk"],

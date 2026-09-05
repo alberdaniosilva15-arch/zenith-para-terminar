@@ -87,8 +87,8 @@ Deno.serve(async (req: Request) => {
     }
 
     // 2. Buscar perfis dos passageiros e motoristas envolvidos
-    const passengerIds = [...new Set(rides.map(r => r.passenger_id).filter(Boolean))];
-    const driverIds = [...new Set(rides.map(r => r.driver_id).filter(Boolean))] as string[];
+    const passengerIds = [...new Set((rides ?? []).map((r: any) => r.passenger_id).filter(Boolean))];
+    const driverIds = [...new Set((rides ?? []).map((r: any) => r.driver_id).filter(Boolean))] as string[];
 
     const allUserIds = [...new Set([...passengerIds, ...driverIds])];
 
@@ -97,27 +97,27 @@ Deno.serve(async (req: Request) => {
       .select('user_id, name, phone, emergency_contact_name, emergency_contact_phone')
       .in('user_id', allUserIds);
 
-    const profileMap = new Map(
-      (profiles ?? []).map(p => [p.user_id, p])
+    const profileMap = new Map<string, any>(
+      ((profiles ?? []) as any[]).map((p: any) => [p.user_id, p] as [string, any])
     );
 
     // 3. Verificar se já alertámos esta corrida (evitar spam)
-    const rideIds = rides.map(r => r.id);
+    const rideIds = (rides ?? []).map((r: any) => r.id);
     const { data: existingAlerts } = await admin
       .from('safety_watchdog_alerts')
       .select('ride_id')
       .in('ride_id', rideIds);
 
-    const alreadyAlerted = new Set((existingAlerts ?? []).map(a => a.ride_id));
+    const alreadyAlerted = new Set(((existingAlerts ?? []) as any[]).map((a: any) => a.ride_id));
 
     // 4. Enviar alertas
     let alertsSent = 0;
 
-    for (const ride of rides) {
+    for (const ride of (rides ?? []) as any[]) {
       if (alreadyAlerted.has(ride.id)) continue;
 
-      const passengerProfile = profileMap.get(ride.passenger_id);
-      const driverProfile = ride.driver_id ? profileMap.get(ride.driver_id) : null;
+      const passengerProfile = profileMap.get(ride.passenger_id) as any;
+      const driverProfile = ride.driver_id ? (profileMap.get(ride.driver_id) as any) : null;
 
       const passengerName = passengerProfile?.name ?? 'Passageiro';
       const driverName = driverProfile?.name ?? 'Motorista desconhecido';

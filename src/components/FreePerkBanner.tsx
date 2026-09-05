@@ -87,12 +87,17 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
   // ─── MODO CELEBRAÇÃO ────────────────────────────────────────────────────────
   if (celebrating) {
     return (
-      <section className="zr-card zr-card--success zr-pulse">
-        <div className="zr-inline zr-inline--between">
-          <div>
-            <p className="zr-kicker" style={{color: 'white'}}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>celebration</span> Parabéns!</p>
-            <h2 className="zr-section-title" style={{color: 'white'}}>5 km GRÁTIS!</h2>
-            <p className="zr-copy" style={{color: 'white'}}>Chegaste aos {Math.round(perk.km_total ?? 0)} km. A viagem fica por nossa conta!</p>
+      <section className="liquid-glass-card rounded-[28px] p-5 relative overflow-hidden" data-purpose="loyalty-card">
+        <div className="flex items-start justify-between relative z-10">
+          <div className="max-w-[70%]">
+            <span className="text-[9px] font-bold tracking-[0.26em] uppercase gold-gradient-text">PARABÉNS!</span>
+            <h2 className="font-serif text-[22px] font-normal text-white mt-1 leading-snug tracking-tight">5 km GRÁTIS!</h2>
+            <p className="text-[11.5px] text-neutral-300 mt-1.5 leading-relaxed font-normal">
+              Chegaste aos {Math.round(perk.km_total ?? 0)} km. A viagem fica por nossa conta!
+            </p>
+          </div>
+          <div className="w-16 h-16 rounded-full liquid-glass-subcard border-t-white/40 border-[#DDB658]/40 flex flex-col items-center justify-center shadow-2xl">
+            <span className="material-symbols-outlined text-[#F0D082] text-2xl">celebration</span>
           </div>
         </div>
       </section>
@@ -102,17 +107,40 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
   // ─── MODO FREE KM DISPONÍVEL ────────────────────────────────────────────────
   if (hasFreeKm) {
     return (
-      <section className="zr-card zr-card--success">
-        <div className="zr-inline zr-inline--between">
-          <div>
-            <p className="zr-kicker">Fidelidade Zenith</p>
-            <h2 className="zr-section-title">Tens {(perk.free_km_available ?? 0).toFixed(1)} km grátis</h2>
-            <p className="zr-copy">Aplicados automaticamente na proxima corrida urbana.</p>
+      <section className="liquid-glass-card rounded-[28px] p-5 relative overflow-hidden" data-purpose="loyalty-card">
+        <div className="flex items-start justify-between relative z-10">
+          <div className="max-w-[62%]">
+            <span className="text-[9px] font-bold tracking-[0.26em] uppercase gold-gradient-text">FIDELIDADE ZENITH</span>
+            <h2 className="font-serif text-[22px] font-normal text-white mt-1 leading-snug tracking-tight">Tens {(perk.free_km_available ?? 0).toFixed(1)} km grátis</h2>
+            <p className="text-[11.5px] text-neutral-400 mt-1.5 leading-relaxed font-normal">
+              Aplicados automaticamente na próxima corrida urbana.
+            </p>
           </div>
-          <span className="zr-chip zr-chip--success">Activo</span>
+          {/* Circular Liquid Glass Gauge */}
+          <div className="relative flex items-center justify-center w-24 h-24 -mt-1">
+            <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#DCB354]/25 to-transparent blur-md pointer-events-none" />
+            <div className="absolute inset-0 rounded-full border border-[#DDB658]/35 animate-pulse" />
+            <div className="absolute inset-1.5 rounded-full border border-white/10" />
+            <div className="w-16 h-16 rounded-full liquid-glass-subcard border-t-white/40 border-[#DDB658]/40 flex flex-col items-center justify-center shadow-2xl">
+              <span className="text-xl font-bold text-white tracking-tight leading-none filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                {(perk.free_km_available ?? 0).toFixed(0)}
+              </span>
+              <span className="text-[9px] uppercase tracking-wider text-[#E2C37A] mt-0.5 font-bold">km</span>
+            </div>
+          </div>
         </div>
-        <div className="zr-progress" style={{ marginTop: '14px' }}>
-          <div className="zr-progress-fill--success zr-progress-fill" style={{ width: '100%' }}></div>
+
+        {/* Progress Track */}
+        <div className="mt-4 pt-1 relative z-10">
+          <div className="w-full h-2.5 rounded-full bg-[#0d0d10] border-t border-black border-b border-white/10 overflow-hidden p-[1.5px] shadow-inner">
+            <div className="h-full rounded-full bg-gradient-to-r from-[#946F1C] via-[#E2C167] to-[#FFF3D1] w-full shadow-[0_0_14px_rgba(225,185,85,0.7)] relative">
+              <div className="absolute inset-x-0 top-0 h-[40%] bg-white/40 rounded-full" />
+              <div aria-hidden="true" className="sheen-overlay" />
+            </div>
+          </div>
+          <span className="block text-[10px] text-neutral-400 mt-2 font-medium">
+            Bónus de fidelidade activo
+          </span>
         </div>
       </section>
     );
@@ -120,20 +148,44 @@ const FreePerkBanner: React.FC<FreePerkBannerProps> = ({ userId }) => {
 
   // ─── MODO BARRA DE PROGRESSO ────────────────────────────────────────────────
   return (
-    <section className="zr-card zr-card--success">
-      <div className="zr-inline zr-inline--between">
-        <div>
-          <p className="zr-kicker">Fidelidade Zenith</p>
-          <h2 className="zr-section-title">Acumula km grátis</h2>
-          <p className="zr-copy">Faltam {Math.ceil(perk.km_to_next_perk ?? PERK_THRESHOLD)} km ate ao proximo bonus de 5 km.</p>
+    <section className="liquid-glass-card rounded-[28px] p-5 relative overflow-hidden" data-purpose="loyalty-card">
+      <div className="flex items-start justify-between relative z-10">
+        <div className="max-w-[62%]">
+          <span className="text-[9px] font-bold tracking-[0.26em] uppercase gold-gradient-text">FIDELIDADE ZENITH</span>
+          <h2 className="font-serif text-[22px] font-normal text-white mt-1 leading-snug tracking-tight">Acumula km grátis</h2>
+          <p className="text-[11.5px] text-neutral-400 mt-1.5 leading-relaxed font-normal">
+            Faltam {Math.ceil(perk.km_to_next_perk ?? PERK_THRESHOLD)} km até ao próximo bónus de 5 km.
+          </p>
+        </div>
+        {/* Circular Liquid Glass Gauge */}
+        <div className="relative flex items-center justify-center w-24 h-24 -mt-1">
+          <div className="absolute inset-0 rounded-full bg-gradient-to-r from-[#DCB354]/25 to-transparent blur-md pointer-events-none" />
+          <div className="absolute inset-0 rounded-full border border-[#DDB658]/35 animate-pulse" />
+          <div className="absolute inset-1.5 rounded-full border border-white/10" />
+          <div className="w-16 h-16 rounded-full liquid-glass-subcard border-t-white/40 border-[#DDB658]/40 flex flex-col items-center justify-center shadow-2xl">
+            <span className="text-2xl font-bold text-white tracking-tight leading-none filter drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+              {kmDone}
+            </span>
+            <span className="text-[9.5px] uppercase tracking-wider text-[#E2C37A] mt-0.5 font-bold">km</span>
+          </div>
         </div>
       </div>
-      <div className="zr-progress" style={{ marginTop: '14px' }}>
-        <div className="zr-progress-fill--success zr-progress-fill" style={{ width: `${progressPct}%` }}></div>
+
+      {/* Progress Track & Count */}
+      <div className="mt-4 pt-1 relative z-10">
+        <div className="w-full h-2.5 rounded-full bg-[#0d0d10] border-t border-black border-b border-white/10 overflow-hidden p-[1.5px] shadow-inner">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-[#946F1C] via-[#E2C167] to-[#FFF3D1] shadow-[0_0_14px_rgba(225,185,85,0.7)] relative transition-all duration-500"
+            style={{ width: `${Math.max(5, progressPct)}%` }}
+          >
+            <div className="absolute inset-x-0 top-0 h-[40%] bg-white/40 rounded-full" />
+            <div aria-hidden="true" className="sheen-overlay" />
+          </div>
+        </div>
+        <span className="block text-[10px] text-neutral-400 mt-2 font-medium">
+          {kmDone} / {PERK_THRESHOLD} km concluídos.
+        </span>
       </div>
-      <p className="zr-note" style={{ marginTop: '8px' }}>
-        {kmDone} / {PERK_THRESHOLD} km concluidos.
-      </p>
     </section>
   );
 };

@@ -18,11 +18,28 @@ import { getAiModelSettings } from '../lib/aiModelSettings';
 // =============================================================================
 const KAZE_LOCAL_RESPONSES: Array<{ patterns: RegExp[]; responses: string[] }> = [
   {
-    patterns: [/ol[aá]/i, /oi/i, /bom dia/i, /boa tarde/i, /boa noite/i, /hey/i, /epa/i],
+    patterns: [
+      /ol[aá]/i,
+      /oi/i,
+      /bom dia/i,
+      /boa tarde/i,
+      /boa noite/i,
+      /hey/i,
+      /epa/i,
+      /fala\s*(?:comigo|s[oó]|a[ií])?/i,
+      /conversa\s*comigo/i,
+      /diz\s*(?:l[aá]|a[ií]|algo|alguma coisa)?/i,
+      /t[aá]s\s*a[ií]/i,
+      /est[aá]s\s*a[ií]/i,
+      /como\s*est[aá]s/i,
+      /tudo\s*(?:bem|fixe|tranquilo|porreir[oa])/i,
+      /qual[eé]\s*a\s*boa/i,
+    ],
     responses: [
-      'Olá mano! Sou o Kaze, o teu assistente aqui no Zenith Ride. Como posso ajudar?',
-      'Epa, tudo fixe? O Kaze está aqui para te ajudar com a tua corrida em Luanda!',
-      'Boas! Diz-me o que precisas — estou pronto para te ajudar! 🚗',
+      'Força mano! Estou aqui na escuta. Diz lá, qual é a boa para hoje em Luanda? 🚗💨',
+      'Epa, tudo fixe por aqui! Estou 100% pronto. Queres dar uma volta pela cidade ou precisas de alguma informação?',
+      'Fala mano! O Kaze está atento e operacional. Para onde vamos hoje, ou o que queres saber?',
+      'Boas, parceiro! Tudo tranquilo deste lado. Diz só o que precisas que eu resolvo já!',
     ],
   },
   {
