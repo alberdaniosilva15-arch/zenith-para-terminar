@@ -214,12 +214,6 @@ const Login: React.FC = () => {
   };
 
   const handleGoogleAuth = async (targetRole: UserRole) => {
-    // Se o telemóvel estiver a aceder por IP local na rede Wi-Fi, o Google OAuth na nuvem não tem este IP e redireciona para a Vercel
-    if (window.location.hostname.includes('192.168.') || (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')) {
-      setError('Atenção: O Google OAuth na nuvem redireciona para a Vercel. No telemóvel, toca no botão dourado "⚡ Entrar Agora no Telemóvel" acima ou usa Email e Palavra-passe!');
-      return;
-    }
-
     setLoading(true);
     clearFeedback();
     const err = await signInWithGoogle(targetRole, readRedirectTarget() ?? undefined);
