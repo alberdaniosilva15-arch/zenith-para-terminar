@@ -55,32 +55,47 @@ const AvailableRidesList: React.FC<AvailableRidesListProps> = ({
 
   if (isAuctionRide) {
     return (
-      <div className="bg-surface-container-low border-2 border-primary p-8 rounded-[3.5rem] shadow-[0_40px_100px_rgba(230,195,100,0.1)] animate-in slide-in-from-bottom-20 duration-500">
-        <div className="flex items-center gap-3 mb-5">
-          <span className="material-symbols-outlined text-2xl">my_location</span>
+      <div className="liquid-glass-card border border-[#DCB354]/60 p-6 rounded-[28px] shadow-[0_20px_60px_rgba(220,179,84,0.18)] animate-in slide-in-from-bottom-5 duration-300 mt-3.5">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-9 h-9 rounded-xl bg-[#DCB354]/20 border border-[#DCB354]/40 flex items-center justify-center">
+            <span className="material-symbols-outlined text-[#F5DE9E] text-xl">star</span>
+          </div>
           <div>
-            <p className="text-[10px] font-black text-primary uppercase tracking-widest">Passageiro escolheu-te!</p>
-            <p className="text-[9px] text-on-surface-variant/70 font-bold">Confirma para começar a corrida</p>
+            <p className="text-[10px] font-black uppercase tracking-widest gold-gradient-text">Passageiro escolheu-te!</p>
+            <p className="text-[11px] text-neutral-300 font-medium">Confirma para iniciar a viagem</p>
           </div>
         </div>
-        <InfoRow icon="location_on" label="Origem"  value={incomingRide.origin_address} />
-        <InfoRow icon="flag" label="Destino" value={incomingRide.dest_address} />
-        <div className="flex gap-2 my-4">
-          <Pill label={`${incomingRide.price_kz.toLocaleString('pt-AO')} Kz`} blue />
-          {incomingRide.distance_km && <Pill label={`${incomingRide.distance_km.toFixed(1)} km`} />}
+
+        <div className="liquid-glass-subcard p-3.5 rounded-2xl border border-white/10 space-y-2 mb-4">
+          <InfoRow icon="location_on" label="Origem"  value={incomingRide.origin_address} />
+          <InfoRow icon="flag" label="Destino" value={incomingRide.dest_address} />
         </div>
-        <div className="grid grid-cols-2 gap-3 mt-4">
+
+        <div className="flex items-center gap-2 mb-4">
+          <span className="px-3 py-1.5 rounded-xl text-xs font-black bg-[#DCB354]/20 border border-[#DCB354]/50 text-[#F5DE9E]">
+            {incomingRide.price_kz.toLocaleString('pt-AO')} Kz
+          </span>
+          {incomingRide.distance_km && (
+            <span className="liquid-glass-subcard px-3 py-1.5 rounded-xl text-xs font-bold text-neutral-300 border border-white/10">
+              {incomingRide.distance_km.toFixed(1)} km
+            </span>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
           <button
+            type="button"
             onClick={onDeclineAuction}
             disabled={actionLoading}
-            className="py-5 rounded-3xl font-black text-[10px] uppercase bg-surface-container-low text-on-surface-variant hover:bg-surface-container transition-all disabled:opacity-60"
+            className="liquid-glass-subcard py-3.5 rounded-2xl font-bold text-xs uppercase tracking-wider text-neutral-400 hover:text-white border border-white/10 hover:border-red-400/40 transition disabled:opacity-50 cursor-pointer"
           >
             Recusar
           </button>
           <button
+            type="button"
             onClick={onConfirmAuction}
             disabled={actionLoading}
-            className="py-5 rounded-3xl font-black text-[10px] uppercase bg-primary text-white shadow-xl hover:bg-primary transition-all active:scale-95 disabled:opacity-60"
+            className="champagne-gold-cta py-3.5 rounded-2xl font-black text-xs uppercase tracking-wider text-black flex items-center justify-center gap-2 shadow-lg transition active:scale-95 disabled:opacity-50 cursor-pointer"
           >
             {actionLoading ? <Spinner /> : 'CONFIRMAR'}
           </button>
@@ -90,35 +105,51 @@ const AvailableRidesList: React.FC<AvailableRidesListProps> = ({
   }
 
   return (
-    <div className="bg-surface-container-low border-2 border-outline-variant p-8 rounded-[3.5rem] shadow-2xl animate-in slide-in-from-bottom-20 duration-500">
-      <div className="flex items-center gap-3 mb-5">
-        <div className="w-3 h-3 bg-primary rounded-full animate-ping" />
+    <div className="liquid-glass-card border border-[#DCB354]/50 p-6 rounded-[28px] shadow-[0_20px_60px_rgba(0,0,0,0.8)] animate-in slide-in-from-bottom-5 duration-300 mt-3.5">
+      <div className="flex items-center gap-3 mb-4">
+        <span className="relative flex h-3.5 w-3.5">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#DCB354] opacity-75"></span>
+          <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-[#DCB354]"></span>
+        </span>
         <div>
-          <p className="text-[10px] font-black text-primary uppercase tracking-widest">
-            Nova corrida disponível
+          <p className="text-[10px] font-black uppercase tracking-widest gold-gradient-text">
+            Nova Corrida Disponível
           </p>
-          <p className="text-[8px] text-on-surface-variant/60 font-bold uppercase">
-            Notificação persistente · não se perde
+          <p className="text-[11px] text-neutral-300 font-medium">
+            Passageiro aguarda confirmação
           </p>
         </div>
       </div>
-      <InfoRow icon="location_on" label="Origem"  value={incomingRide.origin_address} />
-      <InfoRow icon="flag" label="Destino" value={incomingRide.dest_address} />
-      <div className="flex gap-2 my-4">
-        <Pill label={`${incomingRide.price_kz.toLocaleString('pt-AO')} Kz`} blue />
-        {incomingRide.distance_km && <Pill label={`${incomingRide.distance_km.toFixed(1)} km`} />}
+
+      <div className="liquid-glass-subcard p-3.5 rounded-2xl border border-white/10 space-y-2 mb-4">
+        <InfoRow icon="location_on" label="Origem"  value={incomingRide.origin_address} />
+        <InfoRow icon="flag" label="Destino" value={incomingRide.dest_address} />
       </div>
+
+      <div className="flex items-center gap-2 mb-4">
+        <span className="px-3 py-1.5 rounded-xl text-xs font-black bg-[#DCB354]/20 border border-[#DCB354]/50 text-[#F5DE9E]">
+          {incomingRide.price_kz.toLocaleString('pt-AO')} Kz
+        </span>
+        {incomingRide.distance_km && (
+          <span className="liquid-glass-subcard px-3 py-1.5 rounded-xl text-xs font-bold text-neutral-300 border border-white/10">
+            {incomingRide.distance_km.toFixed(1)} km
+          </span>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 gap-3">
         <button
+          type="button"
           onClick={onIgnoreSearching}
-          className="py-5 rounded-3xl font-black text-[10px] uppercase bg-surface-container-low text-on-surface-variant hover:bg-surface-container transition-all"
+          className="liquid-glass-subcard py-3.5 rounded-2xl font-bold text-xs uppercase tracking-wider text-neutral-400 hover:text-white border border-white/10 hover:border-white/20 transition cursor-pointer"
         >
           Ignorar
         </button>
         <button
+          type="button"
           onClick={() => onAcceptSearching(incomingRide.id)}
           disabled={actionLoading}
-          className="py-5 rounded-3xl font-black text-[10px] uppercase bg-[#0A0A0A] text-white shadow-xl hover:bg-surface-container-highest transition-all active:scale-95 disabled:opacity-60"
+          className="champagne-gold-cta py-3.5 rounded-2xl font-black text-xs uppercase tracking-wider text-black flex items-center justify-center gap-2 shadow-lg transition active:scale-95 disabled:opacity-50 cursor-pointer"
         >
           {actionLoading ? <Spinner /> : 'ACEITAR'}
         </button>

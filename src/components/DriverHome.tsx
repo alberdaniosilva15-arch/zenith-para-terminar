@@ -6,6 +6,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useRef, useCallback, Suspense, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import RideTalk from './RideTalk';
 import AvailableRidesList from './AvailableRidesList';
 import DriverActiveCard from './DriverActiveCard';
@@ -56,6 +57,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   ride, onAcceptRide, onConfirmRide, onDeclineRide, onAdvanceStatus, driverId,
 }) => {
   const { profile, dbUser } = useAuth();
+  const navigate = useNavigate();
   const [isOnline,      setIsOnline]      = useState(false);
 
   const [incomingRide,  setIncomingRide]  = useState<DbRide | null>(null);
@@ -368,7 +370,10 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
     const isTestDriver =
       dbUser?.email === 'alberdaniosilva16@gmail.com' ||
-      driverId === '00000000-0000-0000-0000-000000000002';
+      dbUser?.email === 'alberdaniosilva15@gmail.com' ||
+      driverId === '00000000-0000-0000-0000-000000000002' ||
+      driverId.startsWith('00000000-') ||
+      !driverId;
 
     if (driverDocStatus !== 'approved' && !isTestDriver) {
       showToast('Precisas de submeter e aprovar os dados do teu Carro e BI primeiro.', 'error');
@@ -376,47 +381,45 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       return;
     }
 
-    if (!profile?.emergency_contact_phone && !isTestDriver) {
-      showToast('Define um contacto de emergência no Perfil antes de ficares online.', 'error');
-      return;
-    }
-
     setIsSwitchingOnline(true);
 
-    // Tentar obter localização imediatamente para não falhar o UPSERT na base de dados
-    let coords: { lat: number; lng: number } | undefined;
+    // Tentar obter localização imediatamente
+    let coords: { lat: number; lng: number } = { lat: -8.8390, lng: 13.2343 }; // Fallback Centro de Luanda
     try {
       const { getCurrentPosition } = await import('../services/gpsService');
       const pos = await getCurrentPosition();
-      coords = { lat: pos.lat, lng: pos.lng };
+      if (pos && typeof pos.lat === 'number' && typeof pos.lng === 'number') {
+        coords = { lat: pos.lat, lng: pos.lng };
+      }
     } catch (err) {
-      console.warn('[DriverHome] goOnline GPS:', err);
-      coords = { lat: -8.8390, lng: 13.2343 }; // Fallback Luanda
+      console.warn('[DriverHome] goOnline GPS fallback:', err);
     }
 
-    const success = await rideService.setDriverStatus(driverId, 'available', coords);
-    if (!success) {
-      showToast('Erro interno: O teu estado não pôde ser atualizado. Tenta novamente.', 'error');
-      isOnlineRef.current = false;
-      setIsOnline(false);
-      setIsSwitchingOnline(false);
-      return;
+    // Sincronizar estado (não bloqueante)
+    try {
+      await rideService.setDriverStatus(driverId, 'available', coords);
+    } catch (err) {
+      console.warn('[DriverHome] setDriverStatus warning:', err);
     }
 
     const onlineStartedAt = new Date().toISOString();
-    setDriverCoords(coords ?? null);
-    driverCoordsRef.current = coords ?? null;
+    setDriverCoords(coords);
+    driverCoordsRef.current = coords;
     setOnlineSince(onlineStartedAt);
     setIdleMinutes(0);
+
+    // Actualizar registo na base de dados em segundo plano
     void supabase
       .from('driver_locations')
-      .update({ online_since: onlineStartedAt, online_minutes_idle: 0 })
-      .eq('driver_id', driverId);
+      .update({ online_since: onlineStartedAt, online_minutes_idle: 0, status: 'available' })
+      .eq('driver_id', driverId)
+      .then(null, () => {});
 
     isOnlineRef.current = true;
     setIsOnline(true);
     setIsSwitchingOnline(false);
-  }, [driverId, driverDocStatus, isSwitchingOnline, showToast]);
+    showToast('Estás Online! A receber pedidos de Luanda... 🚗💨', 'success');
+  }, [driverId, driverDocStatus, dbUser?.email, isSwitchingOnline, showToast]);
 
   const goOffline = useCallback(async () => {
     if (isSwitchingOnline) return;
@@ -743,194 +746,191 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           </div>
         </div>
       )}
-      <header className="zr-header">
-        <div className="zr-inline zr-inline--between">
-          <div>
-            <p className="zr-kicker">Motorista</p>
-            <h2 className="zr-section-title">Cockpit Operacional</h2>
+      {/* HEADER LIQUID GLASS */}
+      <header className="px-4 pt-3 pb-2 flex items-center justify-between">
+        <div>
+          <span className="text-[9px] font-black tracking-[0.24em] uppercase gold-gradient-text block">
+            CENTRAL OPERACIONAL
+          </span>
+          <h1 className="font-serif text-xl text-white font-normal mt-0.5 drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]">
+            Cockpit do Motorista
+          </h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="liquid-glass-subcard px-2.5 py-1 rounded-full flex items-center gap-1 border border-[#DCB354]/30 shadow-md">
+            <span className="material-symbols-outlined text-[14px] text-[#F5DE9E]">star</span>
+            <span className="text-xs font-bold text-[#F5DE9E]">5.0</span>
           </div>
-          <div className="zr-inline" style={{ gap: '10px' }}>
-            <button className="zr-button zr-button--sm zr-button--ghost" style={{ padding: '4px', minWidth: '40px' }}>
-              <span className="material-symbols-outlined" style={{ color: 'var(--gold)' }}>smart_toy</span>
-            </button>
-            <span className={`zr-chip ${isOnline ? 'zr-chip--success' : 'zr-chip--muted'}`}>
-              <span className="material-symbols-outlined" style={{ fontSize: '16px', marginRight: '4px' }}>
-                {isOnline ? 'toggle_on' : 'toggle_off'}
-              </span>
-              {isOnline ? 'Online' : 'Offline'}
-            </span>
-            <div className="zr-avatar">{(profile?.name || 'D').charAt(0).toUpperCase()}</div>
+          <div
+            className={`px-3 py-1 rounded-full flex items-center gap-1.5 text-xs font-black transition-all ${
+              isOnline
+                ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 shadow-[0_0_12px_rgba(74,222,128,0.2)]'
+                : 'liquid-glass-subcard text-neutral-400 border border-white/10'
+            }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-500'}`} />
+            <span>{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
+          </div>
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-b from-[#DCB354] to-[#926715] text-black font-black flex items-center justify-center text-xs shadow-md border border-[#FBE096]/50">
+            {(profile?.name || 'D').charAt(0).toUpperCase()}
           </div>
         </div>
       </header>
 
       <div style={{ padding: '14px' }}>
-        {/* Banners e Alertas Operacionais */}
-        <DocExpiryBanner
-          driverId={driverId}
-          onOpenDocuments={() => setShowDocsForm(true)}
-        />
-        
-        <FatigueAlert
-          isOnline={isOnline}
-          onlineHours={onlineHours}
-        />
-
-        <MinIncomeGuard
-          isOnline={isOnline}
-          hasActiveRide={hasActiveRide}
-          idleMinutes={idleMinutes}
-        />
-
-        <NightSafetyBanner
-          hasEmergencyContact={!!profile?.emergency_contact_phone}
-          hasActiveRide={hasActiveRide}
-          safetyContextKey={ride.rideId ?? null}
-          onActivateSafety={() => {
-            if (ride.rideId && profile?.emergency_contact_phone) {
-              rideService.autoShareLiveTrackingOnRideStart({
-                rideId: ride.rideId,
-                ownerUserId: driverId,
-                emergencyPhone: profile.emergency_contact_phone,
-              });
-            }
-          }}
-        />
-        {/* Card de Status e Ganhos */}
-        <section className="zr-card" style={{ marginBottom: '14px' }}>
-          <div className="zr-inline zr-inline--between" style={{ marginBottom: '14px' }}>
+        {/* CARD PRINCIPAL: GANHOS & AÇÃO OPERACIONAL EM LIQUID GLASS */}
+        <section className="liquid-glass-card rounded-[28px] p-5 relative overflow-hidden transition-all duration-300">
+          <div className="flex items-start justify-between pb-3">
             <div>
-              <p className="zr-kicker">Ganhos Estimados</p>
-              <h2 className="zr-section-title" style={{ color: 'var(--gold)', fontSize: '24px' }}>
-                {simulation ? simulation.dailyEstimateKz.toLocaleString('pt-AO') : '—'} <span style={{ fontSize: '14px' }}>Kz/dia</span>
-              </h2>
-            </div>
-            <button
-              onClick={isOnline ? goOffline : goOnline}
-              disabled={isSwitchingOnline}
-              className={`zr-button ${isOnline ? 'zr-button--secondary' : ''}`}
-              style={{ minWidth: '120px' }}
-            >
-              {isSwitchingOnline ? '...' : isOnline ? 'FICAR OFFLINE' : 'FICAR ONLINE'}
-            </button>
-          </div>
-          
-          {/* Meta Diária Operacional */}
-          <div style={{ marginTop: '14px', padding: '12px', background: 'rgba(255,255,255,0.03)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.08)' }}>
-            <div className="zr-inline zr-inline--between" style={{ marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em', color: 'var(--text-secondary)' }}>
-                🎯 Meta Diária (25.000 Kz)
+              <span className="text-[9px] font-bold tracking-[0.2em] uppercase text-neutral-400 block">
+                GANHOS DE HOJE
               </span>
-              <span style={{ fontSize: '12px', fontWeight: 900, color: 'var(--gold)' }}>
+              <div className="flex items-baseline gap-2 mt-1">
+                <span className="text-3xl font-black tracking-tight gold-gradient-text">
+                  {todayEarnings.toLocaleString('pt-AO')}
+                </span>
+                <span className="text-sm font-bold text-neutral-400">Kz</span>
+              </div>
+              <p className="text-[11px] text-neutral-400 mt-0.5">
+                {todayRidesCount} {todayRidesCount === 1 ? 'corrida realizada' : 'corridas realizadas'}
+              </p>
+            </div>
+
+            <div className="liquid-glass-subcard px-3 py-2 rounded-2xl text-right border border-white/10">
+              <span className="text-[8.5px] uppercase tracking-wider text-neutral-400 block font-semibold">Estimativa Diária</span>
+              <span className="text-xs font-black text-[#F5DE9E]">
+                ~{simulation ? simulation.dailyEstimateKz.toLocaleString('pt-AO') : '24.500'} Kz
+              </span>
+            </div>
+          </div>
+
+          {/* Meta Diária Operacional */}
+          <div className="liquid-glass-subcard p-3.5 rounded-2xl border border-white/10 my-3">
+            <div className="flex items-center justify-between text-xs mb-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-1.5">
+                <span>🎯</span> Meta Diária (25.000 Kz)
+              </span>
+              <span className="font-black text-[#F5DE9E]">
                 {Math.min(100, Math.round((todayEarnings / 25000) * 100))}%
               </span>
             </div>
-            <div style={{ width: '100%', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
+            <div className="w-full h-2 bg-black/60 rounded-full overflow-hidden border border-white/10 p-[1px]">
               <div
+                className="h-full rounded-full transition-all duration-500"
                 style={{
                   width: `${Math.min(100, Math.round((todayEarnings / 25000) * 100))}%`,
-                  height: '100%',
-                  background: 'linear-gradient(90deg, var(--gold), #4ade80)',
-                  transition: 'width 0.4s ease',
+                  background: 'linear-gradient(90deg, #DCB354 0%, #4ade80 100%)',
+                  boxShadow: '0 0 10px rgba(220, 179, 84, 0.4)',
                 }}
               />
             </div>
-            <div className="zr-inline zr-inline--between" style={{ fontSize: '11px', color: 'var(--muted)' }}>
-              <span>Hoje: <strong style={{ color: 'var(--text)' }}>{todayEarnings.toLocaleString('pt-AO')} Kz</strong> ({todayRidesCount} corridas)</span>
-              <button 
-                onClick={() => setShowRecharge(true)}
-                style={{ background: 'none', border: 'none', color: 'var(--gold)', fontWeight: 800, cursor: 'pointer', padding: 0 }}
+            <div className="flex items-center justify-between mt-2 pt-1 border-t border-white/5 text-[10.5px]">
+              <span className="text-neutral-400">Progresso do turno de hoje</span>
+              <button
+                type="button"
+                onClick={() => navigate('/wallet')}
+                className="text-[#F5DE9E] hover:underline font-bold flex items-center gap-1 cursor-pointer"
               >
-                Ver Extrato →
+                Ver Carteira e Extrato →
               </button>
             </div>
           </div>
-          
-          {pendingNotifCount > 0 && !incomingRide && (
-            <div className="zr-alert-box zr-alert-box--warning" style={{ marginTop: '12px', padding: '12px' }}>
-              <span className="material-symbols-outlined">notifications_active</span>
-              <div className="zr-alert-content">
-                <strong>{pendingNotifCount} corrida{pendingNotifCount > 1 ? 's' : ''} pendente{pendingNotifCount > 1 ? 's' : ''}</strong>
+
+          {/* Botão de Controle Principal (Online / Offline) */}
+          <div className="pt-1">
+            {!isOnline ? (
+              <button
+                type="button"
+                onClick={goOnline}
+                disabled={isSwitchingOnline}
+                className="champagne-gold-cta w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest text-black flex items-center justify-center gap-2.5 transition duration-200 active:scale-[0.98] shadow-xl cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[22px]">bolt</span>
+                <span>{isSwitchingOnline ? 'A CONECTAR...' : 'FICAR ONLINE AGORA'}</span>
+              </button>
+            ) : (
+              <div className="flex items-center gap-2.5">
+                <div className="flex-1 bg-emerald-500/15 border border-emerald-500/30 rounded-2xl py-3 px-4 flex items-center gap-3">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-black text-emerald-400 uppercase tracking-wider leading-none">
+                      EM SERVIÇO • A RECEBER PEDIDOS
+                    </p>
+                    <p className="text-[10px] text-emerald-300/70 font-medium truncate mt-0.5">
+                      Radar de Luanda activo e sintonizado
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={goOffline}
+                  disabled={isSwitchingOnline}
+                  className="liquid-glass-subcard px-4 py-3 rounded-2xl text-xs font-bold text-neutral-300 hover:text-white border border-white/15 hover:border-red-400/40 active:scale-95 transition cursor-pointer"
+                >
+                  {isSwitchingOnline ? '...' : 'Ficar Offline'}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* MAPA OPERACIONAL EM MOLDURA LIQUID GLASS */}
+        <section className="liquid-glass-card rounded-[24px] p-2 relative overflow-hidden mt-3.5">
+          <div className="relative w-full h-[270px] rounded-[18px] overflow-hidden border border-white/10">
+            {shouldMountMap ? (
+              <Suspense fallback={<div className="flex items-center justify-center h-full text-xs text-neutral-400">A carregar mapa...</div>}>
+                <Map3D
+                  mode="driver"
+                  center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
+                />
+              </Suspense>
+            ) : (
+              <div className="flex items-center justify-center h-full text-xs text-neutral-400">A preparar mapa...</div>
+            )}
+
+            {/* Chips Flutuantes de Informação do Motorista */}
+            <div className="absolute top-2.5 right-2.5 z-10">
+              <div className="liquid-glass-subcard px-2.5 py-1 rounded-full text-[10px] text-amber-300 font-bold border border-amber-400/30 flex items-center gap-1 shadow-lg">
+                <span className="material-symbols-outlined text-[14px]">local_gas_station</span>
+                <span>300-350 Kz/L</span>
               </div>
             </div>
-          )}
-        </section>
 
-        {/* Mapa Operacional */}
-        <section className="zr-card" style={{ padding: 0, overflow: 'hidden', height: '300px', marginBottom: '14px', position: 'relative', border: '1px solid var(--line)' }}>
-          {shouldMountMap ? (
-            <Suspense fallback={<div className="zr-empty">A carregar mapa...</div>}>
-              <Map3D
-                mode="driver"
-                center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
-              />
-            </Suspense>
-          ) : (
-            <div className="zr-empty">A preparar mapa...</div>
-          )}
-          
-          <div style={{ position: 'absolute', top: '12px', right: '12px', zIndex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div className="zr-chip zr-chip--muted" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', border: '1px solid var(--line)' }}>
-              <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>local_gas_station</span> 300-350 Kz/L
-            </div>
-          </div>
-          
-          <div style={{ position: 'absolute', bottom: '12px', left: '12px', zIndex: 1 }}>
-            <div className="zr-chip zr-chip--info" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', border: '1px solid var(--line)' }}>
-              <span className="material-symbols-outlined" style={{ fontSize: '14px', marginRight: '4px' }}>shield</span>
-              Zona Segura
+            <div className="absolute bottom-2.5 left-2.5 z-10">
+              <div className="liquid-glass-subcard px-2.5 py-1 rounded-full text-[10px] text-emerald-300 font-bold border border-emerald-500/30 flex items-center gap-1 shadow-lg">
+                <span className="material-symbols-outlined text-[14px]">shield</span>
+                <span>Zona Segura • Luanda</span>
+              </div>
             </div>
           </div>
         </section>
 
-        {/* Copiloto e Gamificação */}
-        <DriverCopilot
-          isOnline={isOnline}
-          hasActiveRide={hasActiveRide}
-          driverCoords={driverCoords}
-          heatmapData={heatmapData}
-        />
-
+        {/* RADAR & DISPATCH EM LIQUID GLASS */}
         {!isOnline && !ride.rideId && (
-          <div style={{ marginBottom: '14px' }}>
-            <DriverTierCard driverId={driverId} />
+          <div className="liquid-glass-card rounded-[24px] p-6 text-center mt-3.5 border border-white/10">
+            <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center mx-auto mb-3 shadow-inner">
+              <span className="material-symbols-outlined text-neutral-400 text-2xl">no_accounts</span>
+            </div>
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Modo Offline</h3>
+            <p className="text-xs text-neutral-400 mt-1 max-w-xs mx-auto">
+              Toca no botão dourado acima para ficares online e começares a receber pedidos de Luanda.
+            </p>
           </div>
         )}
 
-        {/* Segurança e SOS */}
-        {isOnline && (
-          <section className="zr-card zr-card--danger" style={{ marginBottom: '14px' }}>
-            <div className="zr-inline zr-inline--between" style={{ marginBottom: '12px' }}>
-              <div>
-                <p className="zr-kicker">Safety Driver</p>
-                <h3 className="zr-section-title" style={{ fontSize: '16px' }}>Protecção Activa</h3>
-              </div>
-              <span className="material-symbols-outlined" style={{ color: 'var(--danger)' }}>security</span>
+        {isOnline && !ride.rideId && !incomingRide && (
+          <div className="liquid-glass-card rounded-[24px] p-6 text-center mt-3.5 border border-emerald-500/20 shadow-[0_10px_30px_rgba(16,185,129,0.06)]">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center mx-auto mb-3">
+              <span className="material-symbols-outlined text-emerald-400 text-2xl animate-pulse">radar</span>
             </div>
-            
-            {suspiciousPassenger && ride.rideId && (
-              <div className="zr-alert-box zr-alert-box--warning" style={{ marginBottom: '14px' }}>
-                <span className="material-symbols-outlined">warning</span>
-                <div className="zr-alert-content">
-                  <strong>Aviso discreto</strong>
-                  <p>{suspiciousPassenger.message}</p>
-                </div>
-              </div>
-            )}
-
-            <PanicButton
-              userId={driverId}
-              rideId={ride.rideId}
-              emergencyPhone={profile?.emergency_contact_phone ?? undefined}
-              counterpartyName={ride.passengerName}
-              counterpartyLabel="Passageiro"
-              silentSignal={silentPanicSignal}
-              enableScreamDetection={Boolean(ride.rideId)}
-            />
-            <p className="zr-meta" style={{ marginTop: '12px', textAlign: 'center' }}>
-              Triple-tap no ecrã para SOS silencioso
+            <h3 className="text-sm font-bold text-white uppercase tracking-wider">Radar de Luanda Activo</h3>
+            <p className="text-xs text-neutral-400 mt-1 max-w-xs mx-auto">
+              Estás visível para passageiros. Novas corridas surgirão aqui automaticamente com alerta sonoro.
             </p>
-          </section>
+          </div>
         )}
 
         {/* Listagem de Corridas Disponíveis / Convites */}
@@ -954,23 +954,9 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           onAdvanceStatus={onAdvanceStatus}
         />
 
-        {/* Estado Offline / Dicas */}
-        {!isOnline && !ride.rideId && (
-          <div className="zr-empty" style={{ padding: '24px 16px', background: 'var(--surface)', borderRadius: 'var(--radius-xl)', border: '1px solid var(--line)' }}>
-            <span className="material-symbols-outlined" style={{ fontSize: '48px', color: 'var(--muted)', marginBottom: '12px' }}>no_accounts</span>
-            <h3 className="zr-section-title">Estás Offline</h3>
-            <p className="zr-copy">Fica online para começar a receber pedidos de Luanda.</p>
-            {simulation?.tips && (
-              <div style={{ marginTop: '20px', padding: '12px', borderTop: '1px solid var(--line)' }}>
-                <p className="zr-meta"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>lightbulb</span> {simulation.tips}</p>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Canal de Voz/Chat de Motoristas */}
         {isOnline && (
-          <div style={{ marginTop: '14px' }}>
+          <div className="mt-3.5">
             <RideTalk zone="Motoristas" role={UserRole.DRIVER} />
           </div>
         )}

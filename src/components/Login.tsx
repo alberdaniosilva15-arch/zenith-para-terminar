@@ -369,41 +369,11 @@ const Login: React.FC = () => {
                     </button>
                   </div>
                   <div className="zr-stack" style={{ marginTop: '16px' }}>
-
-                    {/* BOTÃO DE ACESSO DIRETO NO TELEMÓVEL (SEM PASSAR PELA VERCEL) */}
-                    <button
-                      type="button"
-                      onClick={() => signInAsLocalGuest(authRole || UserRole.PASSENGER, authRole === UserRole.DRIVER ? 'alberdaniosilva16' : 'alberdaniosilva15')}
-                      className="zr-button zr-button--block font-bold text-sm"
-                      style={{
-                        background: 'linear-gradient(135deg, #e6c364, #b48c36)',
-                        color: '#000',
-                        padding: '14px',
-                        borderRadius: '12px',
-                        boxShadow: '0 6px 20px rgba(230,195,100,0.35)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '8px',
-                        marginBottom: '8px',
-                        border: 'none',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      <span className="material-symbols-outlined" style={{ fontSize: '22px' }}>
-                        {authRole === UserRole.DRIVER ? 'local_taxi' : 'bolt'}
-                      </span>
-                      <span>
-                        {authRole === UserRole.DRIVER
-                          ? '⚡ Entrar como Motorista Aprovado (alberdaniosilva16)'
-                          : '⚡ Entrar Agora no Telemóvel (Sem Vercel)'}
-                      </span>
-                    </button>
                     <div>
                       <label className="zr-label">Email</label>
                       <input
                         className="zr-input"
-                        placeholder={authRole === UserRole.DRIVER ? 'alberdaniosilva16@gmail.com' : 'alberdaniosilva15@gmail.com'}
+                        placeholder="o.teu.email@exemplo.com"
                         value={email}
                         onChange={e => setEmail(e.target.value)}
                       />
