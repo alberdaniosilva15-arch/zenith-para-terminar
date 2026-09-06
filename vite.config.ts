@@ -52,6 +52,7 @@ function zenithDevQrPlugin() {
 export default defineConfig({
   appType: 'spa',
   cacheDir: 'node_modules/.vite-app',
+  envPrefix: ['VITE_', 'GEMINI_', 'GROQ_', 'OPENAI_', 'OPENROUTER_', 'RESEND_'],
   plugins: [react(), zenithDevQrPlugin()],
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },

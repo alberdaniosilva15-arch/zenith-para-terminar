@@ -33,8 +33,9 @@ export const PROVIDERS: Array<{ id: AiProvider; label: string; needsBaseUrl?: bo
 
 export const DEFAULT_MODELS_BY_PROVIDER: Record<AiProvider, AiModelOption[]> = {
   google: [
-    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-    { id: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { id: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
+    { id: 'gemini-1.5-flash', label: 'Gemini 1.5 Flash' },
+    { id: 'gemini-1.5-pro', label: 'Gemini 1.5 Pro' },
   ],
   openai: [
     { id: 'gpt-4o', label: 'GPT-4o' },
@@ -50,7 +51,8 @@ export const DEFAULT_MODELS_BY_PROVIDER: Record<AiProvider, AiModelOption[]> = {
     { id: 'openai/gpt-4o-mini', label: 'OpenRouter GPT-4o Mini' },
   ],
   groq: [
-    { id: 'llama-3.1-8b-instant', label: 'Llama 3.1 8B Instant' },
+    { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (Groq)' },
+    { id: 'qwen/qwen3.8-27b', label: 'Qwen 3.8 27B (Groq)' },
   ],
   custom: [
     { id: 'gpt-4o-mini', label: 'Modelo padrao' },
@@ -75,7 +77,7 @@ export function setStored(key: string, value: string) {
 
 export function normalizeProvider(value: string | null | undefined): AiProvider {
   const provider = String(value || '').toLowerCase();
-  return PROVIDERS.some((entry) => entry.id === provider) ? (provider as AiProvider) : 'google';
+  return PROVIDERS.some((entry) => entry.id === provider) ? (provider as AiProvider) : 'groq';
 }
 
 export function getDefaultModel(provider: AiProvider) {
@@ -92,12 +94,12 @@ export function getProviderBaseUrl(provider: AiProvider, storedBaseUrl = '') {
 }
 
 export function getAiModelSettings(): AiModelSettings {
-  const provider = normalizeProvider(getStored(LS_IA_PROVIDER, 'openrouter'));
+  const provider = normalizeProvider(getStored(LS_IA_PROVIDER, 'groq'));
   let model = getStored(LS_IA_MODEL, getDefaultModel(provider)) || getDefaultModel(provider);
   
   // Re-map deprecated models to avoid 404
-  if (model.includes('gemini-1.5-pro') || model.includes('gemini-2.0')) model = 'gemini-2.5-pro';
-  if (model.includes('gemini-1.5-flash')) model = 'gemini-2.5-flash';
+  if (model.includes('gemini-1.5-pro') || model.includes('gemini-2.5-pro')) model = 'gemini-1.5-pro';
+  if (model.includes('gemini-1.5-flash') || model.includes('gemini-2.5-flash')) model = 'gemini-2.0-flash';
 
   // Fallback se o modelo armazenado já não existir na lista do provider
   const availableModels = DEFAULT_MODELS_BY_PROVIDER[provider] || [];
@@ -105,24 +107,38 @@ export function getAiModelSettings(): AiModelSettings {
     model = getDefaultModel(provider);
   }
 
+  const effectiveKey = (
+    (provider === 'groq' ? (import.meta.env.VITE_GROQ_API_KEY || (import.meta.env as any).GROQ_API_KEY) : null) ||
+    (provider === 'google' ? (import.meta.env.VITE_GEMINI_API_KEY || (import.meta.env as any).GEMINI_API_KEY) : null) ||
+    import.meta.env.VITE_GROQ_API_KEY ||
+    (import.meta.env as any).GROQ_API_KEY ||
+    import.meta.env.VITE_GEMINI_API_KEY ||
+    (import.meta.env as any).GEMINI_API_KEY ||
+    import.meta.env.VITE_IA_API_KEY ||
+    ''
+  ).trim();
+
   return {
     provider,
     model,
-    apiKey: (import.meta.env.VITE_IA_API_KEY ?? '').trim(),
+    apiKey: effectiveKey,
     baseUrl: getProviderBaseUrl(provider, getStored(LS_IA_BASE_URL)),
   };
 }
 
 export function buildKazeApiKeys(settings = getAiModelSettings()) {
-  if (!settings.apiKey) return {};
+  const groqKey = (import.meta.env.VITE_GROQ_API_KEY || (import.meta.env as any).GROQ_API_KEY || '').trim();
+  const geminiKey = (import.meta.env.VITE_GEMINI_API_KEY || (import.meta.env as any).GEMINI_API_KEY || '').trim();
+  const iaKey = (import.meta.env.VITE_IA_API_KEY || (import.meta.env as any).OPENROUTER_API_KEY || '').trim();
+
   return {
     [settings.provider]: settings.apiKey,
-    gemini: settings.provider === 'google' ? settings.apiKey : undefined,
-    google: settings.provider === 'google' ? settings.apiKey : undefined,
+    gemini: geminiKey || (settings.provider === 'google' ? settings.apiKey : undefined),
+    google: geminiKey || (settings.provider === 'google' ? settings.apiKey : undefined),
+    groq: groqKey || (settings.provider === 'groq' ? settings.apiKey : undefined),
+    openrouter: iaKey || (settings.provider === 'openrouter' ? settings.apiKey : undefined),
     openai: settings.provider === 'openai' ? settings.apiKey : undefined,
     anthropic: settings.provider === 'anthropic' ? settings.apiKey : undefined,
-    openrouter: settings.provider === 'openrouter' ? settings.apiKey : undefined,
-    groq: settings.provider === 'groq' ? settings.apiKey : undefined,
     custom: settings.provider === 'custom' ? settings.apiKey : undefined,
   };
 }

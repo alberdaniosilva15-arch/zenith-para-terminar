@@ -414,58 +414,144 @@ Centro/Mutamba, Maianga, Ingombota, Ilha do Cabo, Miramar, Alvalade, Talatona, K
 • Emergência: Polícia 113 | Bombeiros 115 | Ambulância 112
 • Botão de pânico disponível durante a corrida`;
 
-const FRONTEND_GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+const FRONTEND_GROQ_KEY = (
+  import.meta.env.VITE_GROQ_API_KEY ||
+  (import.meta.env as any).GROQ_API_KEY ||
+  ''
+).trim();
+
+const FRONTEND_GEMINI_KEY = (
+  import.meta.env.VITE_GEMINI_API_KEY ||
+  (import.meta.env as any).GEMINI_API_KEY ||
+  ''
+).trim();
+
+const FRONTEND_IA_KEY = (
+  import.meta.env.VITE_IA_API_KEY ||
+  (import.meta.env as any).OPENROUTER_API_KEY ||
+  ''
+).trim();
 
 async function callDirectGeminiChat(
   message: string,
   history: ChatMessage[],
   context?: any
 ): Promise<string> {
-  if (!FRONTEND_GEMINI_KEY) {
-    throw new Error('VITE_GEMINI_API_KEY indisponível');
-  }
-
   let finalPreamble = KAZE_SYSTEM_PROMPT;
   if (context) {
     finalPreamble += `\n\n--- DADOS OMNISCIENTES DO UTILIZADOR ---\n${JSON.stringify(context, null, 2).slice(0, 2000)}\n(Usa estes dados se fizer sentido na conversa).`;
   }
 
-  const contents = [
-    ...history.map(h => ({
-      role: h.role === 'model' ? 'model' : 'user',
-      parts: [{ text: h.content }],
-    })),
-    {
-      role: 'user',
-      parts: [{ text: message }],
-    },
-  ];
+  // 1. Motor Groq (ultra-rápido < 300ms, disponível imediatamente)
+  if (FRONTEND_GROQ_KEY) {
+    const groqModels = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'];
+    for (const model of groqModels) {
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${FRONTEND_GROQ_KEY}`,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.7,
+            max_tokens: 600,
+            messages: [
+              { role: 'system', content: finalPreamble },
+              ...history.map(h => ({
+                role: h.role === 'model' ? 'assistant' : 'user',
+                content: h.content,
+              })),
+              { role: 'user', content: message },
+            ],
+          }),
+        });
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${FRONTEND_GEMINI_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: finalPreamble }] },
-        contents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 600,
-        },
-      }),
+        if (res.ok) {
+          const data = await res.json();
+          const text = data?.choices?.[0]?.message?.content?.trim();
+          if (text) return text;
+        }
+      } catch (e) {
+        console.warn(`[geminiService] Groq ${model} falhou:`, e);
+      }
     }
-  );
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => '');
-    throw new Error(`Direct Gemini error (${res.status}): ${errorText}`);
   }
 
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-  if (!text) throw new Error('Resposta vazia do Gemini');
-  return text;
+  // 2. Motor Google Gemini
+  if (FRONTEND_GEMINI_KEY) {
+    const geminiModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+    const contents = [
+      ...history.map(h => ({
+        role: h.role === 'model' ? 'model' : 'user',
+        parts: [{ text: h.content }],
+      })),
+      { role: 'user', parts: [{ text: message }] },
+    ];
+
+    for (const model of geminiModels) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${FRONTEND_GEMINI_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system_instruction: { parts: [{ text: finalPreamble }] },
+              contents,
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 600,
+              },
+            }),
+          }
+        );
+
+        if (res.ok) {
+          const data = await res.json();
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (text) return text;
+        }
+      } catch (e) {
+        console.warn(`[geminiService] Gemini ${model} falhou:`, e);
+      }
+    }
+  }
+
+  // 3. Motor OpenRouter
+  if (FRONTEND_IA_KEY) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${FRONTEND_IA_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'meta-llama/llama-3.3-70b-instruct',
+          messages: [
+            { role: 'system', content: finalPreamble },
+            ...history.map(h => ({
+              role: h.role === 'model' ? 'assistant' : 'user',
+              content: h.content,
+            })),
+            { role: 'user', content: message },
+          ],
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const text = data?.choices?.[0]?.message?.content?.trim();
+        if (text) return text;
+      }
+    } catch (e) {
+      console.warn('[geminiService] OpenRouter falhou:', e);
+    }
+  }
+
+  throw new Error('Chaves de IA indisponíveis ou esgotadas.');
 }
 
 const JARVIS_SECRETARY_SYSTEM_PROMPT = `Tu és o KAZE — a Inteligência Artificial central, JARVIS Executivo e Secretário Geral da Zenith Ride em Luanda, Angola.
@@ -495,51 +581,89 @@ async function callDirectJarvisChat(
   history: Array<{ role: 'user' | 'ai'; text: string }>,
   context?: any
 ): Promise<string> {
-  if (!FRONTEND_GEMINI_KEY) {
-    throw new Error('VITE_GEMINI_API_KEY indisponível');
-  }
-
   let finalPreamble = JARVIS_SECRETARY_SYSTEM_PROMPT;
   if (context) {
     finalPreamble += `\n\n--- DADOS OMNISCIENTES DO SISTEMA EM TEMPO REAL ---\n${JSON.stringify(context, null, 2).slice(0, 3000)}\n(Usa estes dados se fizer sentido na conversa).`;
   }
 
-  const contents = [
-    ...history.map(h => ({
-      role: h.role === 'ai' ? 'model' : 'user',
-      parts: [{ text: h.text }],
-    })),
-    {
-      role: 'user',
-      parts: [{ text: message }],
-    },
-  ];
+  // 1. Motor Groq (ultra-rápido)
+  if (FRONTEND_GROQ_KEY) {
+    const groqModels = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'];
+    for (const model of groqModels) {
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${FRONTEND_GROQ_KEY}`,
+          },
+          body: JSON.stringify({
+            model,
+            temperature: 0.7,
+            max_tokens: 800,
+            messages: [
+              { role: 'system', content: finalPreamble },
+              ...history.map(h => ({
+                role: h.role === 'ai' ? 'assistant' : 'user',
+                content: h.text,
+              })),
+              { role: 'user', content: message },
+            ],
+          }),
+        });
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${FRONTEND_GEMINI_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: finalPreamble }] },
-        contents,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 800,
-        },
-      }),
+        if (res.ok) {
+          const data = await res.json();
+          const text = data?.choices?.[0]?.message?.content?.trim();
+          if (text) return text;
+        }
+      } catch (e) {
+        console.warn(`[geminiService] Jarvis Groq ${model} falhou:`, e);
+      }
     }
-  );
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => '');
-    throw new Error(`Direct Gemini error (${res.status}): ${errorText}`);
   }
 
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-  if (!text) throw new Error('Resposta vazia do Gemini JARVIS');
-  return text;
+  // 2. Motor Google Gemini
+  if (FRONTEND_GEMINI_KEY) {
+    const geminiModels = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+    const contents = [
+      ...history.map(h => ({
+        role: h.role === 'ai' ? 'model' : 'user',
+        parts: [{ text: h.text }],
+      })),
+      { role: 'user', parts: [{ text: message }] },
+    ];
+
+    for (const model of geminiModels) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${FRONTEND_GEMINI_KEY}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              system_instruction: { parts: [{ text: finalPreamble }] },
+              contents,
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 800,
+              },
+            }),
+          }
+        );
+
+        if (res.ok) {
+          const data = await res.json();
+          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (text) return text;
+        }
+      } catch (e) {
+        console.warn(`[geminiService] Jarvis Gemini ${model} falhou:`, e);
+      }
+    }
+  }
+
+  throw new Error('Chaves de IA Jarvis indisponíveis ou esgotadas.');
 }
 
 export const geminiService = {
