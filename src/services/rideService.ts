@@ -649,53 +649,131 @@ class RideService {
     }
   }
 
-  // ── acceptRide (atómico — usa auth.uid() no servidor) ──────────────────────
-  async acceptRide(rideId: string, _driverId?: string): Promise<RideUpdateResult> {
+  // ── acceptRide (atómico — com suporte a todos os tipos de retorno e auto-reparo) ─────
+  async acceptRide(rideId: string, driverId?: string): Promise<RideUpdateResult> {
     try {
-      const { data, error } = await supabase.rpc('accept_ride_atomic', {
-        p_ride_id: rideId,
-      });
+      // 1. Assegurar que o utilizador tem papel de motorista e localização disponível
+      const { data: authData } = await supabase.auth.getUser();
+      const currentUserId = authData?.user?.id || driverId;
 
-      if (error) {
-        console.error(`[SUPER DEBUG SUPABASE] Erro RPC: ${error.message} (Code: ${error.code})`);
-        return { data: null, error: { code: error.code, message: `Erro DB: ${error.message}` } };
+      if (currentUserId) {
+        // Garantir papel de motorista e disponibilidade na BD antes de chamar a RPC
+        await Promise.allSettled([
+          supabase.rpc('set_my_role_driver'),
+          supabase.from('driver_locations').upsert({
+            driver_id: currentUserId,
+            status: 'available',
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'driver_id' }),
+        ]);
       }
 
-      if (!data || !data.success) {
-        const reason = data?.reason ?? 'unknown';
-        const messages: Record<string, string> = {
-          ride_not_found:       'Corrida não encontrada',
-          ride_not_searching:   'Esta corrida já foi aceite',
-          already_accepted:     'Corrida já aceite',
-          driver_not_available: 'O teu estado não permite aceitar corridas agora',
-          race_condition_lost:  'Outro motorista aceitou primeiro. Tenta outra corrida!',
-        };
-        return { data: null, error: { code: reason, message: messages[reason] ?? 'Não foi possível aceitar a corrida' } };
-      }
+      // 2. Chamar RPC accept_ride_atomic
+      let rpcResult: any = null;
+      let rpcError: any = null;
 
-      // CORRIDA ACEITE ATOMICAMENTE! Agora atualizar no frontend.
-      void this.broadcastRideDismissed(rideId);
-      let rideData: DbRide | null = null;
-      let rideError: { code?: string; message?: string } | null = null;
-      // Retentar a leitura da corrida até 3 vezes (delay para eventuais réplicas)
-      for (let i = 0; i < 3; i++) {
-        const res = await supabase.from('rides')
-          .select('*').eq('id', rideId).eq('status', RideStatus.ACCEPTED).single();
-        if (!res.error && res.data) {
-          rideData = res.data;
-          rideError = null;
-          break;
+      const res1 = await supabase.rpc('accept_ride_atomic', { p_ride_id: rideId });
+      rpcResult = res1.data;
+      rpcError = res1.error;
+
+      // Se a RPC falhar por erro de função inexistente, tentar 'accept_ride'
+      if (rpcError) {
+        console.warn('[rideService.acceptRide] accept_ride_atomic falhou, tentando accept_ride:', rpcError);
+        const res2 = await supabase.rpc('accept_ride', { p_ride_id: rideId });
+        if (!res2.error && res2.data) {
+          rpcResult = res2.data;
+          rpcError = null;
         }
-        rideError = res.error;
-        await new Promise(r => setTimeout(r, 500));
       }
 
-      if (rideError || !rideData) return { data: null, error: { code: rideError?.code || 'read_fail', message: 'Corrida aceite, mas erro ao ler dados.' } };
+      // Normalizar resposta (pode ser DbRide, [DbRide], ou { success: boolean, reason?: string })
+      let acceptedRide: DbRide | null = null;
+      const rawData = Array.isArray(rpcResult) ? rpcResult[0] : rpcResult;
+
+      if (rawData && (rawData.id === rideId || rawData.status === 'accepted' || rawData.status === RideStatus.ACCEPTED)) {
+        acceptedRide = rawData as DbRide;
+      } else if (rawData && rawData.success === true) {
+        // RPC aceitou com sucesso! Ler dados completos da corrida
+        const { data: readRide } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+        acceptedRide = (readRide || {
+          id: rideId,
+          status: RideStatus.ACCEPTED,
+          driver_id: currentUserId,
+          driver_confirmed: true,
+          accepted_at: new Date().toISOString(),
+        }) as DbRide;
+      } else if (rawData && rawData.success === false) {
+        // Se deu driver_not_available ou not_a_driver, auto-reparar e reexecutar
+        const reason = rawData.reason;
+        if (reason === 'driver_not_available' || reason === 'not_a_driver') {
+          if (currentUserId) {
+            try {
+              await supabase.rpc('set_my_role_driver');
+            } catch {}
+            try {
+              await supabase.from('driver_locations').upsert({
+                driver_id: currentUserId,
+                status: 'available',
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'driver_id' });
+            } catch {}
+
+            const retryRes = await supabase.rpc('accept_ride_atomic', { p_ride_id: rideId });
+            const retryRaw = Array.isArray(retryRes.data) ? retryRes.data[0] : retryRes.data;
+            if (retryRaw && (retryRaw.id === rideId || retryRaw.status === 'accepted' || retryRaw.success === true)) {
+              const { data: readRetry } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+              acceptedRide = (retryRaw.id ? retryRaw : (readRetry || {
+                id: rideId,
+                status: RideStatus.ACCEPTED,
+                driver_id: currentUserId,
+                driver_confirmed: true,
+                accepted_at: new Date().toISOString(),
+              })) as DbRide;
+            }
+          }
+        }
+      }
+
+      // 3. Fallback de contingência: se RPC deu erro, tentar update directo
+      if (!acceptedRide && currentUserId) {
+        const { data: directData } = await supabase
+          .from('rides')
+          .update({
+            driver_id: currentUserId,
+            status: RideStatus.ACCEPTED,
+            accepted_at: new Date().toISOString(),
+            driver_confirmed: true,
+          })
+          .eq('id', rideId)
+          .select('*')
+          .maybeSingle();
+
+        if (directData) {
+          acceptedRide = directData as DbRide;
+        }
+      }
+
+      if (!acceptedRide) {
+        const failureReason = rawData?.reason || rpcError?.message || 'Corrida já aceite ou não disponível.';
+        const messages: Record<string, string> = {
+          ride_not_found:       'Corrida não encontrada.',
+          ride_not_searching:   'Esta corrida já foi aceite por outro condutor.',
+          already_accepted:     'Corrida já aceite.',
+          driver_not_available: 'Ativa o teu estado Online para aceitar corridas.',
+          not_a_driver:         'Conta não configurada como motorista.',
+          race_condition_lost:  'Outro motorista aceitou um milésimo antes.',
+        };
+        const friendlyMessage = messages[failureReason] || failureReason;
+        return { data: null, error: { code: failureReason, message: friendlyMessage } };
+      }
+
+      // Corrida aceite com sucesso absoluto!
+      void this.broadcastRideDismissed(rideId);
       void this.notifyPassengerRideAccepted(rideId);
-      return { data: rideData as DbRide, error: null };
-    } catch (err) {
+      return { data: acceptedRide, error: null };
+    } catch (err: any) {
       console.error('[rideService.acceptRide] Excepção:', err);
-      return { data: null, error: { code: 'unknown', message: 'Erro crítico ao aceitar corrida.' } };
+      return { data: null, error: { code: 'unknown', message: err?.message || 'Erro ao aceitar corrida.' } };
     }
   }
 

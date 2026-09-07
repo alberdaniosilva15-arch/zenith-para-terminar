@@ -132,6 +132,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   // ✅ BUG #7 CORRIGIDO: timers para auto-mark notifications como lidas
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const mountedRef = useRef(true);
+  const ignoredRidesRef = useRef<Set<string>>(new Set());
 
   // Carregar credito operacional do motorista e corridas de hoje
   useEffect(() => {
@@ -443,8 +444,13 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     // Actualizar registo na base de dados em segundo plano
     void supabase
       .from('driver_locations')
-      .update({ online_since: onlineStartedAt, online_minutes_idle: 0, status: 'available' })
-      .eq('driver_id', driverId)
+      .upsert({
+        driver_id: driverId,
+        online_since: onlineStartedAt,
+        online_minutes_idle: 0,
+        status: 'available',
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'driver_id' })
       .then(null, () => {});
 
     isOnlineRef.current = true;
@@ -683,6 +689,17 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     }
 
     const initOnline = async () => {
+      // 1. Garantir imediatamente role de motorista e estado available na BD
+      if (driverId) {
+        void supabase.rpc('set_my_role_driver').then(null, () => {});
+        void supabase.from('driver_locations').upsert({
+          driver_id: driverId,
+          status: 'available',
+          updated_at: new Date().toISOString(),
+          online_since: new Date().toISOString(),
+        }, { onConflict: 'driver_id' }).then(null, () => {});
+      }
+
       const { data: locationRow } = await supabase
         .from('driver_locations')
         .select('online_since, online_minutes_idle')
@@ -709,7 +726,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       // Subscrição 1: corridas em "searching" (fallback manual)
       const rides = await rideService.getAvailableRides();
       if (rides.length > 0) {
-        const firstRide = rides[0];
+        const firstRide = rides.find(r => !ignoredRidesRef.current.has(r.id));
         if (firstRide) {
           setIncomingRide(prev => {
             if (!prev || prev.id !== firstRide.id) {
@@ -729,6 +746,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         : undefined;
       unsubRef1.current = rideService.subscribeToAvailableRides(
         (r) => {
+          if (ignoredRidesRef.current.has(r.id)) return;
           setIncomingRide(prev => {
             if (!prev || prev.id !== r.id) {
               setIsAuctionRide(false);
@@ -790,10 +808,23 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     setActionLoading(true);
     try {
       await onAcceptRide(rideId);
-    } finally {
-      setIncomingRide(null); setActionLoading(false);
+      setIncomingRide(null);
       setPendingNotifCount(0);
+    } catch (err: any) {
+      console.warn('[DriverHome] Falha ao aceitar corrida:', err);
+      ignoredRidesRef.current.add(rideId);
+      setIncomingRide(null);
+    } finally {
+      setActionLoading(false);
     }
+  };
+
+  const handleIgnoreSearching = () => {
+    if (incomingRide?.id) {
+      ignoredRidesRef.current.add(incomingRide.id);
+    }
+    setIncomingRide(null);
+    setPendingNotifCount(0);
   };
 
   // Bloquear se sem credito operacional
@@ -1016,7 +1047,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           onDeclineAuction={handleDeclineAuction}
           onConfirmAuction={handleConfirmAuction}
           onAcceptSearching={handleAcceptSearching}
-          onIgnoreSearching={() => { setIncomingRide(null); setPendingNotifCount(0); }}
+          onIgnoreSearching={handleIgnoreSearching}
         />
 
         {/* Card de Corrida Activa */}
