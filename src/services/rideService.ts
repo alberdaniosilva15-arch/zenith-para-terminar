@@ -446,6 +446,7 @@ class RideService {
         if (import.meta.env.DEV) {
           console.debug('[rideService.createRide] Corrida criada atomicamente:', (data as DbRide).id);
         }
+        void this.broadcastNewAvailableRide(data as DbRide);
         return { data: data as DbRide, error: null };
       }
 
@@ -482,6 +483,7 @@ class RideService {
       if (import.meta.env.DEV) {
         console.debug('[rideService.createRide] Corrida criada:', (data as DbRide).id);
       }
+      void this.broadcastNewAvailableRide(data as DbRide);
       void this.triggerDriverWhatsAppFallback((data as DbRide).id);
       return { data: data as DbRide, error: null };
     } catch (err) {
@@ -519,6 +521,33 @@ class RideService {
       }
     } catch (error) {
       console.warn('[rideService.triggerDriverWhatsAppFallback] Excepção:', error);
+    }
+  }
+
+  // ── Realtime Broadcast de Despacho Imediato (< 300ms) ──────────────────────
+  async broadcastNewAvailableRide(ride: DbRide): Promise<void> {
+    try {
+      const channel = supabase.channel('zenith-available-rides');
+      await channel.send({
+        type: 'broadcast',
+        event: 'new_available_ride',
+        payload: ride,
+      });
+    } catch (err) {
+      console.warn('[rideService.broadcastNewAvailableRide] Broadcast warning:', err);
+    }
+  }
+
+  async broadcastRideDismissed(rideId: string): Promise<void> {
+    try {
+      const channel = supabase.channel('zenith-available-rides');
+      await channel.send({
+        type: 'broadcast',
+        event: 'dismiss_available_ride',
+        payload: { id: rideId },
+      });
+    } catch (err) {
+      console.warn('[rideService.broadcastRideDismissed] Broadcast warning:', err);
     }
   }
 
@@ -645,6 +674,7 @@ class RideService {
       }
 
       // CORRIDA ACEITE ATOMICAMENTE! Agora atualizar no frontend.
+      void this.broadcastRideDismissed(rideId);
       let rideData: DbRide | null = null;
       let rideError: { code?: string; message?: string } | null = null;
       // Retentar a leitura da corrida até 3 vezes (delay para eventuais réplicas)
@@ -871,7 +901,10 @@ class RideService {
       }
 
       const result = (data as Array<{ success: boolean; message: string; reason?: string }>)?.[0];
-      if (result?.success) return null;
+      if (result?.success) {
+        void this.broadcastRideDismissed(rideId);
+        return null;
+      }
       return { code: 'cancel_denied', message: result?.message ?? result?.reason ?? 'Não foi possível cancelar.' };
     } catch (err) {
       console.error('[rideService.cancelRide] Excepção:', err);
@@ -910,9 +943,19 @@ class RideService {
   async getAvailableRides(): Promise<DbRide[]> {
     try {
       const { data, error } = await supabase.rpc('get_searching_rides');
-      if (error) { 
-        console.error('[rideService.getAvailableRides]', error); 
-        return []; 
+      if (!error && data && Array.isArray(data) && data.length > 0) { 
+        return data as DbRide[]; 
+      }
+      // Fallback resiliente: tentar leitura de corridas disponíveis
+      const { data: directRides } = await supabase
+        .from('rides')
+        .select('*')
+        .eq('status', RideStatus.SEARCHING)
+        .is('driver_id', null)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (directRides && directRides.length > 0) {
+        return directRides as DbRide[];
       }
       return (data ?? []) as DbRide[];
     } catch (err) { 
@@ -977,63 +1020,79 @@ class RideService {
     return () => { if (this.rideChannel) { supabase.removeChannel(this.rideChannel); this.rideChannel = null; } };
   }
 
-  // ── FIX RLS LOTE 1: Polling Adaptativo para Corridas Disponíveis ─────────
-  // Substitui WebSockets porque policies RLS não expõem "searching" via SELECT.
-  // Novo comportamento: Intervalo adaptativo de 5s a 10s c/ backoff inteligente.
+  // ── FIX v3.6: Broadcast Realtime + Polling Rápido Resiliente ─────────────
+  // Combina WebSockets Realtime broadcast para entrega instantânea (< 300ms)
+  // com Polling a cada 3s como fallback inabalável.
   subscribeToAvailableRides(
     onNew:  (r: DbRide) => void,
     onGone: (id: string) => void,
-    _driverH3Cells?: string[], // H3 ignorado nesta versão puramente opaca do RPC
+    _driverH3Cells?: string[],
   ): () => void {
     let isActive = true;
     let timerId: ReturnType<typeof setTimeout> | null = null;
-    let backoffMultiplier = 1;
     let knownRideIds = new Set<string>();
+
+    // 1. Canal Realtime Broadcast: entrega instantânea em < 300ms
+    const broadcastChannel = supabase.channel('zenith-available-rides')
+      .on('broadcast', { event: 'new_available_ride' }, (payload) => {
+        const r = payload.payload as DbRide;
+        if (r && r.id && !knownRideIds.has(r.id)) {
+          knownRideIds.add(r.id);
+          if (import.meta.env.DEV) {
+            console.debug('[rideService.broadcast] Nova corrida recebida via Realtime:', r.id);
+          }
+          onNew(r);
+        }
+      })
+      .on('broadcast', { event: 'dismiss_available_ride' }, (payload) => {
+        const { id } = (payload.payload ?? {}) as { id: string };
+        if (id && knownRideIds.has(id)) {
+          knownRideIds.delete(id);
+          onGone(id);
+        }
+      })
+      .subscribe();
+
+    // 2. Polling de contingência a cada 3s
     const poll = async () => {
       if (!isActive) return;
       try {
-        const { data, error } = await supabase.rpc('get_searching_rides');
+        const currentRides = await this.getAvailableRides();
+        const currentIds = new Set(currentRides.map(r => r.id));
         
-        if (error) {
-          console.warn('[rideService.polling] RPC erro:', error.message);
-          backoffMultiplier = Math.min(backoffMultiplier * 1.5, 4); // Abrandar perante erro
-        } else if (data) {
-          backoffMultiplier = 1;
-          const currentRides = data as DbRide[];
-          const currentIds = new Set(currentRides.map(r => r.id));
-          // Publicar novas corridas para a UI
-          for (const ride of currentRides) {
-            if (!knownRideIds.has(ride.id)) {
-              if (import.meta.env.DEV) {
-                console.debug('[rideService.polling] Nova corrida recebida via RPC:', ride.id);
-              }
-              onNew(ride);
+        // Publicar novas corridas para a UI
+        for (const ride of currentRides) {
+          if (!knownRideIds.has(ride.id)) {
+            knownRideIds.add(ride.id);
+            if (import.meta.env.DEV) {
+              console.debug('[rideService.polling] Nova corrida recebida via Polling:', ride.id);
             }
+            onNew(ride);
           }
-          // Retirar os cartões das corridas que já foram aceites ou canceladas
-          for (const id of knownRideIds) {
-            if (!currentIds.has(id)) {
-              onGone(id);
-            }
+        }
+        // Retirar os cartões das corridas que já foram aceites ou canceladas
+        for (const id of Array.from(knownRideIds)) {
+          if (!currentIds.has(id)) {
+            knownRideIds.delete(id);
+            onGone(id);
           }
-          knownRideIds = currentIds;
         }
       } catch (err) {
         console.warn('[rideService.polling] Network Error:', err);
-        backoffMultiplier = Math.min(backoffMultiplier * 1.5, 4);
       }
       if (isActive) {
-        // Dinâmico: 5 segundos nos momentos de paz, escalando para 10-20 em congestionamento
-        const nextInterval = 5000 * backoffMultiplier;
-        timerId = setTimeout(poll, nextInterval);
+        timerId = setTimeout(poll, 3000);
       }
     };
-    // Arranque inicial do ciclo
+
+    // Arranque inicial do ciclo de polling
     poll();
+
     // Cleanup: chamado quando o motorista desliga (Ficar Offline)
     return () => {
       isActive = false;
       if (timerId) clearTimeout(timerId);
+      supabase.removeChannel(broadcastChannel);
     };
   }
 

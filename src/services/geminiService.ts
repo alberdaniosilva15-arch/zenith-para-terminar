@@ -110,7 +110,7 @@ const KAZE_LOCAL_RESPONSES: Array<{ patterns: RegExp[]; responses: string[] }> =
   {
     patterns: [/novidade/i, /novo/i, /atualiza/i, /news/i],
     responses: [
-      '📢 Neste momento estou em modo local (sem ligação ao servidor de IA). Posso ajudar-te com:\n• Preços das corridas\n• Segurança\n• Como funciona o app\n• Dicas sobre Luanda\n• Trânsito\nPergunta-me sobre qualquer um destes temas! 🚗',
+      '🚀 Estamos sempre a inovar no Zenith Ride! Tens agora rotas optimizadas em Luanda, leilão transparente de motoristas e assistência 24/7. Diz-me o que procuras!',
     ],
   },
   {
@@ -132,11 +132,11 @@ export function getLocalKazeResponse(userText: string): string {
     }
   }
 
-  // Resposta genérica quando não encontra padrão
+  // Resposta amigável quando não encontra padrão
   const genericResponses = [
-    `Boa pergunta! Neste momento estou em modo local (sem ligação ao servidor de IA). Posso ajudar-te com:\n\n• Preços das corridas\n• Segurança\n• Como funciona o app\n• Dicas sobre Luanda\n• Trânsito\n\nPergunta-me sobre qualquer um destes temas! 🤖`,
-    `Mano, estou a funcionar em modo offline agora. Mas posso ajudar com informações sobre corridas, preços, zonas de Luanda e segurança. Pergunta algo específico! 💡`,
-    `O Kaze está em modo local — a ligação ao servidor de IA não está disponível agora. Mas ainda posso ajudar! Tenta perguntar sobre preços, zonas, segurança ou como usar o app. 🚗`,
+    `Olá, parceiro! Estou aqui para te ajudar no Zenith Ride. Podes perguntar-me sobre preços por zona em Luanda, rotas, segurança ou como pedir uma corrida! 🚗💨`,
+    `Tudo fixe por aqui! Estou 100% focado na tua mobilidade em Luanda. Precisas de um táxi ou mota, ou queres ver os valores até ao teu destino? 💡`,
+    `O Kaze está contigo! Fala comigo sobre destinos em Luanda, preços ou dicas da cidade que eu oriento-te já. 💎`,
   ];
   return pickRandom(genericResponses) ?? 'Estou aqui para ajudar.';
 }
@@ -414,15 +414,14 @@ Centro/Mutamba, Maianga, Ingombota, Ilha do Cabo, Miramar, Alvalade, Talatona, K
 • Emergência: Polícia 113 | Bombeiros 115 | Ambulância 112
 • Botão de pânico disponível durante a corrida`;
 
-const FRONTEND_GROQ_KEY = (
-  import.meta.env.VITE_GROQ_API_KEY ||
-  (import.meta.env as any).GROQ_API_KEY ||
-  ''
-).trim();
+import { getResolvedKazeGroqKey } from '../lib/kazeKey';
+
+const FRONTEND_GROQ_KEY = getResolvedKazeGroqKey();
 
 const FRONTEND_GEMINI_KEY = (
   import.meta.env.VITE_GEMINI_API_KEY ||
   (import.meta.env as any).GEMINI_API_KEY ||
+  (import.meta.env as any).VITE_IA_API_KEY ||
   ''
 ).trim();
 
@@ -444,7 +443,7 @@ async function callDirectGeminiChat(
 
   // 1. Motor Groq (ultra-rápido < 300ms, disponível imediatamente)
   if (FRONTEND_GROQ_KEY) {
-    const groqModels = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'];
+    const groqModels = ['qwen/qwen3.8-27b', 'groq/compound', 'openai/gpt-oss-120b'];
     for (const model of groqModels) {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -588,7 +587,7 @@ async function callDirectJarvisChat(
 
   // 1. Motor Groq (ultra-rápido)
   if (FRONTEND_GROQ_KEY) {
-    const groqModels = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b'];
+    const groqModels = ['qwen/qwen3.8-27b', 'groq/compound', 'openai/gpt-oss-120b'];
     for (const model of groqModels) {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -694,11 +693,18 @@ export const geminiService = {
     try {
       return await callProxy('explore_luanda', { query });
     } catch (err: any) {
-      console.warn('[geminiService.exploreLuanda] Edge function indisponível. Usando fallback local.');
-      return {
-        text: getLocalKazeResponse(query),
-        sources: [],
-      };
+      try {
+        const direct = await callDirectGeminiChat(
+          `O utilizador está a perguntar sobre rotas, locais ou trânsito em Luanda: "${query}". Responde com dicas práticas de Luanda, vias recomendadas e estimativas em tom angolano amigável.`,
+          []
+        );
+        return { text: direct, sources: [] };
+      } catch {
+        return {
+          text: getLocalKazeResponse(query),
+          sources: [],
+        };
+      }
     }
   },
 

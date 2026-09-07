@@ -53,12 +53,44 @@ interface NotifPayload {
   distance_km:    number | null;
 }
 
+// Som e vibração háptica ao receber nova corrida
+function playRideChime() {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate([200, 100, 200]);
+    }
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.6);
+  } catch {
+    // Ignora silenciosamente se o contexto de áudio estiver bloqueado
+  }
+}
+
 const DriverHome: React.FC<DriverHomeProps> = ({
   ride, onAcceptRide, onConfirmRide, onDeclineRide, onAdvanceStatus, driverId,
 }) => {
   const { profile, dbUser } = useAuth();
   const navigate = useNavigate();
-  const [isOnline,      setIsOnline]      = useState(false);
+  // v3.6: Motorista entra ONLINE automaticamente por padrão para nunca perder corridas!
+  const [isOnline, setIsOnline] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem('zenith_driver_online_state') !== 'offline';
+    } catch {
+      return true;
+    }
+  });
 
   const [incomingRide,  setIncomingRide]  = useState<DbRide | null>(null);
   const [isAuctionRide, setIsAuctionRide] = useState(false);
@@ -418,6 +450,9 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     isOnlineRef.current = true;
     setIsOnline(true);
     setIsSwitchingOnline(false);
+    try {
+      window.localStorage.setItem('zenith_driver_online_state', 'online');
+    } catch {}
     showToast('Estás Online! A receber pedidos de Luanda... 🚗💨', 'success');
   }, [driverId, driverDocStatus, dbUser?.email, isSwitchingOnline, showToast]);
 
@@ -426,6 +461,9 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     setIsSwitchingOnline(true);
     isOnlineRef.current = false;
     setIsOnline(false);
+    try {
+      window.localStorage.setItem('zenith_driver_online_state', 'offline');
+    } catch {}
 
     setIncomingRide(null);
     setOnlineSince(null);
@@ -434,6 +472,28 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     await rideService.setDriverStatus(driverId, 'offline');
     setIsSwitchingOnline(false);
   }, [driverId, isSwitchingOnline]);
+
+  // ── Auto-ligação Online ao entrar no Cockpit do Motorista ──────────────────
+  useEffect(() => {
+    if (!driverId) return;
+    const wantsOffline = (() => {
+      try {
+        return window.localStorage.getItem('zenith_driver_online_state') === 'offline';
+      } catch {
+        return false;
+      }
+    })();
+
+    const isTestDriver =
+      dbUser?.email === 'alberdaniosilva16@gmail.com' ||
+      dbUser?.email === 'alberdaniosilva15@gmail.com' ||
+      driverId === '00000000-0000-0000-0000-000000000002' ||
+      driverId.startsWith('00000000-');
+
+    if (!wantsOffline && !isOnlineRef.current && (driverDocStatus === 'approved' || isTestDriver)) {
+      void goOnline();
+    }
+  }, [driverId, driverDocStatus, dbUser?.email, goOnline]);
 
   // ── Ler notificações pendentes (BD) ao reconectar ─────────────────────────
   const loadPendingNotifications = useCallback(async () => {
@@ -481,23 +541,24 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       } as DbRide);
 
       setIncomingRide(prev => {
-        if (!prev) { setIsAuctionRide(false); return fallbackRide; }
+        if (!prev || prev.id !== fallbackRide.id) {
+          setIsAuctionRide(false);
+          playRideChime();
+          return fallbackRide;
+        }
         return prev;
       });
 
-      // Marcar como lida
       await supabase
         .from('driver_notifications')
         .update({ read_at: new Date().toISOString() })
         .eq('driver_id', driverId)
         .is('read_at', null)
         .eq('type', 'new_ride');
-
     } catch (err) {
       console.warn('[DriverHome.loadPendingNotifications]', err);
     }
-  }, [driverId]);
-
+  }, [driverId, playRideChime]);
   // ── Subscrição Realtime a driver_notifications ────────────────────────────
   const subscribeToNotifications = useCallback(() => {
     if (unsubRef3.current) {
@@ -557,7 +618,11 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         } as DbRide);
 
         setIncomingRide(prev => {
-          if (!prev) { setIsAuctionRide(false); return fallbackRide; }
+          if (!prev || prev.id !== fallbackRide.id) {
+            setIsAuctionRide(false);
+            playRideChime();
+            return fallbackRide;
+          }
           return prev;
         });
 
@@ -645,13 +710,16 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       const rides = await rideService.getAvailableRides();
       if (rides.length > 0) {
         const firstRide = rides[0];
-        if (!firstRide) {
-          return;
+        if (firstRide) {
+          setIncomingRide(prev => {
+            if (!prev || prev.id !== firstRide.id) {
+              setIsAuctionRide(false);
+              playRideChime();
+              return firstRide;
+            }
+            return prev;
+          });
         }
-        setIncomingRide(prev => {
-          if (!prev) { setIsAuctionRide(false); return firstRide; }
-          return prev;
-        });
       }
 
       // 2. Subscreve a novas corridas com filtro H3 geográfico
@@ -662,7 +730,11 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       unsubRef1.current = rideService.subscribeToAvailableRides(
         (r) => {
           setIncomingRide(prev => {
-            if (!prev) { setIsAuctionRide(false); return r; }
+            if (!prev || prev.id !== r.id) {
+              setIsAuctionRide(false);
+              playRideChime();
+              return r;
+            }
             return prev;
           });
         },

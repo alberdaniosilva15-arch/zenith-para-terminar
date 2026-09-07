@@ -44,9 +44,7 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
   const resolvedDriverName = ride.driverName ?? 'Motorista';
   const resolvedRideId     = ride.rideId     ?? '';
   const confirmCancelRide = () => {
-    if (window.confirm('Queres mesmo cancelar esta corrida?')) {
-      onCancelRide('Cancelado pelo passageiro após aceitação');
-    }
+    onCancelRide('Cancelado pelo passageiro após aceitação');
   };
 
   // FIX BUG 4: Determinar se o motorista já confirmou (leilão vs fluxo normal)

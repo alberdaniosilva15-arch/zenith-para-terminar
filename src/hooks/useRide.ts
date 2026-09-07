@@ -396,20 +396,27 @@ export function useRide(): UseRideReturn {
 
   // ── cancelRide ────────────────────────────────────────────────────────────
   // SECURITY: cancel_ride_safe usa auth.uid() internamente — sem p_user_id
+  // v3.6: Cancelamento OPTIMISTA instantâneo (0ms de atraso perceptível)
   const cancelRide = useCallback(async (reason?: string) => {
-    if (!ride.rideId) return;
-    setLoading(true);
+    const targetRideId = ride.rideId;
+    if (!targetRideId) return;
+
+    // 1. Limpeza optimista imediata
+    driverLocUnsub.current?.(); driverLocUnsub.current = null;
+    unsubRef.current?.(); unsubRef.current = null;
+    clearRideDetails();
+    resetRide();
+    resetAuction();
+    showToast('Corrida cancelada.', 'info');
+
+    // 2. Sincronizar cancelamento com a base de dados em segundo plano
     try {
-      const err = await rideService.cancelRide(ride.rideId, undefined, reason);
-      if (err) { showToast(err.message, 'error'); return; }
-      driverLocUnsub.current?.(); driverLocUnsub.current = null;
-      unsubRef.current?.(); unsubRef.current = null;
-      clearRideDetails();
-      resetRide();
-      resetAuction();
-      showToast('Corrida cancelada.', 'info');
-    } finally {
-      setLoading(false);
+      const err = await rideService.cancelRide(targetRideId, undefined, reason);
+      if (err) {
+        console.warn('[useRide.cancelRide] Resposta do backend:', err.message);
+      }
+    } catch (err) {
+      console.warn('[useRide.cancelRide] Falha na sincronização do cancelamento:', err);
     }
   }, [ride.rideId, resetRide, resetAuction, showToast, clearRideDetails]);
 

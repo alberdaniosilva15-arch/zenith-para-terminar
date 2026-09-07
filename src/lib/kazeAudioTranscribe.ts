@@ -380,9 +380,10 @@ export async function transcribeAudioWithGemini(blob: Blob): Promise<AudioTransc
   console.log(`[kazeAudioTranscribe] Áudio: ${blob.size} bytes, MIME: ${mimeType}`);
 
   // ── 1º Tentar Groq/Whisper (transcrição dedicada, MUITO mais precisa) ──
-  const groqKey = import.meta.env.VITE_GROQ_API_KEY;
-  if (groqKey && typeof groqKey === 'string' && groqKey.trim()) {
-    const groqResult = await transcribeWithGroq(blob, groqKey.trim(), mimeType);
+  const { getResolvedKazeGroqKey } = await import('./kazeKey');
+  const groqKey = getResolvedKazeGroqKey();
+  if (groqKey) {
+    const groqResult = await transcribeWithGroq(blob, groqKey, mimeType);
     // Se deu sucesso ou vazio confirmado, retornar
     if (groqResult.status === 'success' || groqResult.status === 'empty') {
       return groqResult;
