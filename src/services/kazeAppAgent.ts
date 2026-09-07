@@ -71,7 +71,15 @@ export interface KazeAgentResult {
   isConfirmationQuery?: boolean;
 }
 
-const FRONTEND_GEMINI_KEY = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) || '';
+import { getResolvedKazeGroqKey } from '../lib/kazeKey';
+
+export const FRONTEND_GROQ_KEY = getResolvedKazeGroqKey();
+
+const FRONTEND_GEMINI_KEY = (
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) ||
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_IA_API_KEY) ||
+  ''
+).trim();
 
 // Centro de Luanda (Mutamba / Baixa)
 const LUANDA_CENTER: LatLng = { lat: -8.8390, lng: 13.2343 };
@@ -291,7 +299,15 @@ export class KazeAppAgent {
       }
     }
 
-    // ── 2. Tentar via Gemini Function Calling (IA Nativa) ─────────────────────
+    // ── 2. Tentar via Groq AI Ultra-rápido (Qwen 3.8 / Compound) ──────────────
+    try {
+      const groqResult = await this._callGroqWithTools(trimmed, context);
+      if (groqResult) return groqResult;
+    } catch (err) {
+      console.warn('[KazeAppAgent] Groq tool call falhou:', err);
+    }
+
+    // ── 3. Tentar via Gemini Function Calling (IA Nativa de reserva) ───────────
     if (FRONTEND_GEMINI_KEY) {
       try {
         const aiResult = await this._callGeminiWithTools(trimmed, context);
@@ -301,12 +317,117 @@ export class KazeAppAgent {
       }
     }
 
-    // ── 3. Fallback Local Inteligente (Regex & NLP local sem rede) ───────────
+    // ── 4. Fallback Local Inteligente (Regex & NLP local sem rede) ───────────
     return await this._processLocalIntent(trimmed, context);
   }
 
   /**
-   * Chamada directa à API do Gemini com declarações de ferramentas (tools)
+   * Chamada primária de alta performance via Groq (Qwen 3.8 27B / Compound)
+   * Suporta extração de intenções, chamadas de acções e conversa rica em português de Luanda
+   */
+  private async _callGroqWithTools(
+    message: string,
+    context: {
+      userId?: string;
+      userLocation?: LatLng | null;
+      userAddress?: string | null;
+      hasActiveRide?: boolean;
+    }
+  ): Promise<KazeAgentResult | null> {
+    if (!FRONTEND_GROQ_KEY) return null;
+
+    const userLocContext = context.userAddress
+      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${context.userAddress}"]`
+      : context.userLocation
+      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)})]`
+      : '\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS em tempo real do dispositivo em Luanda]';
+
+    const systemPrompt = `${KAZE_AGENT_SYSTEM_PROMPT}${userLocContext}
+
+Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura exacta:
+{
+  "thought": "pensamento curto sobre o pedido",
+  "text": "resposta amigável e acolhedora do Kaze em português de Luanda",
+  "action": null ou {
+    "name": "request_ride" | "schedule_ride" | "create_contract" | "check_balance" | "navigate_app" | "cancel_current_ride",
+    "args": {
+      "destination": "destino em Luanda (se pedido de corrida ou agendamento)",
+      "origin": "origem se especificada, ou vazio",
+      "vehicle_type": "standard" | "moto" | "comfort" | "xl",
+      "date": "YYYY-MM-DD se schedule_ride",
+      "time": "HH:MM se schedule_ride",
+      "screen": "wallet" | "rides" | "contrato" | "precos" | "profile"
+    }
+  }
+}`;
+
+    const models = ['qwen/qwen3.8-27b', 'groq/compound', 'openai/gpt-oss-120b'];
+
+    for (const model of models) {
+      try {
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${FRONTEND_GROQ_KEY}`,
+          },
+          body: JSON.stringify({
+            model,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: message },
+            ],
+            temperature: 0.6,
+            max_tokens: 450,
+          }),
+        });
+
+        if (!res.ok) {
+          console.warn(`[KazeAppAgent] Groq ${model} status ${res.status}`);
+          continue;
+        }
+
+        const data = await res.json();
+        const content = data?.choices?.[0]?.message?.content;
+        if (!content) continue;
+
+        let parsed: any;
+        try {
+          parsed = JSON.parse(content);
+        } catch {
+          const jsonMatch = content.match(/\{[\s\S]*\}/);
+          if (jsonMatch) parsed = JSON.parse(jsonMatch[0]);
+        }
+
+        if (parsed) {
+          if (parsed.action && parsed.action.name) {
+            return await this._resolveToolAction(
+              parsed.action.name,
+              parsed.action.args || {},
+              parsed.text || 'A preparar o teu pedido...',
+              context,
+              message
+            );
+          }
+
+          if (parsed.text && parsed.text.trim()) {
+            return {
+              text: parsed.text.trim(),
+              speakText: parsed.text.trim(),
+            };
+          }
+        }
+      } catch (err) {
+        console.warn(`[KazeAppAgent] Erro ao chamar Groq ${model}:`, err);
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Chamada de reserva à API do Gemini com declarações de ferramentas (tools)
    */
   private async _callGeminiWithTools(
     message: string,

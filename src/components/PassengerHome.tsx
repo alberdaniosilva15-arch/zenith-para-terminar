@@ -625,14 +625,57 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
         </div>
       </header>
 
-      <section className="zr-map">
-        <div className="zr-curve"></div>
+      <section className="zr-map relative">
+        {!shouldMountMap && <div className="zr-curve" />}
         {shouldMountMap ? (
           <Suspense fallback={<div className="zr-empty">A carregar mapa...</div>}>
             <Map3D
               mode="passenger"
               center={userLocation ? [userLocation.lng, userLocation.lat] : undefined}
             />
+            {/* Controlos Flutuantes de Zoom e Centralização (Liquid Glass) */}
+            <div className="absolute bottom-3 right-3 z-10 flex flex-col gap-1.5 pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  const map = MapSingleton.get();
+                  if (map) map.zoomIn({ duration: 300 });
+                }}
+                className="w-8 h-8 rounded-xl bg-black/70 backdrop-blur-md border border-white/20 text-white flex items-center justify-center hover:bg-black/90 active:scale-95 transition shadow-lg cursor-pointer"
+                title="Aumentar Zoom"
+                aria-label="Aumentar Zoom"
+              >
+                <span className="material-symbols-outlined text-[18px]">add</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const map = MapSingleton.get();
+                  if (map) map.zoomOut({ duration: 300 });
+                }}
+                className="w-8 h-8 rounded-xl bg-black/70 backdrop-blur-md border border-white/20 text-white flex items-center justify-center hover:bg-black/90 active:scale-95 transition shadow-lg cursor-pointer"
+                title="Diminuir Zoom"
+                aria-label="Diminuir Zoom"
+              >
+                <span className="material-symbols-outlined text-[18px]">remove</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (userLocation) {
+                    const map = MapSingleton.get();
+                    if (map) map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: 15, duration: 600 });
+                  } else {
+                    useGPS();
+                  }
+                }}
+                className="w-8 h-8 rounded-xl bg-black/70 backdrop-blur-md border border-[#DCB354]/50 text-[#DCB354] flex items-center justify-center hover:bg-black/90 active:scale-95 transition shadow-lg cursor-pointer"
+                title="A minha localização"
+                aria-label="A minha localização"
+              >
+                <span className="material-symbols-outlined text-[18px]">my_location</span>
+              </button>
+            </div>
           </Suspense>
         ) : (
           <div className="zr-empty">A preparar mapa...</div>
