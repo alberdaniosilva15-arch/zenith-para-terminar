@@ -425,7 +425,7 @@ export function useRide(): UseRideReturn {
   const acceptRide = useCallback(async (rideId: string) => {
     setLoading(true);
     try {
-      const { data, error: e } = await rideService.acceptRide(rideId, '');
+      const { data, error: e } = await rideService.acceptRide(rideId, dbUser?.id);
       if (e || !data) {
         const msg = e?.message ?? 'Corrida já aceite por outro motorista.';
         setError(e ?? { code: 'accept_fail', message: msg });
@@ -433,11 +433,12 @@ export function useRide(): UseRideReturn {
         return;
       }
       applyDbRideRef.current(data);
-      subscribeToRideRef.current(data.id, data.driver_id ?? undefined);
+      subscribeToRideRef.current(data.id, data.driver_id ?? dbUser?.id ?? undefined);
+      showToast('Corrida aceite com sucesso! Dirige-te ao passageiro.', 'success');
     } finally {
       setLoading(false);
     }
-  }, [showToast]);
+  }, [dbUser?.id, showToast]);
 
   // ── confirmRide ───────────────────────────────────────────────────────────
   // SECURITY: confirm_pickup usa auth.uid() internamente
