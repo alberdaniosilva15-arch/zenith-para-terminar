@@ -59,12 +59,14 @@ function scoreSystemVoice(
     score += 120;
   }
 
-  if (lang === preferredLocale.toLowerCase()) score += 60;
-  else if (lang.startsWith('pt')) score += 30;
+  // Prioridade máxima e inegociável para a língua Portuguesa
+  if (lang === preferredLocale.toLowerCase()) score += 150;
+  else if (lang.startsWith('pt')) score += 100;
+  else if (lang.startsWith('en')) score -= 200; // Penalizar fortemente vozes inglesas
 
-  // Boost for common Windows Portuguese voices
+  // Boost for common Windows/Android Portuguese voices
   if (name.includes('daniel')) score += 150;
-  if (name.includes('heloisa') || name.includes('maria') || name.includes('francisca')) score += 140;
+  if (name.includes('heloisa') || name.includes('maria') || name.includes('francisca') || name.includes('luciana')) score += 140;
 
   for (const hint of MALE_VOICE_HINTS) {
     if (name.includes(hint) || uri.includes(hint)) score += 12;
@@ -281,7 +283,7 @@ async function speakWindowsFallback(text: string, preferredVoice = resolveStored
   console.log(`[KAZE Voice TTS] Usando voz: ${selectedVoice?.name || 'default'}, lang: ${selectedVoice?.lang || preferredMeta.locale}`);
 
   utterance.voice = selectedVoice;
-  utterance.lang = selectedVoice?.lang || preferredMeta.locale;
+  utterance.lang = selectedVoice?.lang?.startsWith('pt') ? selectedVoice.lang : 'pt-PT';
   utterance.rate = 1.0;
   utterance.pitch = 0.9;
   utterance.volume = 1.0;
@@ -348,13 +350,16 @@ export async function speakGoogleGenAIVoice(text: string, voiceName: 'Charon' | 
   const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
   if (!apiKey) throw new Error('VITE_GEMINI_API_KEY não configurada.');
 
+  // Prevenir tom robótico em inglês no telemóvel: instrução explícita de idioma português
+  const ttsPrompt = `[Fala em Português de Portugal, com sotaque natural e fluente. Nunca fales em inglês.]\n\n${text}`;
+
   const res = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text }] }],
+        contents: [{ parts: [{ text: ttsPrompt }] }],
         generationConfig: {
           responseModalities: ['AUDIO'],
           speechConfig: {

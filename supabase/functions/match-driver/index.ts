@@ -202,7 +202,7 @@ Deno.serve(async (req: Request) => {
     };
 
     const topDrivers = matchedDrivers.slice(0, 3);
-    const expiresAt  = new Date(Date.now() + 15_000).toISOString(); // 15 segundos
+    const expiresAt  = new Date(Date.now() + 90_000).toISOString(); // 90 segundos (resiliente para mobile)
 
     await Promise.all(topDrivers.map(async (driver, i) => {
       try {
