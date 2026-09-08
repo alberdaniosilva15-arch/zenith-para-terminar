@@ -666,7 +666,11 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                     const map = MapSingleton.get();
                     if (map) map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: 15, duration: 600 });
                   } else {
-                    useGPS();
+                    mapService.getCurrentPosition().then((coords) => {
+                      setUserLocation(coords);
+                      const map = MapSingleton.get();
+                      if (map) map.flyTo({ center: [coords.lng, coords.lat], zoom: 15, duration: 600 });
+                    }).catch(() => {});
                   }
                 }}
                 className="w-8 h-8 rounded-xl bg-black/70 backdrop-blur-md border border-[#DCB354]/50 text-[#DCB354] flex items-center justify-center hover:bg-black/90 active:scale-95 transition shadow-lg cursor-pointer"

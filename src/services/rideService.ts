@@ -1164,7 +1164,7 @@ class RideService {
   ): () => void {
     let isActive = true;
     let timerId: ReturnType<typeof setTimeout> | null = null;
-    let knownRideIds = new Set<string>();
+    const knownRideIds = new Set<string>();
 
     // 1. Canal Realtime Broadcast: entrega instantânea em < 300ms
     const broadcastChannel = supabase.channel('zenith-available-rides')
