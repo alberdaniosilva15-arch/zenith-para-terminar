@@ -447,6 +447,7 @@ class RideService {
           console.debug('[rideService.createRide] Corrida criada atomicamente:', (data as DbRide).id);
         }
         void this.broadcastNewAvailableRide(data as DbRide);
+        void this.callMatchDriver((data as DbRide).id);
         return { data: data as DbRide, error: null };
       }
 
@@ -484,11 +485,42 @@ class RideService {
         console.debug('[rideService.createRide] Corrida criada:', (data as DbRide).id);
       }
       void this.broadcastNewAvailableRide(data as DbRide);
+      void this.callMatchDriver((data as DbRide).id);
       void this.triggerDriverWhatsAppFallback((data as DbRide).id);
       return { data: data as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.createRide] Excepção:', err);
       return { data: null, error: { code: 'unknown', message: 'Erro inesperado ao criar corrida.' } };
+    }
+  }
+
+  private async callMatchDriver(rideId: string): Promise<void> {
+    try {
+      const token = await getActiveToken();
+      if (!token) {
+        return;
+      }
+
+      const response = await fetch(edgeFunctionUrl('match-driver'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          ride_id: rideId,
+        }),
+        signal: AbortSignal.timeout(10000),
+      });
+
+      if (!response.ok) {
+        const body = await response.text().catch(() => '');
+        console.warn('[rideService.callMatchDriver] Falhou:', response.status, body);
+      } else if (import.meta.env.DEV) {
+        console.debug('[rideService.callMatchDriver] Despacho match-driver accionado com sucesso:', rideId);
+      }
+    } catch (error) {
+      console.warn('[rideService.callMatchDriver] Excepção ao invocar match-driver:', error);
     }
   }
 
@@ -528,11 +560,23 @@ class RideService {
   async broadcastNewAvailableRide(ride: DbRide): Promise<void> {
     try {
       const channel = supabase.channel('zenith-available-rides');
-      await channel.send({
-        type: 'broadcast',
-        event: 'new_available_ride',
-        payload: ride,
-      });
+      const sendPayload = async () => {
+        await channel.send({
+          type: 'broadcast',
+          event: 'new_available_ride',
+          payload: ride,
+        });
+      };
+
+      if ((channel as any).state === 'joined') {
+        await sendPayload();
+      } else {
+        channel.subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await sendPayload();
+          }
+        });
+      }
     } catch (err) {
       console.warn('[rideService.broadcastNewAvailableRide] Broadcast warning:', err);
     }
@@ -541,11 +585,23 @@ class RideService {
   async broadcastRideDismissed(rideId: string): Promise<void> {
     try {
       const channel = supabase.channel('zenith-available-rides');
-      await channel.send({
-        type: 'broadcast',
-        event: 'dismiss_available_ride',
-        payload: { id: rideId },
-      });
+      const sendPayload = async () => {
+        await channel.send({
+          type: 'broadcast',
+          event: 'dismiss_available_ride',
+          payload: { id: rideId },
+        });
+      };
+
+      if ((channel as any).state === 'joined') {
+        await sendPayload();
+      } else {
+        channel.subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await sendPayload();
+          }
+        });
+      }
     } catch (err) {
       console.warn('[rideService.broadcastRideDismissed] Broadcast warning:', err);
     }
@@ -1124,7 +1180,7 @@ class RideService {
       })
       .on('broadcast', { event: 'dismiss_available_ride' }, (payload) => {
         const { id } = (payload.payload ?? {}) as { id: string };
-        if (id && knownRideIds.has(id)) {
+        if (id) {
           knownRideIds.delete(id);
           onGone(id);
         }

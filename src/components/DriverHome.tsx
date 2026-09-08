@@ -53,36 +53,37 @@ interface NotifPayload {
   distance_km:    number | null;
 }
 
-// Som e vibração háptica ao receber nova corrida
-function playRideChime() {
-  try {
-    if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      navigator.vibrate([200, 100, 200]);
-    }
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioContextClass) return;
-    const ctx = new AudioContextClass();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
-    gain.gain.setValueAtTime(0.3, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.6);
-  } catch {
-    // Ignora silenciosamente se o contexto de áudio estiver bloqueado
-  }
-}
-
 const DriverHome: React.FC<DriverHomeProps> = ({
   ride, onAcceptRide, onConfirmRide, onDeclineRide, onAdvanceStatus, driverId,
 }) => {
   const { profile, dbUser } = useAuth();
   const navigate = useNavigate();
+
+  // Som e vibração háptica ao receber nova corrida (estabilizado com useCallback)
+  const playRideChime = useCallback(() => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([200, 100, 200]);
+      }
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
+      gain.gain.setValueAtTime(0.3, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.6);
+    } catch {
+      // Ignora silenciosamente se o contexto de áudio estiver bloqueado
+    }
+  }, []);
+
   // v3.6: Motorista entra ONLINE automaticamente por padrão para nunca perder corridas!
   const [isOnline, setIsOnline] = useState<boolean>(() => {
     try {
