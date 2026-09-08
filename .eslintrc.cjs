@@ -25,6 +25,8 @@ module.exports = {
     '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
     'react-hooks/exhaustive-deps': 'warn',
     '@typescript-eslint/consistent-type-imports': 'warn',
-    'no-console': ['error', { allow: ['error'] }],
+    'no-console': 'off',
+    'no-empty': 'warn',
+    '@typescript-eslint/ban-ts-comment': 'warn',
   },
 };

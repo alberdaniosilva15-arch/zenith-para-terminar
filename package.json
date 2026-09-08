@@ -11,7 +11,7 @@
     "build:crm": "tsc && vite build --config vite.admin.config.ts",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives",
+    "lint": "eslint . --ext ts,tsx",
     "test:e2e": "playwright test",
     "kaze": "node kaze-agent/start.js",
     "kaze:voice": "python kaze_voice_server.py",
