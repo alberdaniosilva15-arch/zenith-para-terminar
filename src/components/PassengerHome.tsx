@@ -41,6 +41,8 @@ import { useIdleMount } from '../hooks/useIdleMount';
 import { useAppStore } from '../store/useAppStore';
 import { useSilentTripleTap } from '../hooks/useSilentTripleTap';
 import { MapSingleton } from '../lib/mapInstance';
+import mapboxgl from 'mapbox-gl';
+import { createDriverMarkerElement } from '../lib/driverMarker';
 import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
 import type {
   RideState,
@@ -255,6 +257,69 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   useEffect(() => {
     routeDrawnRef.current = false;
   }, [pickupCoords?.lat, pickupCoords?.lng, destCoords?.lat, destCoords?.lng]);
+
+  // ── Rota de aproximação do motorista e marcador do carro em tempo real ───
+  const driverMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const [approachEtaMin, setApproachEtaMin] = useState<number | null>(null);
+
+  useEffect(() => {
+    const isApproaching =
+      (ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.PICKING_UP) &&
+      ride.carLocation &&
+      ride.pickupCoords;
+
+    if (!isApproaching || !ride.carLocation || !ride.pickupCoords) {
+      if (driverMarkerRef.current) {
+        driverMarkerRef.current.remove();
+        driverMarkerRef.current = null;
+      }
+      setApproachEtaMin(null);
+      return;
+    }
+
+    const map = MapSingleton.get();
+    if (!map) return;
+
+    // 1. Atualizar ou posicionar o marcador do motorista no mapa
+    const [lng, lat] = [ride.carLocation.lng, ride.carLocation.lat];
+    if (Number.isFinite(lng) && Number.isFinite(lat)) {
+      if (!driverMarkerRef.current) {
+        const markerEl = createDriverMarkerElement(0);
+        driverMarkerRef.current = new mapboxgl.Marker({ element: markerEl })
+          .setLngLat([lng, lat])
+          .addTo(map);
+      } else {
+        driverMarkerRef.current.setLngLat([lng, lat]);
+      }
+    }
+
+    // 2. Traçar rota do carro até ao ponto de recolha do passageiro
+    let cancelled = false;
+    mapService.getRouteDistance(ride.carLocation, ride.pickupCoords)
+      .then((approach) => {
+        if (cancelled) return;
+        if (approach.durationMin) setApproachEtaMin(approach.durationMin);
+        if (approach.geometry) {
+          clearRoute(map);
+          drawRoute(map, {
+            distanceKm: approach.distanceKm,
+            durationMinutes: approach.durationMin,
+            durationText: `${approach.durationMin} min`,
+            geojson: {
+              type: 'Feature',
+              geometry: approach.geometry,
+              properties: {},
+            },
+            bbox: calculateBBox(approach.geometry.coordinates as [number, number][]),
+          });
+        }
+      })
+      .catch((err) => console.warn('[PassengerHome] Falha ao traçar rota de aproximação:', err));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [ride.status, ride.carLocation?.lat, ride.carLocation?.lng, ride.pickupCoords?.lat, ride.pickupCoords?.lng]);
 
   // ── Motoristas próximos (hook extraído) ──
   const { nearbyCount } = useNearbyDrivers(pickupCoords, isVisible ?? true);
@@ -633,6 +698,15 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
               mode="passenger"
               center={userLocation ? [userLocation.lng, userLocation.lat] : undefined}
             />
+            {/* Chip de ETA do Motorista a Caminho */}
+            {approachEtaMin !== null && (
+              <div className="absolute top-3 left-3 z-10 pointer-events-none animate-in fade-in slide-in-from-top-3 duration-300">
+                <div className="liquid-glass-subcard px-3 py-1.5 rounded-full text-[11px] text-amber-300 font-black border border-amber-400/50 flex items-center gap-1.5 shadow-xl">
+                  <span className="material-symbols-outlined text-[15px]">directions_car</span>
+                  <span>Motorista a caminho • Chegada em ~{approachEtaMin} min</span>
+                </div>
+              </div>
+            )}
             {/* Controlos Flutuantes de Zoom e Centralização (Liquid Glass) */}
             <div className="absolute bottom-3 right-3 z-10 flex flex-col gap-1.5 pointer-events-auto">
               <button

@@ -190,15 +190,43 @@ Deno.serve(async (req: Request) => {
       eta_min:     d.eta_min,
     }));
 
+    // ── Buscar perfil do passageiro para exibição detalhada no motorista ──────
+    let passengerName = 'Passageiro Zenith';
+    let passengerAvatarUrl: string | null = null;
+    let passengerRating = 5.0;
+
+    if (ride.passenger_id) {
+      const { data: passProfile } = await supabaseAdmin
+        .from('profiles')
+        .select('name, avatar_url, rating')
+        .eq('user_id', ride.passenger_id)
+        .maybeSingle();
+
+      if (passProfile) {
+        if (passProfile.name) passengerName = passProfile.name;
+        if (passProfile.avatar_url) passengerAvatarUrl = passProfile.avatar_url;
+        if (typeof passProfile.rating === 'number') passengerRating = passProfile.rating;
+      }
+    }
+
     // ── Notificar top-3 motoristas com notif_status e expires_at ──────────
     const notificationPayload = {
-      ride_id:        ride.id,
-      origin_address: ride.origin_address,
-      dest_address:   ride.dest_address,
-      price_kz:       ride.price_kz,
-      distance_km:    ride.distance_km,
+      ride_id:              ride.id,
+      passenger_id:         ride.passenger_id,
+      passenger_name:       passengerName,
+      passenger_avatar_url: passengerAvatarUrl,
+      passenger_rating:     passengerRating,
+      origin_address:       ride.origin_address,
+      origin_lat:           ride.origin_lat,
+      origin_lng:           ride.origin_lng,
+      dest_address:         ride.dest_address,
+      dest_lat:             ride.dest_lat,
+      dest_lng:             ride.dest_lng,
+      price_kz:             ride.price_kz,
+      distance_km:          ride.distance_km,
+      duration_min:         ride.duration_min,
       // H3 do ponto de origem para o motorista poder visualizar no mapa
-      origin_h3:      latLngToCell(ride.origin_lat, ride.origin_lng, H3_RES_ZONE),
+      origin_h3:            latLngToCell(ride.origin_lat, ride.origin_lng, H3_RES_ZONE),
     };
 
     const topDrivers = matchedDrivers.slice(0, 3);

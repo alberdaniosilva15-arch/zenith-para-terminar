@@ -16,18 +16,14 @@ import {
   type AiModelOption,
   type AiProvider,
 } from '../../../lib/aiModelSettings';
+import {
+  getAvailablePortugueseVoices,
+  setNativeVoice,
+  kazeSpeak,
+  isVoiceReady,
+} from '../../../lib/kazeVoice';
 
-const LS_ELEVENLABS_KEY = 'zenith_elevenlabs_api_key';
-const LS_ELEVENLABS_VOICE = 'zenith_elevenlabs_voice_id';
-const LS_KAZE_VOICE = 'kaze_voice_preference';
-
-interface ElevenLabsVoice {
-  voice_id: string;
-  name: string;
-  labels?: Record<string, string>;
-}
-
-interface SystemVoiceOption {
+interface NativeVoiceOption {
   name: string;
   lang: string;
   voiceURI: string;
@@ -57,14 +53,6 @@ function initialModels(provider: AiProvider) {
 }
 
 export const SettingsTab: React.FC = () => {
-  // --- ElevenLabs ---
-  const [elevenKey, setElevenKey] = useState(() => getStored(LS_ELEVENLABS_KEY));
-  const [elevenVoices, setElevenVoices] = useState<ElevenLabsVoice[]>([]);
-  const [elevenVoiceId, setElevenVoiceId] = useState(() => getStored(LS_ELEVENLABS_VOICE));
-  const [elevenLoading, setElevenLoading] = useState(false);
-  const [elevenError, setElevenError] = useState('');
-  const [elevenSaved, setElevenSaved] = useState(false);
-
   // --- IA Provider ---
   const [iaProvider, setIaProvider] = useState<AiProvider>(() => getAiModelSettings().provider);
   const [iaModel, setIaModel] = useState(() => getAiModelSettings().model);
@@ -75,60 +63,40 @@ export const SettingsTab: React.FC = () => {
   const [iaError, setIaError] = useState('');
   const [iaSaved, setIaSaved] = useState(false);
 
-  // --- System Voices ---
-  const [systemVoices, setSystemVoices] = useState<SystemVoiceOption[]>([]);
-  const [selectedSystemVoice, setSelectedSystemVoice] = useState(() => getStored(LS_KAZE_VOICE, 'pt-PT-DuarteNeural'));
+  // --- Voz Nativa do Dispositivo ---
+  const [nativeVoices, setNativeVoices] = useState<NativeVoiceOption[]>([]);
+  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
   const [voiceSaved, setVoiceSaved] = useState(false);
+  const [voiceReady] = useState(() => isVoiceReady());
+  const [voicesLoading, setVoicesLoading] = useState(true);
 
-  // Load system voices
+  // Carregar vozes portuguesas do dispositivo
   useEffect(() => {
-    if (!('speechSynthesis' in window)) return;
-
-    const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const ptVoices = voices
-        .filter((v) => v.lang.startsWith('pt') || v.lang.startsWith('en'))
-        .map((v) => ({ name: v.name, lang: v.lang, voiceURI: v.voiceURI, isDefault: v.default }));
-      setSystemVoices(ptVoices);
-    };
-
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
-    return () => { window.speechSynthesis.onvoiceschanged = null; };
+    let cancelled = false;
+    (async () => {
+      try {
+        const voices = await getAvailablePortugueseVoices();
+        if (cancelled) return;
+        setNativeVoices(
+          voices.map((v) => ({
+            name: v.name,
+            lang: v.lang,
+            voiceURI: v.voiceURI,
+            isDefault: v.default,
+          }))
+        );
+        // Pre-seleccionar a voz guardada no cache
+        const cached = localStorage.getItem('kaze_native_voice_uri');
+        if (cached && voices.some((v) => v.voiceURI === cached)) {
+          setSelectedVoiceURI(cached);
+        } else if (voices.length > 0 && voices[0]) {
+          setSelectedVoiceURI(voices[0].voiceURI);
+        }
+      } catch { /* sem vozes */ }
+      if (!cancelled) setVoicesLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, []);
-
-  // Fetch ElevenLabs voices when key changes
-  const fetchElevenVoices = async () => {
-    const key = elevenKey.trim();
-    if (!key) { setElevenError('Introduz a API key primeiro.'); return; }
-
-    setElevenLoading(true);
-    setElevenError('');
-
-    try {
-      const res = await fetch('https://api.elevenlabs.io/v1/voices', {
-        headers: { 'xi-api-key': key },
-        signal: AbortSignal.timeout(8000),
-      });
-
-      if (!res.ok) throw new Error(`HTTP ${res.status} — verifica se a key esta correcta.`);
-
-      const data = await res.json();
-      setElevenVoices(data.voices ?? []);
-    } catch (e: any) {
-      setElevenError(e?.message || 'Falha ao ligar a ElevenLabs.');
-      setElevenVoices([]);
-    } finally {
-      setElevenLoading(false);
-    }
-  };
-
-  const saveElevenLabs = () => {
-    setStored(LS_ELEVENLABS_KEY, elevenKey.trim());
-    setStored(LS_ELEVENLABS_VOICE, elevenVoiceId);
-    setElevenSaved(true);
-    setTimeout(() => setElevenSaved(false), 2000);
-  };
 
   const fetchIaModels = async () => {
     const provider = normalizeProvider(iaProvider);
@@ -181,28 +149,17 @@ export const SettingsTab: React.FC = () => {
   };
 
   const saveVoiceSettings = () => {
-    setStored(LS_KAZE_VOICE, selectedSystemVoice);
+    if (!selectedVoiceURI) return;
+    setNativeVoice(selectedVoiceURI);
     setVoiceSaved(true);
     setTimeout(() => setVoiceSaved(false), 2000);
   };
 
-  const testSystemVoice = () => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance('Kaze operacional. Nucleo sincronizado.');
-    const voices = window.speechSynthesis.getVoices();
-    const match = voices.find((v) => v.voiceURI === selectedSystemVoice || v.name === selectedSystemVoice);
-    if (match) {
-      utterance.voice = match;
-      utterance.lang = match.lang;
-    } else {
-      utterance.lang = 'pt-PT';
-    }
-    utterance.rate = 1.0;
-    utterance.pitch = 0.9;
-    utterance.volume = 1.0;
-    window.speechSynthesis.speak(utterance);
+  const testVoice = () => {
+    if (!selectedVoiceURI) return;
+    // Guardar temporariamente para teste
+    setNativeVoice(selectedVoiceURI);
+    void kazeSpeak('Kaze operacional. Núcleo sincronizado. Pronto para servir.');
   };
 
   const availableModels = iaModels.length > 0 ? iaModels : (DEFAULT_MODELS_BY_PROVIDER[iaProvider] ?? []);
@@ -216,86 +173,32 @@ export const SettingsTab: React.FC = () => {
 
       <div className="space-y-8">
 
-        {/* ========== VOICE API (ElevenLabs) ========== */}
-        <section className="rounded-xl border border-primary/15 bg-[#050505]/85 p-6">
-          <div className="flex items-center gap-3 mb-5">
-            <span className="material-symbols-outlined text-primary">record_voice_over</span>
-            <h3 className="font-headline-lg text-on-surface tracking-tight">API de Voz: ElevenLabs</h3>
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="flex flex-col gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-surface-variant">API Key</span>
-              <div className="flex gap-2">
-                <input
-                  type="password"
-                  value={elevenKey}
-                  onChange={(e) => setElevenKey(e.target.value)}
-                  className="flex-1 bg-[#0A0A0A] border border-primary/20 rounded px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none font-mono"
-                  placeholder="sk-..."
-                />
-                <button
-                  onClick={() => void fetchElevenVoices()}
-                  disabled={elevenLoading}
-                  className="px-4 py-2 bg-primary text-[#000000] rounded font-bold text-xs uppercase tracking-widest hover:bg-primary-fixed transition-colors disabled:opacity-50"
-                >
-                  {elevenLoading ? '...' : 'Ligar'}
-                </button>
-              </div>
-            </label>
-
-            <label className="flex flex-col gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-surface-variant">Voz ElevenLabs</span>
-              <select
-                value={elevenVoiceId}
-                onChange={(e) => setElevenVoiceId(e.target.value)}
-                disabled={elevenVoices.length === 0}
-                className="bg-[#0A0A0A] border border-primary/20 rounded px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none disabled:opacity-40"
-              >
-                <option value="">Selecionar voz</option>
-                {elevenVoices.map((v) => (
-                  <option key={v.voice_id} value={v.voice_id}>
-                    {v.name} {v.labels?.gender ? `(${v.labels.gender})` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-
-          {elevenError && <p className="mt-3 text-xs text-red-400">{elevenError}</p>}
-
-          <div className="flex items-center gap-4 mt-5">
-            <button
-              onClick={saveElevenLabs}
-              className="px-5 py-2 bg-primary text-[#000000] rounded font-bold text-xs uppercase tracking-widest hover:bg-primary-fixed transition-colors"
-            >
-              {elevenSaved ? '✓ Guardado' : 'Guardar'}
-            </button>
-            <span className="text-xs text-on-surface-variant">
-              {elevenVoices.length > 0 ? `${elevenVoices.length} vozes encontradas` : 'Clica "Ligar" para carregar vozes'}
-            </span>
-          </div>
-        </section>
-
-        {/* ========== SYSTEM VOICE (SAPI) ========== */}
+        {/* ========== VOZ NATIVA DO DISPOSITIVO ========== */}
         <section className="rounded-xl border border-primary/15 bg-[#050505]/85 p-6">
           <div className="flex items-center gap-3 mb-5">
             <span className="material-symbols-outlined text-primary">spatial_audio</span>
-            <h3 className="font-headline-lg text-on-surface tracking-tight">Voz Local do Sistema (Windows)</h3>
+            <h3 className="font-headline-lg text-on-surface tracking-tight">Voz do Kaze (Nativa do Dispositivo)</h3>
           </div>
+
+          <p className="text-xs text-on-surface-variant mb-4">
+            O Kaze usa a voz instalada no teu telemóvel. Sem APIs externas, sem custos. A voz é selecionada automaticamente
+            {voiceReady ? ' — ✓ já configurada.' : ' na primeira utilização.'}
+          </p>
 
           <div className="grid gap-4 md:grid-cols-2">
             <label className="flex flex-col gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-surface-variant">Voz do sistema</span>
+              <span className="text-xs uppercase tracking-widest text-on-surface-variant">Voz Portuguesa</span>
               <select
-                value={selectedSystemVoice}
-                onChange={(e) => setSelectedSystemVoice(e.target.value)}
-                className="bg-[#0A0A0A] border border-primary/20 rounded px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none"
+                value={selectedVoiceURI}
+                onChange={(e) => setSelectedVoiceURI(e.target.value)}
+                disabled={voicesLoading}
+                className="bg-[#0A0A0A] border border-primary/20 rounded px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none disabled:opacity-40"
               >
-                {systemVoices.length === 0 && <option value="">Nenhuma voz encontrada</option>}
-                {systemVoices.map((v) => (
+                {voicesLoading && <option value="">A carregar vozes...</option>}
+                {!voicesLoading && nativeVoices.length === 0 && <option value="">Nenhuma voz portuguesa encontrada</option>}
+                {nativeVoices.map((v) => (
                   <option key={v.voiceURI} value={v.voiceURI}>
-                    {v.name} ({v.lang}) {v.isDefault ? <span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>star</span> : ''}
+                    {v.name} ({v.lang}){v.isDefault ? ' ★' : ''}
                   </option>
                 ))}
               </select>
@@ -303,10 +206,11 @@ export const SettingsTab: React.FC = () => {
 
             <div className="flex flex-col gap-2 justify-end">
               <button
-                onClick={testSystemVoice}
-                className="px-4 py-2 border border-primary/20 rounded text-on-surface-variant hover:border-primary/50 hover:text-primary transition-colors text-xs uppercase tracking-widest"
+                onClick={testVoice}
+                disabled={!selectedVoiceURI}
+                className="px-4 py-2 border border-primary/20 rounded text-on-surface-variant hover:border-primary/50 hover:text-primary transition-colors text-xs uppercase tracking-widest disabled:opacity-40"
               >
-                Testar Voz
+                🔊 Testar Voz
               </button>
             </div>
           </div>
@@ -314,12 +218,13 @@ export const SettingsTab: React.FC = () => {
           <div className="flex items-center gap-4 mt-5">
             <button
               onClick={saveVoiceSettings}
-              className="px-5 py-2 bg-primary text-[#000000] rounded font-bold text-xs uppercase tracking-widest hover:bg-primary-fixed transition-colors"
+              disabled={!selectedVoiceURI}
+              className="px-5 py-2 bg-primary text-[#000000] rounded font-bold text-xs uppercase tracking-widest hover:bg-primary-fixed transition-colors disabled:opacity-50"
             >
-              {voiceSaved ? '✓ Guardado' : 'Guardar Voz Local'}
+              {voiceSaved ? '✓ Guardado' : 'Guardar Voz'}
             </button>
             <span className="text-xs text-on-surface-variant">
-              {systemVoices.length} vozes disponiveis no sistema
+              {voicesLoading ? 'A detectar...' : `${nativeVoices.length} vozes portuguesas disponíveis`}
             </span>
           </div>
         </section>

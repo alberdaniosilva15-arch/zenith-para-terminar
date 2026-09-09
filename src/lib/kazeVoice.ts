@@ -1,21 +1,29 @@
-import { supabase, edgeFunctionUrl } from './supabase';
+// ──────────────────────────────────────────────────────────────────────────────
+// NativeTTSService — Voz do Kaze via SpeechSynthesis nativo do telemóvel
+// ──────────────────────────────────────────────────────────────────────────────
+// Utiliza APENAS a voz instalada no dispositivo do utilizador (iOS AVSpeech /
+// Android TTS / Windows SAPI). Sem APIs externas, sem modelos pesados, sem
+// servidores. A voz é selecionada automaticamente 1× e guardada em cache
+// (localStorage) para sempre — nunca mais volta a pedir.
+// ──────────────────────────────────────────────────────────────────────────────
 
-const ELEVENLABS_MODEL = 'eleven_multilingual_v2';
-const LOCAL_TTS_URL = 'http://127.0.0.1:3848/tts';
-const KAZE_VOICE_STORAGE_KEY = 'kaze_voice_preference';
-const LS_ELEVENLABS_KEY = 'zenith_elevenlabs_api_key';
-const LS_ELEVENLABS_VOICE = 'zenith_elevenlabs_voice_id';
+const VOICE_CACHE_KEY = 'kaze_native_voice_uri';
+const VOICE_READY_KEY = 'kaze_voice_ready';        // flag: autorização já concedida
+const KAZE_VOICE_PREF_KEY = 'kaze_voice_preference';
 
-function getElevenLabsConfig() {
-  const key = typeof window !== 'undefined' ? localStorage.getItem(LS_ELEVENLABS_KEY) : null;
-  const voice = typeof window !== 'undefined' ? localStorage.getItem(LS_ELEVENLABS_VOICE) : null;
-  const envKey = typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_ELEVENLABS_API_KEY : null;
-  const envVoice = typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_ELEVENLABS_VOICE_ID : null;
-  return {
-    apiKey: key || envKey || null,
-    voiceId: voice || envVoice || 'TxGEqnHWrfWFTfGW9XjX',
-  };
+// ─── Tipos ───────────────────────────────────────────────────────────────────
+
+export interface NativeTTSSpeakResult {
+  source: 'native_tts' | 'none';
 }
+
+// ─── Singleton State ─────────────────────────────────────────────────────────
+
+let cachedVoice: SpeechSynthesisVoice | null = null;
+let voicesLoaded = false;
+let currentUtterance: SpeechSynthesisUtterance | null = null;
+
+// ─── Voice Options (mantém compatibilidade com importações existentes) ───────
 
 export const KAZE_VOICE_OPTIONS = [
   {
@@ -32,69 +40,28 @@ export const KAZE_VOICE_OPTIONS = [
   },
 ] as const;
 
-const DEFAULT_VOICE = KAZE_VOICE_OPTIONS[1].id;
-const MALE_VOICE_HINTS = ['antonio', 'duarte', 'male', 'masc', 'homem', 'portuguese', 'portugal'];
+// ─── Utilitários internos ────────────────────────────────────────────────────
 
-function resolveStoredVoicePreference(): string {
-  if (typeof window === 'undefined') return DEFAULT_VOICE;
-  const stored = window.localStorage.getItem(KAZE_VOICE_STORAGE_KEY);
-  return KAZE_VOICE_OPTIONS.some((voice) => voice.id === stored) ? (stored ?? DEFAULT_VOICE) : DEFAULT_VOICE;
+function ls(key: string): string | null {
+  try { return typeof window !== 'undefined' ? localStorage.getItem(key) : null; }
+  catch { return null; }
 }
 
-function normalizeVoiceText(value: string | null | undefined) {
-  return String(value || '').toLowerCase().trim();
+function lsSet(key: string, value: string): void {
+  try { if (typeof window !== 'undefined') localStorage.setItem(key, value); }
+  catch { /* quota / private mode – ignorar */ }
 }
 
-function scoreSystemVoice(
-  voice: SpeechSynthesisVoice,
-  preferredVoice: string,
-  preferredLocale: string,
-) {
-  const name = normalizeVoiceText(voice.name);
-  const uri = normalizeVoiceText(voice.voiceURI);
-  const lang = normalizeVoiceText(voice.lang);
-  let score = 0;
-
-  if (name.includes(normalizeVoiceText(preferredVoice)) || uri.includes(normalizeVoiceText(preferredVoice))) {
-    score += 120;
+/**
+ * Aguarda que o browser carregue a lista de vozes do sistema.
+ * Em Chrome/Android, as vozes são carregadas async via evento `voiceschanged`.
+ * Em Safari/iOS, já vêm preenchidas na 1ª chamada.
+ */
+function waitForVoices(timeoutMs = 2000): Promise<SpeechSynthesisVoice[]> {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    return Promise.resolve([]);
   }
 
-  // Prioridade máxima e inegociável para a língua Portuguesa
-  if (lang === preferredLocale.toLowerCase()) score += 150;
-  else if (lang.startsWith('pt')) score += 100;
-  else if (lang.startsWith('en')) score -= 200; // Penalizar fortemente vozes inglesas
-
-  // Boost for common Windows/Android Portuguese voices
-  if (name.includes('daniel')) score += 150;
-  if (name.includes('heloisa') || name.includes('maria') || name.includes('francisca') || name.includes('luciana')) score += 140;
-
-  for (const hint of MALE_VOICE_HINTS) {
-    if (name.includes(hint) || uri.includes(hint)) score += 12;
-  }
-
-  if (voice.default) score += 4;
-  return score;
-}
-
-function selectSystemVoice(voices: SpeechSynthesisVoice[], preferredVoice: string) {
-  const preferredMeta = KAZE_VOICE_OPTIONS.find((voice) => voice.id === preferredVoice) ?? KAZE_VOICE_OPTIONS[0];
-  const rankedVoices = voices
-    .map((voice) => ({
-      voice,
-      score: scoreSystemVoice(voice, preferredMeta.id, preferredMeta.locale),
-    }))
-    .sort((left, right) => right.score - left.score);
-
-  return rankedVoices[0]?.voice ?? null;
-}
-
-function isLikelyMaleSystemVoice(voice: SpeechSynthesisVoice | null) {
-  if (!voice) return false;
-  const haystack = `${voice.name} ${voice.voiceURI}`.toLowerCase();
-  return MALE_VOICE_HINTS.some((hint) => haystack.includes(hint));
-}
-
-function waitForSystemVoices(timeoutMs = 700): Promise<SpeechSynthesisVoice[]> {
   const voices = window.speechSynthesis.getVoices();
   if (voices.length > 0) return Promise.resolve(voices);
 
@@ -106,393 +73,244 @@ function waitForSystemVoices(timeoutMs = 700): Promise<SpeechSynthesisVoice[]> {
       window.speechSynthesis.removeEventListener('voiceschanged', finish);
       resolve(window.speechSynthesis.getVoices());
     };
-
     window.speechSynthesis.addEventListener('voiceschanged', finish, { once: true });
-    window.setTimeout(finish, timeoutMs);
+    setTimeout(finish, timeoutMs);
   });
 }
 
-function waitForAudioEnd(audio: HTMLAudioElement, cleanup: () => void) {
-  return new Promise<void>((resolve, reject) => {
-    let settled = false;
-    // eslint-disable-next-line prefer-const
-    let safetyTimeout: ReturnType<typeof setTimeout>;
+/**
+ * Pontuação para selecção automática de voz portuguesa.
+ * Prioridade: pt-AO > pt-PT > pt-BR > qualquer pt > outras línguas.
+ */
+function scoreVoice(voice: SpeechSynthesisVoice): number {
+  const lang = (voice.lang || '').toLowerCase();
+  const name = (voice.name || '').toLowerCase();
+  let score = 0;
 
-    const finish = (callback: () => void) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(safetyTimeout);
-      audio.onended = null;
-      audio.onerror = null;
-      cleanup();
-      callback();
-    };
+  // ── Idioma ──
+  if (lang === 'pt-ao')      score += 300;   // Angola — máximo
+  else if (lang === 'pt-pt') score += 250;
+  else if (lang === 'pt-br') score += 200;
+  else if (lang.startsWith('pt')) score += 150;
+  else return -1000;                          // não-português — excluir
 
-    audio.onended = () => finish(resolve);
-    audio.onerror = () => finish(() => reject(new Error('Falha ao reproduzir o audio do Kaze.')));
+  // ── Qualidade ──
+  if (name.includes('enhanced') || name.includes('premium') || name.includes('neural')) score += 50;
+  if (voice.localService) score += 20;   // vozes locais = menos latência
+  if (voice.default) score += 5;
 
-    safetyTimeout = setTimeout(() => {
-      if (!settled) {
-        console.warn('[KAZE Voice] Audio timeout, forçando fim.');
-        finish(resolve);
-      }
-    }, 15000);
+  // ── Preferência masculina (Kaze é masculino) ──
+  const maleHints = ['daniel', 'duarte', 'antonio', 'rafael', 'tiago', 'male', 'masc'];
+  for (const hint of maleHints) {
+    if (name.includes(hint)) { score += 30; break; }
+  }
 
-    const playback = audio.play();
-    if (playback?.catch) {
-      playback.catch((error) => {
-        finish(() => reject(error instanceof Error ? error : new Error(String(error))));
-      });
+  return score;
+}
+
+/**
+ * Selecciona a melhor voz portuguesa do dispositivo.
+ * Se já existe uma voz em cache (localStorage), devolve essa imediatamente.
+ */
+async function resolveBestVoice(): Promise<SpeechSynthesisVoice | null> {
+  // 1) Cache em memória
+  if (cachedVoice && voicesLoaded) return cachedVoice;
+
+  const voices = await waitForVoices();
+  voicesLoaded = true;
+
+  if (voices.length === 0) return null;
+
+  // 2) Tentar restaurar do localStorage (cache persistente)
+  const savedUri = ls(VOICE_CACHE_KEY);
+  if (savedUri) {
+    const match = voices.find((v) => v.voiceURI === savedUri);
+    if (match) {
+      cachedVoice = match;
+      return match;
     }
-  });
+    // Voz removida do sistema — escolher outra
+  }
+
+  // 3) Seleccionar automaticamente a melhor voz portuguesa
+  const ranked = voices
+    .map((v) => ({ voice: v, score: scoreVoice(v) }))
+    .filter((v) => v.score > -500)
+    .sort((a, b) => b.score - a.score);
+
+  const best = ranked[0]?.voice ?? null;
+
+  if (best) {
+    cachedVoice = best;
+    lsSet(VOICE_CACHE_KEY, best.voiceURI);
+    lsSet(VOICE_READY_KEY, '1');
+    console.log(`[KAZE NativeTTS] Voz selecionada: "${best.name}" (${best.lang})`);
+  }
+
+  return best;
 }
 
-async function speakLocalTTS(text: string, voice: string) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
-  let res;
-  try {
-    res = await fetch(LOCAL_TTS_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice }),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
+// ─── Limpar texto para fala ──────────────────────────────────────────────────
 
-  if (!res.ok) {
-    throw new Error(`Local TTS ${res.status}`);
-  }
-
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  await waitForAudioEnd(audio, () => URL.revokeObjectURL(url));
-  return { source: 'local_python' as const };
+function cleanTextForSpeech(raw: string, maxLen = 500): string {
+  return raw
+    .replace(/```[\s\S]*?```/g, '')         // blocos de código
+    .replace(/[*_#`[\]()]/g, '')            // markdown
+    .replace(/https?:\/\/\S+/g, '')         // URLs
+    .replace(/\s+/g, ' ')                   // espaços múltiplos
+    .trim()
+    .substring(0, maxLen);
 }
 
-async function speakElevenLabs(text: string, apiKey: string) {
-  const config = getElevenLabsConfig();
-  const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${config.voiceId}/stream`,
-    {
-      method: 'POST',
-      headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        text,
-        model_id: ELEVENLABS_MODEL,
-        voice_settings: { stability: 0.42, similarity_boost: 0.82 },
-      }),
-    },
-  );
+// ─── API Pública ─────────────────────────────────────────────────────────────
 
-  if (!res.ok) {
-    throw new Error(`ElevenLabs ${res.status}`);
+/**
+ * Para a fala actual imediatamente.
+ */
+export function kazeStop(): void {
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
   }
-
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const audio = new Audio(url);
-  await waitForAudioEnd(audio, () => URL.revokeObjectURL(url));
-  return { source: 'elevenlabs' as const };
+  currentUtterance = null;
 }
 
-async function getFreshAdminToken() {
-  const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000));
-  
-  try {
-    const refreshed = await Promise.race([
-      supabase.auth.refreshSession(),
-      timeoutPromise
-    ]) as any;
-    if (refreshed && refreshed.data?.session?.access_token) return refreshed.data.session.access_token;
-  } catch (error) {
-    console.warn('[KAZE Voice] refreshSession falhou:', error);
-  }
-
-  try {
-    const sessionRes = await Promise.race([
-      supabase.auth.getSession(),
-      timeoutPromise
-    ]) as any;
-    return sessionRes?.data?.session?.access_token ?? null;
-  } catch (error) {
-    return null;
-  }
+/**
+ * Verifica se o Kaze está a falar neste momento.
+ */
+export function kazeIsSpeaking(): boolean {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false;
+  return window.speechSynthesis.speaking;
 }
 
-async function speakAdminEdgeTTS(text: string) {
-  const token = await getFreshAdminToken();
-  if (!token) throw new Error('Sem sessao admin para TTS online.');
+/**
+ * Fala o texto usando a voz nativa do telemóvel.
+ * - Selecciona a melhor voz portuguesa automaticamente (1ª vez).
+ * - Guarda em cache para sempre (localStorage).
+ * - Cancela qualquer fala anterior antes de iniciar nova.
+ */
+export async function kazeSpeak(
+  text: string,
+  _elevenLabsApiKey: string | null = null,   // ignorado — mantém assinatura para compatibilidade
+): Promise<NativeTTSSpeakResult | undefined> {
+  if (!text?.trim()) return;
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
-  let res;
-  try {
-    res = await fetch(edgeFunctionUrl('admin-ai-proxy'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ action: 'tts', text }),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    console.warn('[KAZE NativeTTS] speechSynthesis não disponível neste browser.');
+    return { source: 'none' };
   }
 
-  if (!res.ok) {
-    let message = `Admin TTS ${res.status}`;
-    try {
-      const body = await res.json();
-      message = body?.message ?? body?.error ?? message;
-    } catch { /* erro ignorado */ }
-    throw new Error(message);
-  }
+  const clean = cleanTextForSpeech(text, 500);
+  if (!clean) return;
 
-  const data = await res.json();
-  if (!data?.audioContent) throw new Error('Admin TTS sem audio.');
+  // Cancelar fala anterior
+  kazeStop();
 
-  const audio = new Audio(`data:${data.mimeType || 'audio/mpeg'};base64,${data.audioContent}`);
-  await waitForAudioEnd(audio, () => {});
-  return { source: 'admin_edge_tts' as const };
-}
+  const voice = await resolveBestVoice();
 
-async function speakWindowsFallback(text: string, preferredVoice = resolveStoredVoicePreference()) {
-  if (!('speechSynthesis' in window)) {
-    return Promise.resolve({ source: 'none' as const });
-  }
-
-  // Chrome warm-up hack
+  // Chrome warm-up hack (previne 1ª fala silenciosa)
   try {
     const warmup = new SpeechSynthesisUtterance('');
-    if (warmup.text.length === 0) {
-      window.speechSynthesis.speak(warmup);
-      window.speechSynthesis.cancel();
-    }
-  } catch { /* aquecimento ignorado */ }
+    window.speechSynthesis.speak(warmup);
+    window.speechSynthesis.cancel();
+  } catch { /* ignorar */ }
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  const voices = await waitForSystemVoices();
-  const selectedVoice = selectSystemVoice(voices, preferredVoice);
-  const preferredMeta = KAZE_VOICE_OPTIONS.find((voice) => voice.id === preferredVoice) ?? KAZE_VOICE_OPTIONS[0];
+  const utterance = new SpeechSynthesisUtterance(clean);
+  currentUtterance = utterance;
 
-  console.log(`[KAZE Voice TTS] Usando voz: ${selectedVoice?.name || 'default'}, lang: ${selectedVoice?.lang || preferredMeta.locale}`);
+  if (voice) {
+    utterance.voice = voice;
+    utterance.lang = voice.lang;
+  } else {
+    utterance.lang = 'pt-PT';   // fallback se não encontrou voz portuguesa
+  }
 
-  utterance.voice = selectedVoice;
-  utterance.lang = selectedVoice?.lang?.startsWith('pt') ? selectedVoice.lang : 'pt-PT';
   utterance.rate = 1.0;
-  utterance.pitch = 0.9;
+  utterance.pitch = 0.95;
   utterance.volume = 1.0;
 
-  return new Promise<{ source: 'windows_sapi' | 'none' }>((resolve, reject) => {
+  return new Promise<NativeTTSSpeakResult>((resolve) => {
     let settled = false;
-    const finish = (result: any) => {
+    const finish = () => {
       if (settled) return;
       settled = true;
-      if (result.error) reject(new Error(result.error));
-      else resolve({ source: result.source });
+      currentUtterance = null;
+      resolve({ source: 'native_tts' });
     };
 
-    utterance.onend = () => finish({ source: 'windows_sapi' });
-    utterance.onerror = (event) => finish({ error: event?.error || 'Falha no Windows SAPI.' });
-    
-    // Safety timeout for SpeechSynthesis (known to hang on some browsers)
-    const timeoutDuration = Math.max(10000, text.length * 150); // 150ms per char, min 10s
+    utterance.onend = finish;
+    utterance.onerror = (event) => {
+      if (event.error === 'canceled' || event.error === 'interrupted') {
+        // Cancelamento deliberado (kazeStop) — não é erro
+        finish();
+        return;
+      }
+      console.warn('[KAZE NativeTTS] Erro:', event.error);
+      finish();
+    };
+
+    // Safety timeout — alguns browsers bloqueiam em textos longos
+    const timeout = Math.max(12000, clean.length * 120);
     setTimeout(() => {
       if (!settled) {
-        console.warn('[KAZE Voice] Windows SAPI Timeout, forçando libertação.');
+        console.warn('[KAZE NativeTTS] Timeout — a forçar fim.');
         window.speechSynthesis.cancel();
-        finish({ source: 'windows_sapi' }); // Resolve smoothly to unblock
+        finish();
       }
-    }, timeoutDuration);
+    }, timeout);
 
     window.speechSynthesis.speak(utterance);
   });
 }
 
-function pcm24kToWavBlob(base64Pcm: string, sampleRate = 24000): Blob {
-  const binaryString = atob(base64Pcm);
-  const len = binaryString.length;
-  const buffer = new ArrayBuffer(44 + len);
-  const view = new DataView(buffer);
-
-  // "RIFF"
-  view.setUint32(0, 0x52494646, false);
-  view.setUint32(4, 36 + len, true);
-  // "WAVE"
-  view.setUint32(8, 0x57415645, false);
-  // "fmt "
-  view.setUint32(12, 0x666d7420, false);
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM format
-  view.setUint16(22, 1, true); // mono
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true); // block align
-  view.setUint16(34, 16, true); // 16-bit
-  // "data"
-  view.setUint32(36, 0x64617461, false);
-  view.setUint32(40, len, true);
-
-  const pcmBytes = new Uint8Array(buffer, 44);
-  for (let i = 0; i < len; i++) {
-    pcmBytes[i] = binaryString.charCodeAt(i);
-  }
-
-  return new Blob([buffer], { type: 'audio/wav' });
+/**
+ * Alias de kazeSpeak — mantém compatibilidade com importações existentes.
+ * Antes, kazeSpeakOnline usava APIs externas. Agora usa a mesma voz nativa.
+ */
+export async function kazeSpeakOnline(
+  text: string,
+  _elevenLabsApiKey: string | null = null,
+): Promise<NativeTTSSpeakResult | undefined> {
+  return kazeSpeak(text);
 }
 
-export async function speakGoogleGenAIVoice(text: string, voiceName: 'Charon' | 'Puck' | 'Fenrir' = 'Charon') {
-  const apiKey = (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY não configurada.');
+// ─── Preferências (compatibilidade) ─────────────────────────────────────────
 
-  // Prevenir tom robótico em inglês no telemóvel: instrução explícita de idioma português
-  const ttsPrompt = `[Fala em Português de Portugal, com sotaque natural e fluente. Nunca fales em inglês.]\n\n${text}`;
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: ttsPrompt }] }],
-        generationConfig: {
-          responseModalities: ['AUDIO'],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName,
-              },
-            },
-          },
-        },
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    const errBody = await res.text().catch(() => '');
-    throw new Error(`Google GenAI TTS HTTP ${res.status}: ${errBody}`);
-  }
-
-  const data = await res.json();
-  const inlineData = data?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-  if (!inlineData?.data) {
-    throw new Error('Sem áudio na resposta do Google GenAI');
-  }
-
-  const wavBlob = pcm24kToWavBlob(inlineData.data, 24000);
-  const audioUrl = URL.createObjectURL(wavBlob);
-  const audio = new Audio(audioUrl);
-
-  await new Promise<void>((resolve, reject) => {
-    audio.onended = () => {
-      URL.revokeObjectURL(audioUrl);
-      resolve();
-    };
-    audio.onerror = (e) => {
-      URL.revokeObjectURL(audioUrl);
-      reject(e);
-    };
-    audio.play().catch(reject);
-  });
-
-  return { source: 'google_genai_voice' as const };
+export function getKazeVoicePreference(): string {
+  return ls(KAZE_VOICE_PREF_KEY) ?? KAZE_VOICE_OPTIONS[1].id;
 }
 
-export function getKazeVoicePreference() {
-  return resolveStoredVoicePreference();
+export function setKazeVoicePreference(voiceId: string): string {
+  const safe = KAZE_VOICE_OPTIONS.some((v) => v.id === voiceId)
+    ? voiceId
+    : KAZE_VOICE_OPTIONS[1].id;
+  lsSet(KAZE_VOICE_PREF_KEY, safe);
+  return safe;
 }
 
-export function setKazeVoicePreference(voiceId: string) {
-  if (typeof window === 'undefined') return DEFAULT_VOICE;
-  const safeVoice = KAZE_VOICE_OPTIONS.some((voice) => voice.id === voiceId) ? voiceId : DEFAULT_VOICE;
-  window.localStorage.setItem(KAZE_VOICE_STORAGE_KEY, safeVoice);
-  return safeVoice;
+/**
+ * Devolve a lista de vozes portuguesas disponíveis no dispositivo.
+ * Útil para permitir ao utilizador escolher manualmente.
+ */
+export async function getAvailablePortugueseVoices(): Promise<SpeechSynthesisVoice[]> {
+  const voices = await waitForVoices();
+  return voices
+    .filter((v) => (v.lang || '').toLowerCase().startsWith('pt'))
+    .sort((a, b) => scoreVoice(b) - scoreVoice(a));
 }
 
-export async function kazeSpeak(text: string, elevenLabsApiKey: string | null = null) {
-  if (!text?.trim()) return;
-
-  const clean = text
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/[*_#`[\]()]/g, '')
-    .replace(/https?:\/\/\S+/g, '')
-    .trim()
-    .substring(0, 500);
-
-  // 1. Google GenAI Real-Time Neural Voice (JARVIS - Charon Voice) — PRIORIDADE #1
-  try {
-    return await speakGoogleGenAIVoice(clean, 'Charon');
-  } catch (genaiErr: any) {
-    console.warn('[KAZE Voice] Google GenAI TTS falhou:', genaiErr?.message || genaiErr);
-  }
-
-  // 2. ElevenLabs se configurado
-  if (elevenLabsApiKey) {
-    try {
-      return await speakElevenLabs(clean, elevenLabsApiKey);
-    } catch (elevenErr: any) {
-      console.warn('[KAZE Voice] ElevenLabs falhou:', elevenErr?.message || elevenErr);
-    }
-  }
-
-  // 3. Fallback browser SAPI se offline
-  try {
-    const sapiResult = await speakWindowsFallback(clean);
-    if (sapiResult.source !== 'none') return sapiResult;
-  } catch (sapiErr: any) {
-    console.warn('[KAZE Voice] Windows SAPI falhou:', sapiErr?.message || sapiErr);
-  }
-
-  return { source: 'none' as const };
+/**
+ * Define manualmente uma voz por voiceURI. Guarda em cache permanente.
+ */
+export function setNativeVoice(voiceURI: string): void {
+  lsSet(VOICE_CACHE_KEY, voiceURI);
+  lsSet(VOICE_READY_KEY, '1');
+  cachedVoice = null;        // forçar re-resolução na próxima fala
+  voicesLoaded = false;
 }
 
-export async function kazeSpeakOnline(text: string, elevenLabsApiKey: string | null = null) {
-  if (!text?.trim()) return;
-
-  const clean = text
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/[*_#`[\]()]/g, '')
-    .replace(/https?:\/\/\S+/g, '')
-    .trim()
-    .substring(0, 700);
-
-  // 1. Google GenAI Real-Time Neural Voice (JARVIS - Charon Voice) — PRIORIDADE #1
-  try {
-    return await speakGoogleGenAIVoice(clean, 'Charon');
-  } catch (genaiErr: any) {
-    console.warn('[KAZE Voice] Google GenAI TTS falhou, tentando fallback:', genaiErr?.message || genaiErr);
-  }
-
-  // 2. ElevenLabs se chave presente
-  const elevenLabsKey = elevenLabsApiKey || getElevenLabsConfig().apiKey;
-  if (elevenLabsKey) {
-    try {
-      return await speakElevenLabs(clean, elevenLabsKey);
-    } catch (elevenErr: any) {
-      console.warn('[KAZE Voice] ElevenLabs falhou:', elevenErr?.message || elevenErr);
-    }
-  }
-
-  // 3. Local TTS
-  try {
-    return await speakLocalTTS(clean, resolveStoredVoicePreference());
-  } catch (localErr: any) {
-    // Silencioso
-  }
-
-  // 4. Fallback browser SAPI se offline
-  try {
-    const sapiResult = await speakWindowsFallback(clean);
-    if (sapiResult.source !== 'none') return sapiResult;
-  } catch (sapiErr: any) {
-    console.warn('[KAZE Voice] Windows SAPI falhou:', sapiErr?.message || sapiErr);
-  }
-
-  return { source: 'none' as const };
+/**
+ * Verifica se a voz já foi configurada (autorização concedida).
+ */
+export function isVoiceReady(): boolean {
+  return ls(VOICE_READY_KEY) === '1';
 }
