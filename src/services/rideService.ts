@@ -1023,23 +1023,63 @@ class RideService {
   }
 
   async cancelRide(rideId: string, _userId?: string, reason?: string): Promise<AppError | null> {
+    const cancelReason = reason ?? 'Cancelado pelo utilizador';
     try {
-      const { data, error } = await supabase.rpc('cancel_ride_safe', {
-        p_ride_id: rideId,
-        p_reason: reason ?? 'Cancelado pelo utilizador',
-      });
+      let cancelled = false;
 
-      if (error) {
-        console.error('[rideService.cancelRide] RPC error:', error);
-        return { code: error.code ?? 'cancel_rpc_failed', message: 'Não foi possível cancelar a corrida agora.' };
+      // 1. Tentar RPC segura cancel_ride_safe (transação atómica com locks)
+      try {
+        const { data, error } = await supabase.rpc('cancel_ride_safe', {
+          p_ride_id: rideId,
+          p_reason: cancelReason,
+        });
+
+        if (!error) {
+          const result = (data as Array<{ success: boolean; message: string; reason?: string }>)?.[0];
+          if (result?.success) {
+            cancelled = true;
+          }
+        } else {
+          console.warn('[rideService.cancelRide] RPC cancel_ride_safe avisou:', error.message);
+        }
+      } catch (rpcErr) {
+        console.warn('[rideService.cancelRide] RPC falhou, a tentar fallback directo:', rpcErr);
       }
 
-      const result = (data as Array<{ success: boolean; message: string; reason?: string }>)?.[0];
-      if (result?.success) {
+      // 2. Fallback de alta resiliência: UPDATE directo na tabela rides
+      // (Permitido pelas políticas RLS da tabela rides para o passageiro ou motorista)
+      if (!cancelled) {
+        const { error: updateError } = await supabase
+          .from('rides')
+          .update({
+            status: RideStatus.CANCELLED,
+            cancelled_at: new Date().toISOString(),
+            cancel_reason: cancelReason,
+          })
+          .eq('id', rideId)
+          .neq('status', RideStatus.COMPLETED);
+
+        if (!updateError) {
+          cancelled = true;
+        } else {
+          console.error('[rideService.cancelRide] Fallback directo falhou:', updateError.message);
+        }
+      }
+
+      if (cancelled) {
+        // 3. Limpar imediatamente as notificações pendentes dos motoristas
+        void supabase
+          .from('driver_notifications')
+          .update({ notif_status: 'cancelled', read_at: new Date().toISOString() })
+          .eq('ride_id', rideId)
+          .then(null, () => {});
+
+        // 4. Emitir broadcast Realtime para fechar o card de todos os motoristas conectados
         void this.broadcastRideDismissed(rideId);
         return null;
       }
-      return { code: 'cancel_denied', message: result?.message ?? result?.reason ?? 'Não foi possível cancelar.' };
+
+      return { code: 'cancel_denied', message: 'Não foi possível cancelar a corrida de momento.' };
     } catch (err) {
       console.error('[rideService.cancelRide] Excepção:', err);
       return { code: 'unknown', message: 'Erro ao cancelar corrida.' };
@@ -1078,7 +1118,12 @@ class RideService {
     try {
       const { data, error } = await supabase.rpc('get_searching_rides');
       if (!error && data && Array.isArray(data) && data.length > 0) { 
-        return data as DbRide[]; 
+        return (data as Array<Partial<DbRide>>).map(r => ({
+          status: RideStatus.SEARCHING,
+          driver_id: null,
+          driver_confirmed: false,
+          ...r,
+        })) as DbRide[]; 
       }
       // Fallback resiliente: tentar leitura de corridas disponíveis
       const { data: directRides } = await supabase
@@ -1091,7 +1136,7 @@ class RideService {
       if (directRides && directRides.length > 0) {
         return directRides as DbRide[];
       }
-      return (data ?? []) as DbRide[];
+      return [];
     } catch (err) { 
       console.error('[rideService.getAvailableRides] Falha silenciosa', err); 
       return []; 
@@ -1156,7 +1201,7 @@ class RideService {
 
   // ── FIX v3.6: Broadcast Realtime + Polling Rápido Resiliente ─────────────
   // Combina WebSockets Realtime broadcast para entrega instantânea (< 300ms)
-  // com Polling a cada 3s como fallback inabalável.
+  // com Polling a cada 3s com janela de tolerância de 90s para evitar descarte precoce.
   subscribeToAvailableRides(
     onNew:  (r: DbRide) => void,
     onGone: (id: string) => void,
@@ -1165,6 +1210,7 @@ class RideService {
     let isActive = true;
     let timerId: ReturnType<typeof setTimeout> | null = null;
     const knownRideIds = new Set<string>();
+    const rideReceivedAt = new Map<string, number>();
 
     // 1. Canal Realtime Broadcast: entrega instantânea em < 300ms
     const broadcastChannel = supabase.channel('zenith-available-rides')
@@ -1172,6 +1218,7 @@ class RideService {
         const r = payload.payload as DbRide;
         if (r && r.id && !knownRideIds.has(r.id)) {
           knownRideIds.add(r.id);
+          rideReceivedAt.set(r.id, Date.now());
           if (import.meta.env.DEV) {
             console.debug('[rideService.broadcast] Nova corrida recebida via Realtime:', r.id);
           }
@@ -1182,32 +1229,42 @@ class RideService {
         const { id } = (payload.payload ?? {}) as { id: string };
         if (id) {
           knownRideIds.delete(id);
+          rideReceivedAt.delete(id);
           onGone(id);
         }
       })
       .subscribe();
 
-    // 2. Polling de contingência a cada 3s
+    // 2. Polling de contingência a cada 3s com protecção de tolerância (90s)
     const poll = async () => {
       if (!isActive) return;
       try {
         const currentRides = await this.getAvailableRides();
         const currentIds = new Set(currentRides.map(r => r.id));
+        const now = Date.now();
         
         // Publicar novas corridas para a UI
         for (const ride of currentRides) {
           if (!knownRideIds.has(ride.id)) {
             knownRideIds.add(ride.id);
+            rideReceivedAt.set(ride.id, now);
             if (import.meta.env.DEV) {
               console.debug('[rideService.polling] Nova corrida recebida via Polling:', ride.id);
             }
             onNew(ride);
           }
         }
-        // Retirar os cartões das corridas que já foram aceites ou canceladas
+
+        // Retirar apenas corridas expiradas (> 90s) ou já não disponíveis
         for (const id of Array.from(knownRideIds)) {
           if (!currentIds.has(id)) {
+            const receivedAt = rideReceivedAt.get(id) ?? 0;
+            // Se foi recebida há menos de 90 segundos, NÃO remover pelo polling
+            if (now - receivedAt < 90_000) {
+              continue;
+            }
             knownRideIds.delete(id);
+            rideReceivedAt.delete(id);
             onGone(id);
           }
         }

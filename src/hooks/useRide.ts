@@ -395,28 +395,40 @@ export function useRide(): UseRideReturn {
   }, [dbUser?.id, auction.selectedDriver, resetAuction, showToast, clearRideDetails]);
 
   // ── cancelRide ────────────────────────────────────────────────────────────
-  // SECURITY: cancel_ride_safe usa auth.uid() internamente — sem p_user_id
-  // v3.6: Cancelamento OPTIMISTA instantâneo (0ms de atraso perceptível)
+  // v3.7: Cancelamento robusto com garantia de 1ª tentativa e retry automático
   const cancelRide = useCallback(async (reason?: string) => {
     const targetRideId = ride.rideId;
     if (!targetRideId) return;
 
-    // 1. Limpeza optimista imediata
+    // Desligar subscrições activas para estancar tráfego
     driverLocUnsub.current?.(); driverLocUnsub.current = null;
     unsubRef.current?.(); unsubRef.current = null;
-    clearRideDetails();
-    resetRide();
-    resetAuction();
-    showToast('Corrida cancelada.', 'info');
 
-    // 2. Sincronizar cancelamento com a base de dados em segundo plano
     try {
-      const err = await rideService.cancelRide(targetRideId, undefined, reason);
+      // 1. Sincronizar com o backend (duplo nível: RPC + UPDATE directo)
+      let err = await rideService.cancelRide(targetRideId, undefined, reason);
+
+      // Se falhou na 1ª tentativa (ex: latência de rede móvel), retentar de imediato
       if (err) {
-        console.warn('[useRide.cancelRide] Resposta do backend:', err.message);
+        console.warn('[useRide.cancelRide] 1ª tentativa falhou, a retentar:', err.message);
+        await new Promise(r => setTimeout(r, 400));
+        err = await rideService.cancelRide(targetRideId, undefined, reason);
       }
+
+      if (err) {
+        console.error('[useRide.cancelRide] Não foi possível cancelar após retentativa:', err);
+        showToast('Não foi possível cancelar a corrida. Tenta de novo.', 'error');
+        return;
+      }
+
+      // 2. Limpar estado local com confirmação de sucesso real
+      clearRideDetails();
+      resetRide();
+      resetAuction();
+      showToast('Corrida cancelada.', 'info');
     } catch (err) {
-      console.warn('[useRide.cancelRide] Falha na sincronização do cancelamento:', err);
+      console.error('[useRide.cancelRide] Excepção ao cancelar corrida:', err);
+      showToast('Erro ao cancelar corrida.', 'error');
     }
   }, [ride.rideId, resetRide, resetAuction, showToast, clearRideDetails]);
 
@@ -477,6 +489,13 @@ export function useRide(): UseRideReturn {
   // SECURITY: usa RPCs (confirm_pickup/start_ride/complete_ride) com auth.uid()
   const advanceStatus = useCallback(async (status: RideStatus) => {
     if (!ride.rideId) return;
+
+    // Se o estado a avançar for CANCELLED, invocar o fluxo de cancelamento robusto
+    if (status === RideStatus.CANCELLED) {
+      await cancelRide('Cancelado pelo motorista');
+      return;
+    }
+
     setLoading(true);
     try {
       const { data, error: e } = await rideService.updateRideStatus(ride.rideId, status);
@@ -488,7 +507,7 @@ export function useRide(): UseRideReturn {
     } finally {
       setLoading(false);
     }
-  }, [showToast, ride.rideId]);
+  }, [ride.rideId, cancelRide, showToast]);
 
   // ── submitReview ────────────────────────────────────────────────────────────
   const submitReview = useCallback(async (score: number, comment?: string) => {

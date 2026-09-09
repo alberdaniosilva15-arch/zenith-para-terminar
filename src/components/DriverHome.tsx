@@ -46,11 +46,20 @@ interface DriverHomeProps {
 
 // Payload de notificação persistido em driver_notifications
 interface NotifPayload {
-  ride_id:        string;
-  origin_address: string;
-  dest_address:   string;
-  price_kz:       number;
-  distance_km:    number | null;
+  ride_id:              string;
+  passenger_id?:         string;
+  passenger_name?:       string;
+  passenger_avatar_url?: string | null;
+  passenger_rating?:     number;
+  origin_address:       string;
+  origin_lat?:          number;
+  origin_lng?:          number;
+  dest_address:         string;
+  dest_lat?:            number;
+  dest_lng?:            number;
+  price_kz:             number;
+  distance_km:          number | null;
+  duration_min?:        number;
 }
 
 const DriverHome: React.FC<DriverHomeProps> = ({
@@ -529,23 +538,49 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         if (data) realRide = data as DbRide;
       } catch (err) { console.warn('[DriverHome] Falha ao obter ETA/distância fallback:', err); }
 
-      const fallbackRide: DbRide = realRide ?? ({
-        id:               rideId,
-        origin_address:   payload.origin_address ?? '—',
-        dest_address:     payload.dest_address   ?? '—',
-        price_kz:         payload.price_kz       ?? 0,
-        distance_km:      payload.distance_km    ?? null,
-        status:           RideStatus.SEARCHING,
-        driver_id:        null,
-        driver_confirmed: false,
-        passenger_id:     '',
-        origin_lat: 0, origin_lng: 0,
-        dest_lat: 0, dest_lng: 0,
-        surge_multiplier: 1,
-        created_at: latest.created_at ?? new Date().toISOString(),
-        accepted_at: null, pickup_at: null, started_at: null,
-        completed_at: null, cancelled_at: null, cancel_reason: null,
-      } as DbRide);
+      // Se a corrida existe na BD mas já não está em 'searching', descartar e marcar como lida
+      if (realRide && realRide.status !== RideStatus.SEARCHING) {
+        await supabase
+          .from('driver_notifications')
+          .update({ read_at: new Date().toISOString() })
+          .eq('driver_id', driverId)
+          .is('read_at', null)
+          .eq('type', 'new_ride');
+        return;
+      }
+
+      const passName = payload.passenger_name ?? (realRide as any)?.passenger_name ?? 'Passageiro Zenith';
+      const passAvatar = payload.passenger_avatar_url ?? (realRide as any)?.passenger_avatar_url ?? null;
+      const passRating = payload.passenger_rating ?? (realRide as any)?.passenger_rating ?? 5.0;
+
+      const fallbackRide: DbRide = {
+        ...(realRide ?? {
+          id:               rideId,
+          origin_address:   payload.origin_address ?? '—',
+          dest_address:     payload.dest_address   ?? '—',
+          price_kz:         payload.price_kz       ?? 0,
+          distance_km:      payload.distance_km    ?? null,
+          status:           RideStatus.SEARCHING,
+          driver_id:        null,
+          driver_confirmed: false,
+          passenger_id:     payload.passenger_id   ?? '',
+          origin_lat:       payload.origin_lat     ?? 0,
+          origin_lng:       payload.origin_lng     ?? 0,
+          dest_lat:         payload.dest_lat       ?? 0,
+          dest_lng:         payload.dest_lng       ?? 0,
+          surge_multiplier: 1,
+          created_at:       latest.created_at ?? new Date().toISOString(),
+          accepted_at:      null,
+          pickup_at:        null,
+          started_at:       null,
+          completed_at:     null,
+          cancelled_at:     null,
+          cancel_reason:    null,
+        }),
+        passenger_name:       passName,
+        passenger_avatar_url: passAvatar,
+        passenger_rating:     passRating,
+      } as unknown as DbRide;
 
       setIncomingRide(prev => {
         if (!prev || prev.id !== fallbackRide.id) {
@@ -604,25 +639,44 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           if (data) realRide = data as DbRide;
         } catch (err) { console.warn('[DriverHome] Falha na auto-aceitação:', err); }
 
-        // Fallback mínimo se a BD não responder
+        // Se a corrida já não está em 'searching', não apresentar ao motorista
+        if (realRide && realRide.status !== RideStatus.SEARCHING) {
+          return;
+        }
+
         const np = notif.payload;
-        const fallbackRide: DbRide = realRide ?? ({
-          id:               rideId,
-          origin_address:   np.origin_address ?? '—',
-          dest_address:     np.dest_address   ?? '—',
-          price_kz:         np.price_kz       ?? 0,
-          distance_km:      np.distance_km    ?? null,
-          status:           RideStatus.SEARCHING,
-          driver_id:        null,
-          driver_confirmed: false,
-          passenger_id:     '',
-          origin_lat: 0, origin_lng: 0,
-          dest_lat: 0, dest_lng: 0,
-          surge_multiplier: 1,
-          created_at: notif.created_at ?? new Date().toISOString(),
-          accepted_at: null, pickup_at: null, started_at: null,
-          completed_at: null, cancelled_at: null, cancel_reason: null,
-        } as DbRide);
+        const passName = np?.passenger_name ?? (realRide as any)?.passenger_name ?? 'Passageiro Zenith';
+        const passAvatar = np?.passenger_avatar_url ?? (realRide as any)?.passenger_avatar_url ?? null;
+        const passRating = np?.passenger_rating ?? (realRide as any)?.passenger_rating ?? 5.0;
+
+        const fallbackRide: DbRide = {
+          ...(realRide ?? {
+            id:               rideId,
+            origin_address:   np.origin_address ?? '—',
+            dest_address:     np.dest_address   ?? '—',
+            price_kz:         np.price_kz       ?? 0,
+            distance_km:      np.distance_km    ?? null,
+            status:           RideStatus.SEARCHING,
+            driver_id:        null,
+            driver_confirmed: false,
+            passenger_id:     np.passenger_id   ?? '',
+            origin_lat:       np.origin_lat     ?? 0,
+            origin_lng:       np.origin_lng     ?? 0,
+            dest_lat:         np.dest_lat       ?? 0,
+            dest_lng:         np.dest_lng       ?? 0,
+            surge_multiplier: 1,
+            created_at:       notif.created_at ?? new Date().toISOString(),
+            accepted_at:      null,
+            pickup_at:        null,
+            started_at:       null,
+            completed_at:     null,
+            cancelled_at:     null,
+            cancel_reason:    null,
+          }),
+          passenger_name:       passName,
+          passenger_avatar_url: passAvatar,
+          passenger_rating:     passRating,
+        } as unknown as DbRide;
 
         setIncomingRide(prev => {
           if (!prev || prev.id !== fallbackRide.id) {
