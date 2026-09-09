@@ -12,7 +12,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { geminiService, getLocalKazeResponse } from '../services/geminiService';
 import { kazeAppAgent, KazeProposedAction } from '../services/kazeAppAgent';
-import { kazeSpeak } from '../lib/kazeVoice';
+import { kazeSpeak, unlockNativeTTS } from '../lib/kazeVoice';
 import { UserRole, RideStatus, LatLng } from '../types';
 import { supabase } from '../lib/supabase';
 import { useAppStore } from '../store/useAppStore';
@@ -173,12 +173,16 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     if (isOpen && messages.length === 0) {
       const greeting = pickGreeting(getGreetingPool(role));
       const name = userName ? `, ${userName.split(' ')[0]}` : '';
+      const text = `Olá${name}! ${greeting}`;
       setMessages([{
         role: 'model',
-        text: `Olá${name}! ${greeting}`,
+        text,
       }]);
+      if (voiceEnabled) {
+        void kazeSpeak(text);
+      }
     }
-  }, [isOpen, role, userName, messages.length]);
+  }, [isOpen, role, userName, messages.length, voiceEnabled]);
 
   // Pensamentos espontâneos
   useEffect(() => {
@@ -355,6 +359,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   // ── Envio de Texto / Comando ───────────────────────────────────────────────
   const handleSendText = async (e?: React.FormEvent, customText?: string) => {
     if (e) e.preventDefault();
+    unlockNativeTTS();
     const userText = (customText || inputValue).trim();
     if (!userText || isThinking) return;
 
@@ -584,6 +589,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   };
 
   const toggleMicListening = async () => {
+    unlockNativeTTS();
     if (isListeningMic) {
       await stopAndProcessRecording();
       return;
@@ -1331,7 +1337,10 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
 
       {/* Botão flutuante do Kaze Mascot (Jewel Bubble com Emblema Z) */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          unlockNativeTTS();
+          setIsOpen(!isOpen);
+        }}
         className="jewel-bubble-btn pointer-events-auto transition transform active:scale-95 shadow-2xl relative flex items-center justify-center"
         style={{
           width: '54px',

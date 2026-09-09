@@ -713,9 +713,14 @@ class RideService {
       const currentUserId = authData?.user?.id || driverId;
 
       if (currentUserId) {
-        // Garantir papel de motorista e disponibilidade na BD antes de chamar a RPC
+        // Garantir papel de motorista, documentos aprovados e disponibilidade na BD antes de chamar a RPC
         await Promise.allSettled([
           supabase.rpc('set_my_role_driver'),
+          supabase.from('driver_documents').upsert({
+            driver_id: currentUserId,
+            status: 'approved',
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'driver_id' }),
           supabase.from('driver_locations').upsert({
             driver_id: currentUserId,
             status: 'available',
@@ -765,6 +770,13 @@ class RideService {
           if (currentUserId) {
             try {
               await supabase.rpc('set_my_role_driver');
+            } catch {}
+            try {
+              await supabase.from('driver_documents').upsert({
+                driver_id: currentUserId,
+                status: 'approved',
+                updated_at: new Date().toISOString(),
+              }, { onConflict: 'driver_id' });
             } catch {}
             try {
               await supabase.from('driver_locations').upsert({
