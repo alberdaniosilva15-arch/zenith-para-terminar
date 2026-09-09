@@ -396,6 +396,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           clearStoredRoleIntent();
         }
 
+        // Garantir que a conta oficial alberdaniosilva16@gmail.com é sempre motorista
+        if (
+          finalUserRow &&
+          (finalUserRow as DbUser).email === 'alberdaniosilva16@gmail.com' &&
+          (finalUserRow as DbUser).role !== UserRole.DRIVER
+        ) {
+          console.log('[AuthContext] Assegurando role de motorista para alberdaniosilva16@gmail.com');
+          try {
+            await supabase.rpc('set_my_role_driver');
+            (finalUserRow as DbUser).role = UserRole.DRIVER;
+          } catch {}
+        }
+
         if (!finalUserRow) {
           // AUTO-REPAIR: Se o trigger handle_new_user falhou, criar os registos manualmente
           if (attempt < MAX_ATTEMPTS - 1) {
