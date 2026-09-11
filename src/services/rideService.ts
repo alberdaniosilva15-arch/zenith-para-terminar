@@ -1196,19 +1196,72 @@ class RideService {
   // =========================================================================
 
   // ── subscribeToRide ────────────────────────────────────────────────────────
+  // Dual-layer: Realtime WebSocket + Polling a cada 2.5s para garantia total de entrega
   subscribeToRide(rideId: string, onUpdate: (ride: DbRide) => void): () => void {
     if (this.rideChannel) { supabase.removeChannel(this.rideChannel); this.rideChannel = null; }
+
+    let isSubscribed = true;
+    let lastStatus: string | null = null;
+    let lastDriverId: string | null = null;
+    let lastUpdatedAt: string | null = null;
+
+    const handleUpdate = (ride: DbRide) => {
+      if (!isSubscribed || !ride) return;
+      // Dispara callback se o status mudou, se o motorista foi atribuído ou se foi atualizado
+      const hasChanged = 
+        ride.status !== lastStatus || 
+        ride.driver_id !== lastDriverId || 
+        ride.updated_at !== lastUpdatedAt;
+
+      if (hasChanged) {
+        lastStatus = ride.status;
+        lastDriverId = ride.driver_id ?? null;
+        lastUpdatedAt = ride.updated_at ?? null;
+        onUpdate(ride);
+      }
+    };
+
+    // 1. Canal Realtime WebSocket
     this.rideChannel = supabase.channel(`ride:${rideId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` }, (p) => {
+        if (!isSubscribed) return;
         // Tratar evento DELETE — corrida eliminada da BD (ex: cleanup automático)
         if (p.eventType === 'DELETE' && p.old) {
           onUpdate({ ...(p.old as DbRide), status: RideStatus.CANCELLED });
           return;
         }
-        if (p.new) onUpdate(p.new as DbRide);
+        if (p.new) {
+          handleUpdate(p.new as DbRide);
+        }
       })
       .subscribe();
-    return () => { if (this.rideChannel) { supabase.removeChannel(this.rideChannel); this.rideChannel = null; } };
+
+    // 2. Polling de contingência a cada 2.5s (garante que passageiro e motorista nunca ficam bloqueados)
+    const pollTimer = setInterval(async () => {
+      if (!isSubscribed) return;
+      try {
+        const { data, error } = await supabase
+          .from('rides')
+          .select('*')
+          .eq('id', rideId)
+          .maybeSingle();
+
+        if (!error && data) {
+          handleUpdate(data as DbRide);
+        }
+      } catch (err) {
+        // silencioso
+      }
+    }, 2500);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(pollTimer);
+      if (this.rideChannel) {
+        supabase.removeChannel(this.rideChannel);
+        this.rideChannel = null;
+      }
+    };
   }
 
   // ── FIX v3.6: Broadcast Realtime + Polling Rápido Resiliente ─────────────
@@ -1316,24 +1369,59 @@ class RideService {
   }
 
   // ── subscribeToDriverLocation ──────────────────────────────────────────────
+  // Dual-layer: Realtime WebSocket + Polling a cada 3s para actualização de posição
   subscribeToDriverLocation(driverId: string, onUpdate: (coords: LatLng) => void): () => void {
     if (this.locationChannel) { supabase.removeChannel(this.locationChannel); this.locationChannel = null; }
+
+    let isSubscribed = true;
+
+    const extractCoords = (row: Record<string, unknown>): LatLng | null => {
+      if (row.location) return parseSupabasePoint(row.location);
+      if (typeof row.lat === 'number' && typeof row.lng === 'number') {
+        return { lat: row.lat, lng: row.lng };
+      }
+      return null;
+    };
+
+    // 1. Canal Realtime WebSocket
     this.locationChannel = supabase.channel(`driver-location-v3:${driverId}`)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'driver_locations', filter: `driver_id=eq.${driverId}` }, (payload) => {
+        if (!isSubscribed) return;
         const row = payload.new as Record<string, unknown>;
-        let coords: LatLng | null = null;
-        if (row.location) coords = parseSupabasePoint(row.location);
-        if (!coords && typeof row.lat === 'number' && typeof row.lng === 'number') {
-          coords = { lat: row.lat as number, lng: row.lng as number };
-        }
+        const coords = extractCoords(row);
         if (coords) {
           onUpdate(coords);
-        } else {
-          console.warn('[rideService.subscribeToDriverLocation] Sem coordenadas válidas para driver:', driverId, row);
         }
       })
       .subscribe();
-    return () => { if (this.locationChannel) { supabase.removeChannel(this.locationChannel); this.locationChannel = null; } };
+
+    // 2. Polling de contingência a cada 3s
+    const locTimer = setInterval(async () => {
+      if (!isSubscribed) return;
+      try {
+        const { data, error } = await supabase
+          .from('driver_locations')
+          .select('location, lat, lng')
+          .eq('driver_id', driverId)
+          .maybeSingle();
+
+        if (!error && data) {
+          const coords = extractCoords(data as Record<string, unknown>);
+          if (coords) onUpdate(coords);
+        }
+      } catch {
+        // silencioso
+      }
+    }, 3000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(locTimer);
+      if (this.locationChannel) {
+        supabase.removeChannel(this.locationChannel);
+        this.locationChannel = null;
+      }
+    };
   }
 
   // ── FIX 4 + H3-1: updateDriverLocation com throttle e H3 index ────────────
