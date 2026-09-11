@@ -96,6 +96,7 @@ export interface DbRide {
   pickup_at: string | null; started_at: string | null;
   completed_at: string | null; cancelled_at: string | null;
   cancel_reason: string | null;
+  updated_at?: string | null;
   passenger_name?: string;
   passenger_avatar_url?: string | null;
   passenger_rating?: number;

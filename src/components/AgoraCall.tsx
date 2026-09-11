@@ -1,15 +1,7 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — AgoraCall.tsx
+// ZENITH RIDE v3.2 — AgoraCall.tsx
 // Chamadas de voz VoIP entre motorista e passageiro via Agora.io
-// Versão WEB (agora-rtc-sdk-ng) — NÃO é React Native
-//
-// Uso:
-//   <AgoraCall corridaId={ride.rideId!} userId={dbUser.id} onEndCall={() => {}} />
-//
-// Requer:
-//   npm install agora-rtc-sdk-ng
-//   Edge Function: supabase/functions/agora-token/index.ts
-//   Secrets Supabase: AGORA_APP_ID, AGORA_APP_CERT
+// Versão WEB (agora-rtc-sdk-ng) com Sinalização Realtime e Cancelamento Resiliente
 // =============================================================================
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -37,18 +29,28 @@ async function deriveEncryptionKey(channel: string, hint: string): Promise<strin
   return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
+// Deriva um salt determinístico de 32 bytes partilhado por ambos os participantes
+async function deriveEncryptionSalt(channel: string): Promise<Uint8Array> {
+  const raw = new TextEncoder().encode(channel + '_zenith_salt_v1');
+  const hash = await crypto.subtle.digest('SHA-256', raw);
+  return new Uint8Array(hash);
+}
+
 const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, peerName }) => {
   const showToast = useAppStore((s) => s.showToast);
-  const [callState,   setCallState]   = useState<CallState>('idle');
-  const [isMuted,     setIsMuted]     = useState(false);
-  const [isSpeaker,   setIsSpeaker]   = useState(true);
-  const [duration,    setDuration]    = useState(0);
-  const [errorMsg,    setErrorMsg]    = useState<string | null>(null);
-  const [peerJoined,  setPeerJoined]  = useState(false);
+  const [callState,      setCallState]      = useState<CallState>('idle');
+  const [isMuted,        setIsMuted]        = useState(false);
+  const [isSpeaker,      setIsSpeaker]      = useState(true);
+  const [duration,       setDuration]       = useState(0);
+  const [errorMsg,       setErrorMsg]       = useState<string | null>(null);
+  const [peerJoined,     setPeerJoined]     = useState(false);
+  const [incomingCall,   setIncomingCall]   = useState<{ callerName?: string; callerId: string } | null>(null);
 
-  const clientRef   = useRef<IAgoraRTCClient | null>(null);
-  const audioRef    = useRef<IMicrophoneAudioTrack | null>(null);
-  const timerRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const clientRef           = useRef<IAgoraRTCClient | null>(null);
+  const audioRef            = useRef<IMicrophoneAudioTrack | null>(null);
+  const timerRef            = useRef<ReturnType<typeof setInterval> | null>(null);
+  const connectTimeoutRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const signalChannelRef    = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   const channelName = `corrida_${corridaId}`;
 
@@ -56,6 +58,21 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
   useEffect(() => { onEndCallRef.current = onEndCall; }, [onEndCall]);
 
   const endCall = React.useCallback(async (notify = true) => {
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
+    setIncomingCall(null);
+
+    // Notificar o outro utilizador via canal de sinalização
+    try {
+      signalChannelRef.current?.send({
+        type: 'broadcast',
+        event: 'CALL_END',
+        payload: { callerId: userId },
+      });
+    } catch {}
+
     try {
       audioRef.current?.stop();
       audioRef.current?.close();
@@ -65,18 +82,60 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         await clientRef.current.leave();
         clientRef.current = null;
       }
-    } catch (err) { console.warn('[AgoraCall] já desconectado:', err); }
+    } catch (err) {
+      console.warn('[AgoraCall] Já desconectado:', err);
+    }
 
     setCallState('ended');
     setDuration(0);
     setPeerJoined(false);
     if (notify) onEndCallRef.current?.();
-  }, []);
+  }, [userId]);
 
-  // Limpar ao desmontar — notifica pai para limpar estado
+  // Limpar ao desmontar
   useEffect(() => {
-    return () => { endCall(true); };
+    return () => { void endCall(false); };
   }, [endCall]);
+
+  // Canal de Sinalização Realtime (para chamar o outro telemóvel / receber chamada)
+  useEffect(() => {
+    if (!corridaId) return;
+
+    const channel = supabase.channel(`call-signal:${corridaId}`)
+      .on('broadcast', { event: 'CALL_INIT' }, (payload) => {
+        const p = (payload.payload ?? {}) as { callerId: string; callerName?: string };
+        if (p.callerId && p.callerId !== userId && callState === 'idle') {
+          setIncomingCall({ callerId: p.callerId, callerName: p.callerName });
+        }
+      })
+      .on('broadcast', { event: 'CALL_ACCEPT' }, () => {
+        if (connectTimeoutRef.current) {
+          clearTimeout(connectTimeoutRef.current);
+          connectTimeoutRef.current = null;
+        }
+      })
+      .on('broadcast', { event: 'CALL_REJECT' }, (payload) => {
+        const p = (payload.payload ?? {}) as { callerId: string };
+        if (p.callerId !== userId && (callState === 'connecting' || callState === 'active')) {
+          showToast('Chamada recusada pelo destinatário.', 'info');
+          void endCall(true);
+        }
+      })
+      .on('broadcast', { event: 'CALL_END' }, () => {
+        setIncomingCall(null);
+        if (callState !== 'idle' && callState !== 'ended') {
+          void endCall(true);
+        }
+      })
+      .subscribe();
+
+    signalChannelRef.current = channel;
+
+    return () => {
+      supabase.removeChannel(channel);
+      signalChannelRef.current = null;
+    };
+  }, [corridaId, userId, callState, endCall, showToast]);
 
   // Timer de duração
   useEffect(() => {
@@ -92,66 +151,99 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
   const startCall = async () => {
     setCallState('connecting');
     setErrorMsg(null);
+    setIncomingCall(null);
+
+    // Sinalizar ao outro participante que estamos a ligar
+    signalChannelRef.current?.send({
+      type: 'broadcast',
+      event: 'CALL_INIT',
+      payload: { callerId: userId, callerName: 'Utilizador Zenith' },
+    });
+
+    // Timeout de segurança: 18s se não conseguir conectar
+    if (connectTimeoutRef.current) clearTimeout(connectTimeoutRef.current);
+    connectTimeoutRef.current = setTimeout(() => {
+      if (callState === 'connecting') {
+        setErrorMsg('Sem resposta ou ligação expirada. Podes usar o Chat.');
+        setCallState('error');
+        void endCall(false);
+      }
+    }, 18000);
 
     try {
-      // 1. Buscar token seguro da Edge Function
-      const { data, error } = await supabase.functions.invoke('agora-token', {
+      // 1. Buscar token seguro da Edge Function com timeout de 8s
+      const tokenPromise = supabase.functions.invoke('agora-token', {
         body: { channelName, uid: userId },
       });
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Tempo limite ao contactar servidor VoIP.')), 8000)
+      );
+
+      const res = (await Promise.race([tokenPromise, timeoutPromise])) as any;
+      const { data, error } = res;
 
       if (error || !data?.token) {
-        throw new Error(error?.message ?? 'Erro ao obter token de chamada.');
+        throw new Error(error?.message ?? 'Não foi possível autorizar chamada VoIP.');
       }
 
       const { token, appId, uid: agoraUid } = data as { token: string; appId: string; uid: number };
 
       // 2. Criar cliente Agora (voz apenas)
-      // Usar 'h264' como codec padrão para melhor compatibilidade em mobile
       const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'h264' });
       clientRef.current = client;
 
       // 3. Event listeners
-      client.on('user-joined', () => setPeerJoined(true));
-      client.on('user-left',   () => setPeerJoined(false));
+      client.on('user-joined', () => {
+        setPeerJoined(true);
+        if (connectTimeoutRef.current) {
+          clearTimeout(connectTimeoutRef.current);
+          connectTimeoutRef.current = null;
+        }
+      });
+      client.on('user-left', () => setPeerJoined(false));
       client.on('user-published', async (user, mediaType) => {
         await client.subscribe(user, mediaType);
         if (mediaType === 'audio') user.audioTrack?.play();
       });
       client.on('connection-state-change', (state) => {
-        if (state === 'DISCONNECTED') setCallState('ended');
+        if (state === 'DISCONNECTED') void endCall(true);
       });
 
       // 4. Entrar no canal (usa uid devolvido pelo backend)
       await client.join(appId, channelName, token, agoraUid);
 
-      // 5. Activar encriptação AES-256-GCM de media streams
-      // Nota: derivamos uma chave determinística a partir do channel + hint
+      // 5. Encriptação segura de áudio determinística
       const AGORA_APP_ID_HINT = (appId || '').slice(0, 8);
       const encKey = await deriveEncryptionKey(channelName, AGORA_APP_ID_HINT);
       try {
-        // Usar o salt fornecido pelo servidor (base64)
-        const saltBase64 = (data as any)?.encryption_salt;
-        const base64ToUint8 = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-        const saltBytes = saltBase64 ? base64ToUint8(saltBase64) : crypto.getRandomValues(new Uint8Array(32));
-
+        const saltBytes = await deriveEncryptionSalt(channelName);
         await (client as any).enableEncryption(true, {
           encryptionMode: 'aes-256-gcm2',
           encryptionKey: encKey,
           encryptionSalt: saltBytes,
         });
       } catch (e) {
-        console.warn('[AgoraCall] enableEncryption falhou:', e);
+        console.warn('[AgoraCall] enableEncryption fallback:', e);
       }
 
-      // 6. Capturar microfone (após enableEncryption) e publicar
+      // 6. Capturar microfone e publicar
       const micTrack = await AgoraRTC.createMicrophoneAudioTrack({ encoderConfig: 'speech_low_quality' });
       audioRef.current = micTrack;
       await client.publish([micTrack]);
 
+      if (connectTimeoutRef.current) {
+        clearTimeout(connectTimeoutRef.current);
+        connectTimeoutRef.current = null;
+      }
       setCallState('active');
 
     } catch (e: any) {
-      setErrorMsg(e.message ?? 'Erro desconhecido na chamada.');
+      console.error('[AgoraCall] Falha:', e);
+      let msg = e.message ?? 'Erro desconhecido na chamada.';
+      if (msg.includes('NotAllowedError') || msg.includes('Permission denied')) {
+        msg = 'Permissão de microfone negada. Autoriza o microfone no navegador.';
+      }
+      setErrorMsg(msg);
       setCallState('error');
       await endCall(false);
     }
@@ -181,10 +273,10 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         setIsSpeaker(s => !s);
       } catch (e) {
         console.warn('[AgoraCall] setPlaybackDevice falhou', e);
-        showToast('Não foi possível alternar o dispositivo de reprodução.', 'error');
+        showToast('Não foi possível alternar o dispositivo.', 'error');
       }
     } else {
-      showToast('Usa os botões do teu dispositivo para controlar áudio.', 'info');
+      showToast('Usa os botões do teu telemóvel para regular o volume.', 'info');
     }
   };
 
@@ -192,102 +284,159 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
   // ------------------------------------------------------------------
-  // IDLE — botão para iniciar
-  if (callState === 'idle' || callState === 'ended') {
+  // CHAMADA A ENTRAR (Ringing)
+  if (incomingCall) {
     return (
-      <button
-        onClick={startCall}
-        className="flex items-center gap-3 golden-gradient px-6 py-4 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-glow gold-box-glow active:scale-95 luxury-transition w-full justify-center"
-      >
-        <span className="material-symbols-outlined" style={{ fontSize: 20, fontVariationSettings: "'FILL' 1" }}>call</span>
-        Ligar para {peerName ?? 'o utilizador'}
-      </button>
-    );
-  }
-
-  // CONNECTING
-  if (callState === 'connecting') {
-    return (
-      <div className="bg-surface-container-low border border-primary/20 rounded-2xl p-6 flex items-center gap-4">
-        <div className="w-10 h-10 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
-        <div>
-          <p className="font-black text-on-surface text-sm">A ligar...</p>
-          <p className="text-[10px] text-on-surface-variant font-label uppercase tracking-widest">A estabelecer ligação segura</p>
+      <div className="bg-gradient-to-r from-amber-500/20 to-primary/20 border border-primary/50 rounded-2xl p-4 flex flex-col gap-3 animate-pulse shadow-lg">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full golden-gradient flex items-center justify-center text-black font-bold shadow-md">
+            <span className="material-symbols-outlined animate-bounce text-xl">ring_volume</span>
+          </div>
+          <div className="flex-1 overflow-hidden">
+            <p className="font-black text-on-surface text-xs uppercase tracking-wider text-primary">Chamada VoIP a entrar</p>
+            <p className="font-bold text-sm text-white truncate">{peerName ?? incomingCall.callerName ?? 'Utilizador'}</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              signalChannelRef.current?.send({
+                type: 'broadcast',
+                event: 'CALL_ACCEPT',
+                payload: { callerId: userId },
+              });
+              setIncomingCall(null);
+              void startCall();
+            }}
+            className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
+          >
+            <span className="material-symbols-outlined text-base">call</span>
+            Atender
+          </button>
+          <button
+            onClick={() => {
+              signalChannelRef.current?.send({
+                type: 'broadcast',
+                event: 'CALL_REJECT',
+                payload: { callerId: userId },
+              });
+              setIncomingCall(null);
+            }}
+            className="flex-1 py-2.5 bg-red-600/80 hover:bg-red-600 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
+          >
+            <span className="material-symbols-outlined text-base">call_end</span>
+            Recusar
+          </button>
         </div>
       </div>
     );
   }
 
-  // ERROR
+  // IDLE / ENDED — botão para iniciar
+  if (callState === 'idle' || callState === 'ended') {
+    return (
+      <button
+        onClick={startCall}
+        className="flex items-center gap-2 golden-gradient px-4 py-3 rounded-2xl font-black text-[11px] uppercase tracking-wider shadow-glow gold-box-glow active:scale-95 luxury-transition w-full justify-center text-black"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 18, fontVariationSettings: "'FILL' 1" }}>call</span>
+        Ligar para {peerName ?? 'o utilizador'}
+      </button>
+    );
+  }
+
+  // CONNECTING — com botão de cancelar e timeout
+  if (callState === 'connecting') {
+    return (
+      <div className="bg-surface-container-low border border-primary/20 rounded-2xl p-4 flex items-center justify-between gap-3 shadow-md">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin flex-shrink-0" />
+          <div>
+            <p className="font-black text-on-surface text-xs">A ligar...</p>
+            <p className="text-[9px] text-on-surface-variant font-label uppercase tracking-wider">A contactar {peerName ?? 'destinatário'}</p>
+          </div>
+        </div>
+        <button
+          onClick={() => void endCall(true)}
+          className="px-3 py-1.5 bg-error/20 hover:bg-error/30 text-error border border-error/30 rounded-xl text-[11px] font-bold transition-all active:scale-95"
+        >
+          Cancelar
+        </button>
+      </div>
+    );
+  }
+
+  // ERROR — com botão de tentar novamente
   if (callState === 'error') {
     return (
-      <div className="bg-error-container/20 border border-error/30 rounded-2xl p-5 space-y-3">
-        <p className="text-error font-black text-sm">Erro na chamada</p>
-        <p className="text-[11px] text-on-surface-variant font-bold">{errorMsg}</p>
-        <button
-          onClick={() => setCallState('idle')}
-          className="text-primary font-black text-[10px] uppercase tracking-widest"
-        >
-          Tentar novamente
-        </button>
+      <div className="bg-error-container/20 border border-error/30 rounded-2xl p-4 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-error font-black text-xs">Chamada não concluída</p>
+          <button
+            onClick={() => setCallState('idle')}
+            className="text-primary font-black text-[10px] uppercase tracking-wider underline"
+          >
+            Tentar de novo
+          </button>
+        </div>
+        <p className="text-[11px] text-on-surface-variant">{errorMsg}</p>
       </div>
     );
   }
 
   // ACTIVE — interface de chamada em curso
   return (
-    <div className="bg-surface-container-lowest rounded-[2.5rem] overflow-hidden vault-shadow border border-primary/20 animate-in zoom-in-95 duration-400">
+    <div className="bg-surface-container-lowest rounded-[2rem] overflow-hidden vault-shadow border border-primary/30 animate-in zoom-in-95 duration-300">
 
       {/* Status bar */}
-      <div className="bg-[#0A0A0A] px-6 py-4 flex justify-between items-center">
-        <div className="flex items-center gap-3">
+      <div className="bg-[#0A0A0A] px-5 py-3 flex justify-between items-center border-b border-white/5">
+        <div className="flex items-center gap-2">
           <div className="relative">
-            <span className="w-2.5 h-2.5 rounded-full bg-primary block" />
-            <span className="w-2.5 h-2.5 rounded-full bg-primary absolute inset-0 animate-ping opacity-50" />
+            <span className="w-2 h-2 rounded-full bg-primary block" />
+            <span className="w-2 h-2 rounded-full bg-primary absolute inset-0 animate-ping opacity-50" />
           </div>
-          <span className="text-[9px] font-black text-primary uppercase tracking-[0.2em]">
-            {peerJoined ? 'EM CHAMADA' : 'A AGUARDAR...'}
+          <span className="text-[8px] font-black text-primary uppercase tracking-[0.15em]">
+            {peerJoined ? 'EM CHAMADA' : 'A TOCAR...'}
           </span>
         </div>
-        <span className="font-headline text-primary font-bold text-lg">
+        <span className="font-headline text-primary font-bold text-base">
           {formatDuration(duration)}
         </span>
       </div>
 
       {/* Avatar */}
-      <div className="py-10 flex flex-col items-center gap-4">
+      <div className="py-6 flex flex-col items-center gap-3">
         <div className="relative">
-          <div className={`w-24 h-24 rounded-full golden-gradient flex items-center justify-center text-3xl font-headline font-bold vault-shadow ${peerJoined ? 'animate-pulse-gold' : ''}`}>
+          <div className={`w-16 h-16 rounded-full golden-gradient flex items-center justify-center text-2xl font-headline font-bold text-black vault-shadow ${peerJoined ? 'animate-pulse-gold' : ''}`}>
             {(peerName ?? 'U').charAt(0).toUpperCase()}
           </div>
-          {/* Ondas de áudio */}
           {peerJoined && (
-            <div className="absolute -inset-3 rounded-full border border-primary/30 animate-ping" />
+            <div className="absolute -inset-2 rounded-full border border-primary/30 animate-ping" />
           )}
         </div>
         <div className="text-center">
-          <p className="font-headline font-bold text-on-surface text-xl italic">
+          <p className="font-headline font-bold text-on-surface text-base">
             {peerName ?? 'Utilizador'}
           </p>
-          <p className="text-[9px] text-on-surface-variant font-label uppercase tracking-widest mt-1">
-            {peerJoined ? 'Ligado via VoIP Zenith' : 'A aguardar ligação...'}
+          <p className="text-[9px] text-on-surface-variant font-label uppercase tracking-wider mt-0.5">
+            {peerJoined ? 'Ligado via Zenith VoIP' : 'A aguardar atendimento...'}
           </p>
         </div>
       </div>
 
       {/* Controlos */}
-      <div className="px-8 pb-8 flex justify-center gap-6">
+      <div className="px-6 pb-6 flex justify-center gap-4">
 
         {/* Mute */}
         <button
           onClick={toggleMute}
-          className={`w-16 h-16 rounded-full flex items-center justify-center luxury-transition ${
+          className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
             isMuted
               ? 'bg-error/20 border border-error/40 text-error'
               : 'bg-surface-container border border-primary/20 text-on-surface-variant hover:text-primary'
           }`}
         >
-          <span className="material-symbols-outlined" style={{ fontVariationSettings: isMuted ? "'FILL' 1" : "'FILL' 0" }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 20, fontVariationSettings: isMuted ? "'FILL' 1" : "'FILL' 0" }}>
             {isMuted ? 'mic_off' : 'mic'}
           </span>
         </button>
@@ -295,9 +444,9 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         {/* Terminar */}
         <button
           onClick={() => endCall(true)}
-          className="w-20 h-20 rounded-full bg-error/80 hover:bg-error text-white flex items-center justify-center vault-shadow luxury-transition active:scale-95"
+          className="w-14 h-14 rounded-full bg-error hover:bg-error/90 text-white flex items-center justify-center vault-shadow transition-all active:scale-95 shadow-lg shadow-error/30"
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 28, fontVariationSettings: "'FILL' 1" }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 24, fontVariationSettings: "'FILL' 1" }}>
             call_end
           </span>
         </button>
@@ -305,22 +454,22 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
         {/* Speaker */}
         <button
           onClick={toggleSpeaker}
-          className={`w-16 h-16 rounded-full flex items-center justify-center luxury-transition ${
+          className={`w-12 h-12 rounded-full flex items-center justify-center transition-all ${
             isSpeaker
               ? 'bg-surface-container border border-primary/20 text-on-surface-variant hover:text-primary'
               : 'bg-error/20 border border-error/40 text-error'
           }`}
         >
-          <span className="material-symbols-outlined" style={{ fontVariationSettings: isSpeaker ? "'FILL' 0" : "'FILL' 1" }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 20, fontVariationSettings: isSpeaker ? "'FILL' 0" : "'FILL' 1" }}>
             {isSpeaker ? 'volume_up' : 'volume_off'}
           </span>
         </button>
       </div>
 
-      {/* Aviso de privacidade */}
-      <div className="px-6 pb-6 text-center">
-        <p className="text-[8px] text-on-surface-variant/40 font-label uppercase tracking-wider">
-          Chamada protegida com AES-256-GCM via Zenith VoIP
+      {/* Rodapé */}
+      <div className="px-4 pb-3 text-center">
+        <p className="text-[7px] text-on-surface-variant/40 font-label uppercase tracking-wider">
+          VoIP Protegido · Zenith
         </p>
       </div>
     </div>
