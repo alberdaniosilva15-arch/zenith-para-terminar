@@ -167,7 +167,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
         const bbox = '11.5,-18.0,24.1,-4.5';
 
         // 0. Base hiper-granular de Angola (Quarteirões Kilamba, Zonas Golf 2, Talatona, etc.)
-        const angolaMatches = searchAngolaLocations(query, 15);
+        const angolaMatches = searchAngolaLocations(query, 35);
         const angolaParsed: SearchResult[] = angolaMatches.map(loc => ({
           id: `angola-${loc.name}`,
           place_name: `${loc.name} — ${loc.description}`,
@@ -241,7 +241,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
         });
 
         const finalResults = Array.from(combinedMap.values());
-        setResults(finalResults.slice(0, 20));
+        setResults(finalResults.slice(0, 35));
       } catch (err) {
         console.warn('Geocoding error:', err);
         setError('Erro na pesquisa — verifica a ligação');
