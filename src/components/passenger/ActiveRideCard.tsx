@@ -62,6 +62,18 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
 
   return (
     <div className="space-y-4">
+      {/* ── Listener contínuo de chamada em background ── */}
+      {resolvedRideId && !isEnRoute && ride.status !== RideStatus.IN_PROGRESS && (
+        <Suspense fallback={null}>
+          <AgoraCall
+            corridaId={resolvedRideId}
+            userId={userId}
+            peerName={resolvedDriverName}
+            silentIdle={true}
+            onEndCall={() => {}}
+          />
+        </Suspense>
+      )}
 
       {/* ── SEARCHING ─────────────────────────────────────────────────────── */}
       {ride.status === RideStatus.SEARCHING && (
