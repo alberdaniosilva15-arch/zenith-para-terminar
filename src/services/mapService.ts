@@ -273,7 +273,7 @@ export const mapService = {
     // 1. Busca na base estruturada de Angola (Quarteirões, Zonas, Bairros e Províncias)
     // Se o utilizador pesquisar "Kilamba", traz TODOS os quarteirões A a X e KK5000 no topo!
     // Se pesquisar "Golf 2", traz TODAS as zonas internas A a D, mercados e paragens!
-    const localResults = searchAngolaLocations(query, 25);
+    const localResults = searchAngolaLocations(query, 35);
 
     // 2. Mapbox Geocoding para endereços específicos, ruas e POIs em Angola
     let mapboxResults: LocationResult[] = [];
@@ -297,7 +297,7 @@ export const mapService = {
       }
     }
 
-    return combined.slice(0, 30);
+    return combined.slice(0, 40);
   },
 
   // ── getCurrentPosition ───────────────────────────────────────────────────

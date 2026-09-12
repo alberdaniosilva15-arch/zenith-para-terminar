@@ -209,7 +209,7 @@ export interface AuthState {
 
 export interface LocationResult {
   name: string;
-  type: 'bairro' | 'restaurante' | 'rua' | 'monumento' | 'servico' | 'hospital' | 'escola';
+  type: 'bairro' | 'restaurante' | 'rua' | 'monumento' | 'servico' | 'hospital' | 'escola' | 'hospedaria';
   description: string; coords: LatLng;
   rating?: number; address?: string; isPopular?: boolean;
 }
