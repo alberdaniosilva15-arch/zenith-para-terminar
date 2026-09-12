@@ -1093,6 +1093,10 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                 setScheduleDefaults(null);
                 setShowSchedule(false);
               }}
+              onDestinationSelected={(name, coords) => {
+                setDestName(name);
+                setDestCoords(coords);
+              }}
             />
           </Suspense>
         )}
