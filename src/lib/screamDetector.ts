@@ -84,12 +84,21 @@ export function startScreamDetection(onScream: ScreamCallback): ScreamDetectorHa
     recognition = new SpeechRec();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'pt-PT';
+    recognition.lang = 'pt-BR';
 
     recognition.onresult = (event: any) => {
       for (let i = event.resultIndex; i < event.results.length; ++i) {
         const transcript = event.results[i][0].transcript.trim().toLowerCase();
-        if (transcript.includes('socorro') || transcript.includes('ajuda') || transcript.includes('emergência') || transcript.includes('polícia') || transcript.includes('help')) {
+        if (
+          transcript.includes('socorro') ||
+          transcript.includes('ajuda') ||
+          transcript.includes('emergência') ||
+          transcript.includes('emergencia') ||
+          transcript.includes('polícia') ||
+          transcript.includes('policia') ||
+          transcript.includes('assalto') ||
+          transcript.includes('help')
+        ) {
           trigger(`WAKE-WORD "${transcript}"`);
         }
       }
