@@ -5,6 +5,9 @@ import { supabase } from "../lib/supabase";
 import { useIdleMount } from "../hooks/useIdleMount";
 import type { Map3DHandle } from "./Map3D";
 import { DriverTracker } from "../lib/driverTracker";
+import { drawRoute, clearRoute } from "../map/mapRoutingLayer";
+import { mapService } from "../services/mapService";
+import { calculateBBox } from "./DriverHome";
 
 const Map3D = React.lazy(() => import("./Map3D"));
 
@@ -177,7 +180,37 @@ export default function ParentTrackingPage() {
     });
   }, [ride?.driverLocation]);
 
+  const mapInstanceRef = useRef<mapboxgl.Map | null>(null);
+  const routeDrawnRef = useRef(false);
+
+  useEffect(() => {
+    const map = mapInstanceRef.current;
+    if (!map || !ride?.driverLocation || !ride?.destination || routeDrawnRef.current) return;
+
+    routeDrawnRef.current = true;
+    mapService.getRouteDistance(
+      { lat: ride.driverLocation.lat, lng: ride.driverLocation.lng },
+      { lat: ride.destination[1], lng: ride.destination[0] }
+    ).then((routeResult) => {
+      if (routeResult.geometry?.coordinates) {
+        clearRoute(map);
+        drawRoute(map, {
+          distanceKm: routeResult.distanceKm,
+          durationMinutes: routeResult.durationMin,
+          durationText: `${routeResult.durationMin} min`,
+          geojson: {
+            type: 'Feature',
+            geometry: routeResult.geometry,
+            properties: {},
+          },
+          bbox: calculateBBox(routeResult.geometry.coordinates as [number, number][]),
+        });
+      }
+    }).catch((err) => console.warn('[ParentTrackingPage] route draw failed:', err));
+  }, [ride?.driverLocation?.lat, ride?.driverLocation?.lng, ride?.destination]);
+
   const handleMapReady = (map: mapboxgl.Map) => {
+    mapInstanceRef.current = map;
     trackerRef.current?.destroy();
     trackerRef.current = new DriverTracker(map);
 

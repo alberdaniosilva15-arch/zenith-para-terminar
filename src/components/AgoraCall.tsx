@@ -18,6 +18,8 @@ interface AgoraCallProps {
   onEndCall?: () => void;
   /** Nome do outro utilizador para exibir no UI */
   peerName?: string;
+  /** Se true, não renderiza botão quando idle (apenas escuta chamadas a entrar) */
+  silentIdle?: boolean;
 }
 
 type CallState = 'idle' | 'connecting' | 'active' | 'ended' | 'error';
@@ -36,7 +38,7 @@ async function deriveEncryptionSalt(channel: string): Promise<Uint8Array> {
   return new Uint8Array(hash);
 }
 
-const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, peerName }) => {
+const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, peerName, silentIdle = false }) => {
   const showToast = useAppStore((s) => s.showToast);
   const [callState,      setCallState]      = useState<CallState>('idle');
   const [isMuted,        setIsMuted]        = useState(false);
@@ -283,50 +285,88 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
   const formatDuration = (s: number) =>
     `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 
+  // Efeito de toque quando há chamada a entrar
+  useEffect(() => {
+    if (!incomingCall) return;
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      let active = true;
+      const playChime = () => {
+        if (!active || audioCtx.state === 'closed') return;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.8);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.8);
+        if (active) setTimeout(playChime, 2200);
+      };
+      playChime();
+      return () => {
+        active = false;
+        try { void audioCtx.close(); } catch {}
+      };
+    } catch {
+      return () => {};
+    }
+  }, [incomingCall]);
+
   // ------------------------------------------------------------------
-  // CHAMADA A ENTRAR (Ringing)
+  // CHAMADA A ENTRAR (Ringing - Modal Flutuante Global)
   if (incomingCall) {
     return (
-      <div className="bg-gradient-to-r from-amber-500/20 to-primary/20 border border-primary/50 rounded-2xl p-4 flex flex-col gap-3 animate-pulse shadow-lg">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full golden-gradient flex items-center justify-center text-black font-bold shadow-md">
-            <span className="material-symbols-outlined animate-bounce text-xl">ring_volume</span>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200">
+        <div className="w-full max-w-sm bg-[#121214] border-2 border-primary/60 rounded-[2.5rem] p-6 shadow-2xl space-y-6 text-center animate-in zoom-in-95 duration-300">
+          <div className="relative mx-auto w-24 h-24">
+            <div className="absolute inset-0 rounded-full golden-gradient animate-ping opacity-30" />
+            <div className="relative w-24 h-24 rounded-full golden-gradient flex items-center justify-center text-black text-3xl font-black shadow-2xl">
+              <span className="material-symbols-outlined text-4xl animate-bounce">ring_volume</span>
+            </div>
           </div>
-          <div className="flex-1 overflow-hidden">
-            <p className="font-black text-on-surface text-xs uppercase tracking-wider text-primary">Chamada VoIP a entrar</p>
-            <p className="font-bold text-sm text-white truncate">{peerName ?? incomingCall.callerName ?? 'Utilizador'}</p>
+          <div>
+            <span className="inline-block px-3 py-1 rounded-full bg-primary/20 text-primary text-[10px] font-black uppercase tracking-widest mb-2">
+              Chamada VoIP a entrar
+            </span>
+            <h3 className="text-xl font-headline font-black text-white truncate">
+              {peerName ?? incomingCall.callerName ?? 'Utilizador Zenith'}
+            </h3>
+            <p className="text-xs text-white/50 mt-1">A tocar no dispositivo...</p>
           </div>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => {
-              signalChannelRef.current?.send({
-                type: 'broadcast',
-                event: 'CALL_ACCEPT',
-                payload: { callerId: userId },
-              });
-              setIncomingCall(null);
-              void startCall();
-            }}
-            className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
-          >
-            <span className="material-symbols-outlined text-base">call</span>
-            Atender
-          </button>
-          <button
-            onClick={() => {
-              signalChannelRef.current?.send({
-                type: 'broadcast',
-                event: 'CALL_REJECT',
-                payload: { callerId: userId },
-              });
-              setIncomingCall(null);
-            }}
-            className="flex-1 py-2.5 bg-red-600/80 hover:bg-red-600 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
-          >
-            <span className="material-symbols-outlined text-base">call_end</span>
-            Recusar
-          </button>
+          <div className="grid grid-cols-2 gap-3 pt-2">
+            <button
+              onClick={() => {
+                signalChannelRef.current?.send({
+                  type: 'broadcast',
+                  event: 'CALL_REJECT',
+                  payload: { callerId: userId },
+                });
+                setIncomingCall(null);
+              }}
+              className="py-4 bg-red-600/20 hover:bg-red-600/30 text-red-500 border border-red-500/40 rounded-2xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-95"
+            >
+              <span className="material-symbols-outlined text-lg">call_end</span>
+              Recusar
+            </button>
+            <button
+              onClick={() => {
+                signalChannelRef.current?.send({
+                  type: 'broadcast',
+                  event: 'CALL_ACCEPT',
+                  payload: { callerId: userId },
+                });
+                setIncomingCall(null);
+                void startCall();
+              }}
+              className="py-4 bg-emerald-500 hover:bg-emerald-400 text-black font-black text-xs uppercase tracking-wider rounded-2xl flex items-center justify-center gap-2 transition-all shadow-glow active:scale-95 shadow-lg shadow-emerald-500/30"
+            >
+              <span className="material-symbols-outlined text-lg">call</span>
+              Atender
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -334,6 +374,7 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
 
   // IDLE / ENDED — botão para iniciar
   if (callState === 'idle' || callState === 'ended') {
+    if (silentIdle) return null;
     return (
       <button
         onClick={startCall}
@@ -371,7 +412,7 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
     return (
       <div className="bg-error-container/20 border border-error/30 rounded-2xl p-4 space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-error font-black text-xs">Chamada não concluída</p>
+          <p className="text-error font-black text-xs">Chamada VoIP Indisponível</p>
           <button
             onClick={() => setCallState('idle')}
             className="text-primary font-black text-[10px] uppercase tracking-wider underline"
@@ -379,7 +420,15 @@ const AgoraCall: React.FC<AgoraCallProps> = ({ corridaId, userId, onEndCall, pee
             Tentar de novo
           </button>
         </div>
-        <p className="text-[11px] text-on-surface-variant">{errorMsg}</p>
+        <p className="text-[11px] text-on-surface-variant">{errorMsg || 'Não foi possível ligar o áudio VoIP.'}</p>
+        <div className="pt-1 flex gap-2">
+          <a
+            href="tel:113"
+            className="flex-1 py-2.5 bg-white/10 hover:bg-white/15 border border-white/20 rounded-xl text-center text-[10px] font-bold text-white uppercase tracking-wider"
+          >
+            Ligar por Telefone
+          </a>
+        </div>
       </div>
     );
   }

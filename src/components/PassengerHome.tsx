@@ -15,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext';
 
 import LocationSearch from './passenger/LocationSearch';
 import RoutePreview from './passenger/RoutePreview';
+import { haversineMeters } from '../lib/geo';
 
 import RideRequestForm from './passenger/RideRequestForm';
 import ActiveRideCard from './passenger/ActiveRideCard';
@@ -258,68 +259,119 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     routeDrawnRef.current = false;
   }, [pickupCoords?.lat, pickupCoords?.lng, destCoords?.lat, destCoords?.lng]);
 
-  // ── Rota de aproximação do motorista e marcador do carro em tempo real ───
+  // ── Rota activa e marcador do carro em tempo real com recálculo dinâmico ───
   const driverMarkerRef = useRef<mapboxgl.Marker | null>(null);
+  const currentRouteCoordsRef = useRef<[number, number][]>([]);
+  const lastRecalcTimeRef = useRef<number>(0);
   const [approachEtaMin, setApproachEtaMin] = useState<number | null>(null);
 
   useEffect(() => {
-    const isApproaching =
-      (ride.status === RideStatus.ACCEPTED || ride.status === RideStatus.PICKING_UP) &&
-      ride.carLocation &&
-      ride.pickupCoords;
+    const isActiveRide =
+      ride.status === RideStatus.ACCEPTED ||
+      ride.status === RideStatus.PICKING_UP ||
+      ride.status === RideStatus.IN_PROGRESS;
 
-    if (!isApproaching || !ride.carLocation || !ride.pickupCoords) {
+    const map = MapSingleton.get();
+
+    if (!isActiveRide) {
       if (driverMarkerRef.current) {
         driverMarkerRef.current.remove();
         driverMarkerRef.current = null;
       }
+      currentRouteCoordsRef.current = [];
       setApproachEtaMin(null);
       return;
     }
 
-    const map = MapSingleton.get();
-    if (!map) return;
+    // Alvo da rota: se em viagem (in_progress) vai até ao destino; se a recolher vai até ao passageiro
+    const targetCoords =
+      ride.status === RideStatus.IN_PROGRESS
+        ? ride.destCoords
+        : ride.pickupCoords;
 
-    // 1. Atualizar ou posicionar o marcador do motorista no mapa
-    const [lng, lat] = [ride.carLocation.lng, ride.carLocation.lat];
-    if (Number.isFinite(lng) && Number.isFinite(lat)) {
+    const startCoords = ride.carLocation ?? ride.pickupCoords;
+
+    if (!targetCoords || !map) return;
+
+    // 1. Atualizar ou posicionar o marcador do motorista no mapa com rotação real
+    if (ride.carLocation && Number.isFinite(ride.carLocation.lng) && Number.isFinite(ride.carLocation.lat)) {
+      const [lng, lat] = [ride.carLocation.lng, ride.carLocation.lat];
+      const heading = (ride.carLocation as any).heading ?? 0;
+
       if (!driverMarkerRef.current) {
-        const markerEl = createDriverMarkerElement(0);
-        driverMarkerRef.current = new mapboxgl.Marker({ element: markerEl })
+        const markerEl = createDriverMarkerElement(heading);
+        driverMarkerRef.current = new mapboxgl.Marker({ element: markerEl, rotationAlignment: 'map' })
           .setLngLat([lng, lat])
           .addTo(map);
       } else {
         driverMarkerRef.current.setLngLat([lng, lat]);
+        const el = driverMarkerRef.current.getElement();
+        if (el && typeof heading === 'number') {
+          el.style.transform = `rotate(${heading}deg)`;
+        }
       }
     }
 
-    // 2. Traçar rota do carro até ao ponto de recolha do passageiro
+    // 2. Traçar ou recalcular rota se desvio detectado (> 45m) ou se ainda não temos rota traçada
+    if (!startCoords) return;
+
+    const now = Date.now();
+    const hasRoute = currentRouteCoordsRef.current.length > 0;
+    let shouldRecalculate = !hasRoute;
+
+    if (hasRoute && ride.carLocation && now - lastRecalcTimeRef.current > 5000) {
+      // Calcular distância mínima aos pontos da rota traçada
+      let minDistance = Infinity;
+      for (const [rLng, rLat] of currentRouteCoordsRef.current) {
+        const d = haversineMeters(ride.carLocation.lat, ride.carLocation.lng, rLat, rLng);
+        if (d < minDistance) minDistance = d;
+      }
+      // Se o motorista passou uma curva ou entrou noutra via (> 45m fora da linha)
+      if (minDistance > 45) {
+        shouldRecalculate = true;
+      }
+    }
+
+    if (!shouldRecalculate) return;
+
     let cancelled = false;
-    mapService.getRouteDistance(ride.carLocation, ride.pickupCoords)
-      .then((approach) => {
+    lastRecalcTimeRef.current = now;
+
+    mapService.getRouteDistance(startCoords, targetCoords)
+      .then((routeResult) => {
         if (cancelled) return;
-        if (approach.durationMin) setApproachEtaMin(approach.durationMin);
-        if (approach.geometry) {
+        if (routeResult.durationMin) setApproachEtaMin(routeResult.durationMin);
+        if (routeResult.geometry?.coordinates) {
+          currentRouteCoordsRef.current = routeResult.geometry.coordinates as [number, number][];
           clearRoute(map);
           drawRoute(map, {
-            distanceKm: approach.distanceKm,
-            durationMinutes: approach.durationMin,
-            durationText: `${approach.durationMin} min`,
+            distanceKm: routeResult.distanceKm,
+            durationMinutes: routeResult.durationMin,
+            durationText: `${routeResult.durationMin} min`,
             geojson: {
               type: 'Feature',
-              geometry: approach.geometry,
+              geometry: routeResult.geometry,
               properties: {},
             },
-            bbox: calculateBBox(approach.geometry.coordinates as [number, number][]),
+            bbox: calculateBBox(routeResult.geometry.coordinates as [number, number][]),
           });
         }
       })
-      .catch((err) => console.warn('[PassengerHome] Falha ao traçar rota de aproximação:', err));
+      .catch((err) => console.warn('[PassengerHome] Falha ao traçar/recalcular rota da corrida:', err));
 
     return () => {
       cancelled = true;
     };
-  }, [ride.status, ride.carLocation?.lat, ride.carLocation?.lng, ride.pickupCoords?.lat, ride.pickupCoords?.lng]);
+  }, [
+    ride.status,
+    ride.carLocation?.lat,
+    ride.carLocation?.lng,
+    (ride.carLocation as any)?.heading,
+    ride.pickupCoords?.lat,
+    ride.pickupCoords?.lng,
+    ride.destCoords?.lat,
+    ride.destCoords?.lng,
+  ]);
 
   // ── Motoristas próximos (hook extraído) ──
   const { nearbyCount } = useNearbyDrivers(pickupCoords, isVisible ?? true);

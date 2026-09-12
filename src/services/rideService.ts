@@ -607,6 +607,31 @@ class RideService {
     }
   }
 
+  async broadcastRideUpdated(rideId: string, ride: DbRide): Promise<void> {
+    try {
+      const channel = supabase.channel(`ride:${rideId}`);
+      const sendPayload = async () => {
+        await channel.send({
+          type: 'broadcast',
+          event: 'RIDE_UPDATED',
+          payload: ride,
+        });
+      };
+
+      if ((channel as any).state === 'joined') {
+        await sendPayload();
+      } else {
+        channel.subscribe(async (status) => {
+          if (status === 'SUBSCRIBED') {
+            await sendPayload();
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('[rideService.broadcastRideUpdated] Broadcast warning:', err);
+    }
+  }
+
   // ── driverConfirmRide ──────────────────────────────────────────────────────
   private async notifyPassengerRideAccepted(rideId: string): Promise<void> {
     try {
@@ -838,6 +863,7 @@ class RideService {
       // Corrida aceite com sucesso absoluto!
       void this.broadcastRideDismissed(rideId);
       void this.notifyPassengerRideAccepted(rideId);
+      void this.broadcastRideUpdated(rideId, acceptedRide);
       return { data: acceptedRide, error: null };
     } catch (err: any) {
       console.error('[rideService.acceptRide] Excepção:', err);
@@ -924,6 +950,7 @@ class RideService {
         try { await supabase.rpc('recharge_chat_quota', { amount: 10 }); } catch (e) { console.error('[rideService.rechargeChatQuota]', e); logError('rideService.rechargeChatQuota', e); }
       }
 
+      void this.broadcastRideUpdated(rideId, updatedRide as DbRide);
       return { data: updatedRide as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.updateRideStatus] Excepção:', err);
@@ -1196,36 +1223,54 @@ class RideService {
   // =========================================================================
 
   // ── subscribeToRide ────────────────────────────────────────────────────────
-  // Dual-layer: Realtime WebSocket + Polling a cada 2.5s para garantia total de entrega
+  // Dual-layer: Realtime WebSocket (Broadcast + Postgres Changes) + Polling a cada 2s
   subscribeToRide(rideId: string, onUpdate: (ride: DbRide) => void): () => void {
     if (this.rideChannel) { supabase.removeChannel(this.rideChannel); this.rideChannel = null; }
 
     let isSubscribed = true;
     let lastStatus: string | null = null;
     let lastDriverId: string | null = null;
+    let lastConfirmed: boolean | null = null;
+    let lastAcceptedAt: string | null = null;
+    let lastStartedAt: string | null = null;
+    let lastCompletedAt: string | null = null;
     let lastUpdatedAt: string | null = null;
 
     const handleUpdate = (ride: DbRide) => {
       if (!isSubscribed || !ride) return;
-      // Dispara callback se o status mudou, se o motorista foi atribuído ou se foi atualizado
+      const r = ride as any;
       const hasChanged = 
         ride.status !== lastStatus || 
         ride.driver_id !== lastDriverId || 
-        ride.updated_at !== lastUpdatedAt;
+        ride.driver_confirmed !== lastConfirmed ||
+        (r.accepted_at && r.accepted_at !== lastAcceptedAt) ||
+        (r.started_at && r.started_at !== lastStartedAt) ||
+        (r.completed_at && r.completed_at !== lastCompletedAt) ||
+        (r.updated_at && r.updated_at !== lastUpdatedAt);
 
       if (hasChanged) {
         lastStatus = ride.status;
         lastDriverId = ride.driver_id ?? null;
-        lastUpdatedAt = ride.updated_at ?? null;
+        lastConfirmed = ride.driver_confirmed ?? null;
+        lastAcceptedAt = r.accepted_at ?? null;
+        lastStartedAt = r.started_at ?? null;
+        lastCompletedAt = r.completed_at ?? null;
+        lastUpdatedAt = r.updated_at ?? null;
         onUpdate(ride);
       }
     };
 
-    // 1. Canal Realtime WebSocket
+    // 1. Canal Realtime WebSocket (Broadcast instantâneo + Postgres Changes)
     this.rideChannel = supabase.channel(`ride:${rideId}`)
+      .on('broadcast', { event: 'RIDE_UPDATED' }, (p) => {
+        if (!isSubscribed) return;
+        if (p.payload) {
+          handleUpdate(p.payload as DbRide);
+        }
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` }, (p) => {
         if (!isSubscribed) return;
-        // Tratar evento DELETE — corrida eliminada da BD (ex: cleanup automático)
+        // Tratar evento DELETE — corrida eliminada da BD
         if (p.eventType === 'DELETE' && p.old) {
           onUpdate({ ...(p.old as DbRide), status: RideStatus.CANCELLED });
           return;
@@ -1236,7 +1281,7 @@ class RideService {
       })
       .subscribe();
 
-    // 2. Polling de contingência a cada 2.5s (garante que passageiro e motorista nunca ficam bloqueados)
+    // 2. Polling de contingência a cada 2s
     const pollTimer = setInterval(async () => {
       if (!isSubscribed) return;
       try {
@@ -1252,7 +1297,7 @@ class RideService {
       } catch (err) {
         // silencioso
       }
-    }, 2500);
+    }, 2000);
 
     return () => {
       isSubscribed = false;
@@ -1383,8 +1428,14 @@ class RideService {
       return null;
     };
 
-    // 1. Canal Realtime WebSocket
+    // 1. Canal Realtime WebSocket (Broadcast instantâneo + Postgres Changes)
     this.locationChannel = supabase.channel(`driver-location-v3:${driverId}`)
+      .on('broadcast', { event: 'DRIVER_LOCATION' }, (payload) => {
+        if (!isSubscribed) return;
+        if (payload.payload && typeof payload.payload.lat === 'number') {
+          onUpdate(payload.payload as LatLng);
+        }
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'driver_locations', filter: `driver_id=eq.${driverId}` }, (payload) => {
         if (!isSubscribed) return;
         const row = payload.new as Record<string, unknown>;
@@ -1470,6 +1521,16 @@ class RideService {
       heading:          heading ?? null,
       updated_at:       new Date().toISOString(),
     };
+
+    // Broadcast instantâneo em tempo real
+    try {
+      const locChannel = supabase.channel(`driver-location-v3:${driverId}`);
+      void locChannel.send({
+        type: 'broadcast',
+        event: 'DRIVER_LOCATION',
+        payload: { lat: coords.lat, lng: coords.lng, heading },
+      });
+    } catch {}
 
     const MAX_RETRIES = 2;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
