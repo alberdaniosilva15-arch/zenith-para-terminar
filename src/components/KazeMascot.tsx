@@ -374,20 +374,31 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         setMessages(prev => [...prev, { role: 'model', text: result.text, sources: result.sources }]);
         if (voiceEnabled) await kazeSpeak(result.text);
       } else {
-        // Obter GPS fresco se ainda não tivermos
+        // Obter GPS de forma ultra-rápida (sem bloquear 15s)
         let effectiveCoords = liveGpsCoords || userLocation || null;
         let effectiveAddress = liveGpsAddress || null;
         if (!effectiveCoords) {
           try {
-            effectiveCoords = await mapService.getCurrentPosition();
-            effectiveAddress = await mapService.reverseGeocode(effectiveCoords);
-            setLiveGpsCoords(effectiveCoords);
-            setLiveGpsAddress(effectiveAddress);
+            const gpsPromise = mapService.getCurrentPosition();
+            const timeoutPromise = new Promise<null>(res => setTimeout(() => res(null), 1200));
+            const freshGps = await Promise.race([gpsPromise, timeoutPromise]);
+            if (freshGps) {
+              effectiveCoords = freshGps;
+              setLiveGpsCoords(freshGps);
+              mapService.reverseGeocode(freshGps).then(addr => {
+                if (addr) setLiveGpsAddress(addr);
+              }).catch(() => {});
+            }
           } catch { /* ignore */ }
         }
 
-        // Passar pelo Kaze App Agent operacional com localização actual precisa de Luanda
-        const agentResult = await kazeAppAgent.processUserMessage(userText, {
+        if (!effectiveCoords) {
+          effectiveCoords = { lat: -8.8390, lng: 13.2343 }; // Luanda Centro
+          effectiveAddress = 'Luanda';
+        }
+
+        // Passar pelo Kaze App Agent com protecção contra congelamento (máximo 6.5s)
+        const agentPromise = kazeAppAgent.processUserMessage(userText, {
           userId,
           userRole: role,
           userLocation: effectiveCoords,
@@ -395,6 +406,12 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           hasActiveRide: rideStatus !== RideStatus.IDLE,
           pendingAction,
         });
+
+        const agentTimeoutPromise = new Promise<any>((_, reject) =>
+          setTimeout(() => reject(new Error('KAZE_TIMEOUT')), 6500)
+        );
+
+        const agentResult = await Promise.race([agentPromise, agentTimeoutPromise]);
 
         // Se o utilizador confirmou por texto/voz
         if (agentResult.action && agentResult.action.status === 'confirmed') {

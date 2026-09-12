@@ -382,8 +382,12 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
 
     for (const model of models) {
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 4500);
+
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${FRONTEND_GROQ_KEY}`,
@@ -399,6 +403,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
             max_tokens: 450,
           }),
         });
+        clearTimeout(timeoutId);
 
         if (!res.ok) {
           console.warn(`[KazeAppAgent] Groq ${model} status ${res.status}`);
@@ -565,11 +570,13 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
           originCoords = await mapService.geocodeAddress(originStr);
         }
 
-        // Se não tiver coordenadas ainda (ou se for localização actual sem GPS em cache), obter GPS real
+        // Se não tiver coordenadas ainda, obter GPS de forma rápida (máximo 1.2s)
         if (!originCoords) {
           try {
-            const gps = await mapService.getCurrentPosition();
-            if (isWithinLuanda(gps)) {
+            const gpsPromise = mapService.getCurrentPosition();
+            const timeoutPromise = new Promise<null>(res => setTimeout(() => res(null), 1200));
+            const gps = await Promise.race([gpsPromise, timeoutPromise]);
+            if (gps && isWithinLuanda(gps)) {
               originCoords = gps;
               const geoAddress = await mapService.reverseGeocode(originCoords);
               if (geoAddress && geoAddress.trim()) {
@@ -627,9 +634,31 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
           }
         }
 
-        // 4. Rota REAL via Mapbox Directions (distância por estrada, não Haversine)
-        const route = await mapService.getRouteDistance(originCoords, destCoords);
-        const zp = await zonePriceService.getZonePrice(originStr, destStr);
+        // 4. Rota via Mapbox Directions com fallback rápido (máximo 2s)
+        let route = { distanceKm: 8, durationMin: 20 };
+        try {
+          const routePromise = mapService.getRouteDistance(originCoords, destCoords);
+          const routeTimeout = new Promise<any>(res => setTimeout(() => res(null), 2000));
+          const r = await Promise.race([routePromise, routeTimeout]);
+          if (r) {
+            route = r;
+          } else {
+            const d = mapService.calculateDistance(originCoords, destCoords);
+            route = { distanceKm: Math.max(1, Math.round(d * 10) / 10), durationMin: Math.max(5, Math.ceil((d / 25) * 60)) };
+          }
+        } catch {
+          const d = mapService.calculateDistance(originCoords, destCoords);
+          route = { distanceKm: Math.max(1, Math.round(d * 10) / 10), durationMin: Math.max(5, Math.ceil((d / 25) * 60)) };
+        }
+
+        // Preço por zona com timeout de 1.2s
+        let zp: any = null;
+        try {
+          const zpPromise = zonePriceService.getZonePrice(originStr, destStr);
+          const zpTimeout = new Promise<null>(res => setTimeout(() => res(null), 1200));
+          zp = await Promise.race([zpPromise, zpTimeout]);
+        } catch { /* ignore */ }
+
         const priceKz = zp?.price_kz ?? Math.max(500, Math.round(500 + route.distanceKm * 250));
         const vehicleType = (args.vehicle_type as any) || 'standard';
 

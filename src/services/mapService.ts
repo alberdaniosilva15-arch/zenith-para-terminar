@@ -12,7 +12,7 @@ import type { LatLng, LocationResult } from '../types';
 import { haversineKm as _haversineKm, haversineMeters as _haversineMeters } from '../lib/geo';
 import { ANGOLA_LOCATIONS, searchAngolaLocations } from '../data/angolaLocations';
 
-const MAPBOX_TOKEN   = import.meta.env.VITE_MAPBOX_TOKEN   as string | undefined;
+const MAPBOX_TOKEN   = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAPBOX_TOKEN) as string | undefined;
 const LOCATION_NAME_SEPARATOR = '—';
 
 // Base hiper-detalhada de Angola (Kilamba com quarteirões A-X, Golf 2 com zonas A-D, Talatona, Viana, Cazenga, e 18 províncias)
@@ -287,12 +287,23 @@ export const mapService = {
 
     // 3. Combinar resultados:
     // Resultados locais de alta granularidade (quarteirões/sub-zonas) vêm PRIMEIRO.
-    // POIs do Mapbox são adicionados sem descartar as sub-zonas locais!
+    // 3. Combinar e Deduplicar resultados:
+    // Resultados locais de alta granularidade (quarteirões/sub-zonas) vêm PRIMEIRO.
+    // Evita duplicados visuais como "Universidade Jean Piaget de Angola" e "Universidade Jean Piaget"
     const combined: LocationResult[] = [...localResults];
     for (const mb of mapboxResults) {
-      const mbNameLower = mb.name.toLowerCase().trim();
-      const isExactDup = combined.some(c => c.name.toLowerCase().trim() === mbNameLower);
-      if (!isExactDup) {
+      const mbNorm = mb.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const isDup = combined.some(c => {
+        const cNorm = c.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        if (cNorm === mbNorm) return true;
+        const dLat = Math.abs(c.coords.lat - mb.coords.lat);
+        const dLng = Math.abs(c.coords.lng - mb.coords.lng);
+        if (dLat < 0.015 && dLng < 0.015) {
+          if (cNorm.includes(mbNorm) || mbNorm.includes(cNorm)) return true;
+        }
+        return false;
+      });
+      if (!isDup) {
         combined.push(mb);
       }
     }

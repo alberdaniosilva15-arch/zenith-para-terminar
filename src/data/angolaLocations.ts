@@ -2660,7 +2660,7 @@ export const ANGOLA_LOCATIONS: DetailedLocationResult[] = [
     municipality: 'Viana',
     province: 'Luanda',
     isPopular: true,
-    keywords: ['jean piaget', 'piaget', 'unipiaget'],
+    keywords: ['jean piaget', 'piaget', 'unipiaget', 'universidade piaget', 'universidade jean piaget', 'campus piaget', 'piaget viana'],
   },
   {
     name: 'Universidade Gregório Semedo (UGS) — Palanca',
@@ -4729,16 +4729,6 @@ export const ANGOLA_LOCATIONS: DetailedLocationResult[] = [
     municipality: 'Talatona',
     province: 'Luanda',
     keywords: ['lusiada', 'universidade lusiada'],
-  },
-  {
-    name: 'Universidade Jean Piaget — Viana',
-    type: 'escola',
-    description: 'Universidade Jean Piaget de Angola, Viana',
-    coords: { lat: -8.9047, lng: 13.3324 },
-    parent: 'Viana',
-    municipality: 'Viana',
-    province: 'Luanda',
-    keywords: ['jean piaget', 'piaget'],
   },
   {
     name: 'Universidade Metodista de Angola — Maianga',
@@ -20845,6 +20835,131 @@ export const ANGOLA_LOCATIONS: DetailedLocationResult[] = [
     keywords: ["mercado","praça","praca","paragem","largo","ramiros"],
   },
 
+  // ── NOVAS ZONAS CRÍTICAS (Kifica, Kapalanga, Piaget) ──
+  {
+    name: "Benfica — Kifica (Entrada Principal)",
+    type: "bairro",
+    description: "Bairro Kifica, Entrada Principal, Benfica",
+    coords: { lat: -8.932, lng: 13.185 },
+    parent: "Benfica",
+    subzone: "Kifica",
+    isPopular: true,
+    municipality: "Talatona",
+    province: "Luanda",
+    keywords: ["kifica","quifica","benfica kifica","entrada da kifica","bairro kifica"],
+  },
+  {
+    name: "Benfica — Kifica (Rotunda da Kifica)",
+    type: "rua",
+    description: "Rotunda da Kifica, Benfica",
+    coords: { lat: -8.9345, lng: 13.188 },
+    parent: "Benfica",
+    subzone: "Rotunda da Kifica",
+    municipality: "Talatona",
+    province: "Luanda",
+    keywords: ["kifica","rotunda kifica","rotunda da kifica","quifica"],
+  },
+  {
+    name: "Benfica — Kifica (Mercado da Kifica)",
+    type: "servico",
+    description: "Mercado da Kifica, Benfica",
+    coords: { lat: -8.936, lng: 13.1865 },
+    parent: "Benfica",
+    subzone: "Mercado da Kifica",
+    municipality: "Talatona",
+    province: "Luanda",
+    keywords: ["mercado da kifica","mercado kifica","kifica","quifica"],
+  },
+  {
+    name: "Benfica — Kifica (Rua Direita da Kifica)",
+    type: "rua",
+    description: "Rua Direita da Kifica, Benfica",
+    coords: { lat: -8.9335, lng: 13.184 },
+    parent: "Benfica",
+    subzone: "Rua Direita da Kifica",
+    municipality: "Talatona",
+    province: "Luanda",
+    keywords: ["rua da kifica","rua direita kifica","kifica"],
+  },
+  {
+    name: "Benfica — Morro dos Veados",
+    type: "bairro",
+    description: "Morro dos Veados, Benfica Sul",
+    coords: { lat: -8.968, lng: 13.152 },
+    parent: "Benfica",
+    subzone: "Morro dos Veados",
+    isPopular: true,
+    municipality: "Belas",
+    province: "Luanda",
+    keywords: ["morro dos veados","veados","benfica"],
+  },
+  {
+    name: "Benfica — Zona Verde",
+    type: "bairro",
+    description: "Zona Verde de Benfica",
+    coords: { lat: -8.925, lng: 13.198 },
+    parent: "Benfica",
+    subzone: "Zona Verde",
+    municipality: "Talatona",
+    province: "Luanda",
+    keywords: ["zona verde","zona verde benfica"],
+  },
+  {
+    name: "Benfica — Bita Tanque",
+    type: "bairro",
+    description: "Bairro Bita Tanque, Benfica",
+    coords: { lat: -8.948, lng: 13.22 },
+    parent: "Benfica",
+    subzone: "Bita Tanque",
+    municipality: "Belas",
+    province: "Luanda",
+    keywords: ["bita tanque","bita","benfica"],
+  },
+  {
+    name: "Benfica — Bita Progresso",
+    type: "bairro",
+    description: "Bairro Bita Progresso, Benfica",
+    coords: { lat: -8.951, lng: 13.223 },
+    parent: "Benfica",
+    subzone: "Bita Progresso",
+    municipality: "Belas",
+    province: "Luanda",
+    keywords: ["bita progresso","bita"],
+  },
+  {
+    name: "Viana — Kapalanga (Centro)",
+    type: "bairro",
+    description: "Bairro Kapalanga, Centro, Viana",
+    coords: { lat: -8.915, lng: 13.34 },
+    parent: "Viana",
+    subzone: "Kapalanga Centro",
+    isPopular: true,
+    municipality: "Viana",
+    province: "Luanda",
+    keywords: ["kapalanga","capalanga","bairro kapalanga","bairro capalanga","viana kapalanga"],
+  },
+  {
+    name: "Viana — Kapalanga (Paragem do Desvio)",
+    type: "rua",
+    description: "Paragem e Desvio do Kapalanga, Viana",
+    coords: { lat: -8.918, lng: 13.343 },
+    parent: "Viana",
+    subzone: "Kapalanga Desvio",
+    municipality: "Viana",
+    province: "Luanda",
+    keywords: ["kapalanga","capalanga","desvio do kapalanga","paragem kapalanga"],
+  },
+  {
+    name: "Viana — Kapalanga (Mercado do Kapalanga)",
+    type: "servico",
+    description: "Mercado Municipal do Kapalanga, Viana",
+    coords: { lat: -8.913, lng: 13.338 },
+    parent: "Viana",
+    subzone: "Mercado do Kapalanga",
+    municipality: "Viana",
+    province: "Luanda",
+    keywords: ["mercado kapalanga","mercado capalanga","kapalanga"],
+  },
 ];
 
 /**
@@ -20859,35 +20974,124 @@ function normalizeQuery(str: string): string {
 }
 
 /**
- * Pesquisa granular inteligente em toda a base de Angola.
- * Se o utilizador pesquisar "Kilamba", retorna todos os quarteirões A a X e KK5000.
- * Se pesquisar "Golf 2", retorna Golf 2 Centro e todas as suas zonas A-D, mercados e paragens.
+ * Normalização fonética angolana para alternâncias comuns (k <-> c / qu)
  */
-export function searchAngolaLocations(query: string, limit = 30): DetailedLocationResult[] {
+function phoneticVariants(query: string): string[] {
+  const q = normalizeQuery(query);
+  const set = new Set<string>([q]);
+
+  // k <-> c
+  if (q.includes('k')) {
+    set.add(q.replace(/k/g, 'c'));
+    set.add(q.replace(/k/g, 'qu'));
+  }
+  if (q.includes('c')) {
+    set.add(q.replace(/c/g, 'k'));
+  }
+  if (q.includes('qu')) {
+    set.add(q.replace(/qu/g, 'k'));
+  }
+
+  return Array.from(set);
+}
+
+/**
+ * Pesquisa granular inteligente em toda a base de Angola.
+ * - Se o utilizador pesquisar "Kilamba", retorna todos os quarteirões A a X e KK5000 no topo.
+ * - Se pesquisar "Kero Kilamba", retorna "Kilamba — Kero Kilamba" no topo!
+ * - Se pesquisar "Golf 2", retorna Golf 2 Centro e todas as suas zonas A-D, mercados e paragens.
+ * - Se pesquisar "Kifica" ou "Kapalanga", encontra com precisão total.
+ */
+export function searchAngolaLocations(query: string, limit = 35): DetailedLocationResult[] {
   const q = normalizeQuery(query);
   if (!q || q.length < 2) {
     return ANGOLA_LOCATIONS.filter((l) => l.isPopular).slice(0, limit);
   }
 
-  // 1. Correspondência exacta de bairro pai (Ex: parent === "Kilamba" se pesquisou "kilamba")
-  const exactParentMatches = ANGOLA_LOCATIONS.filter(
-    (l) => l.parent && normalizeQuery(l.parent) === q
-  );
+  const variants = phoneticVariants(q);
+  const queryTokens = q.split(/\s+/).filter(t => t.length >= 2);
 
-  // 2. Correspondência parcial de bairro pai (Ex: parent === "Kilamba Kiaxi" se pesquisou "kilamba")
-  const partialParentMatches = ANGOLA_LOCATIONS.filter((l) => {
-    if (!l.parent) return false;
-    const parentNorm = normalizeQuery(l.parent);
-    return parentNorm !== q && (parentNorm.startsWith(q) || q.startsWith(parentNorm));
+  // 1. Direct name match check: does the name contain ALL tokens of query?
+  // Ex: query "kero kilamba" matches name "Kilamba — Kero Kilamba" perfectly!
+  const directNameMatches: DetailedLocationResult[] = [];
+  const exactParentMatches: DetailedLocationResult[] = [];
+  const partialParentMatches: DetailedLocationResult[] = [];
+  const otherMatches: DetailedLocationResult[] = [];
+
+  const seen = new Set<DetailedLocationResult>();
+
+  for (const loc of ANGOLA_LOCATIONS) {
+    const locNameNorm = normalizeQuery(loc.name);
+    const locDescNorm = normalizeQuery(loc.description);
+    const locSubNorm = loc.subzone ? normalizeQuery(loc.subzone) : '';
+    const locParentNorm = loc.parent ? normalizeQuery(loc.parent) : '';
+    const locMunNorm = loc.municipality ? normalizeQuery(loc.municipality) : '';
+
+    // Check direct name match
+    const nameMatchesDirect = variants.some(v => locNameNorm.includes(v)) ||
+      (queryTokens.length > 1 && queryTokens.every(tok => locNameNorm.includes(tok) || (loc.keywords && loc.keywords.some(k => normalizeQuery(k).includes(tok)))));
+
+    if (nameMatchesDirect) {
+      directNameMatches.push(loc);
+      seen.add(loc);
+      continue;
+    }
+
+    // Check parent match
+    if (loc.parent) {
+      const isExactParent = variants.some(v => locParentNorm === v);
+      if (isExactParent) {
+        exactParentMatches.push(loc);
+        seen.add(loc);
+        continue;
+      }
+
+      const isPartialParent = variants.some(v => locParentNorm !== v && (locParentNorm.startsWith(v) || v.startsWith(locParentNorm)));
+      if (isPartialParent) {
+        partialParentMatches.push(loc);
+        seen.add(loc);
+        continue;
+      }
+    }
+
+    // Check keywords, subzone, desc, mun
+    const kwMatch = loc.keywords && loc.keywords.some(k => {
+      const kn = normalizeQuery(k);
+      return variants.some(v => kn.includes(v) || v.includes(kn));
+    });
+
+    const textMatch = variants.some(v =>
+      locSubNorm.includes(v) ||
+      locDescNorm.includes(v) ||
+      locMunNorm.includes(v)
+    );
+
+    if (kwMatch || textMatch) {
+      otherMatches.push(loc);
+      seen.add(loc);
+    }
+  }
+
+  // Ordenar directNameMatches:
+  // Itens cujo nome começa pelo termo ou que são exatamente o local pesquisado vêm primeiro
+  directNameMatches.sort((a, b) => {
+    const aNorm = normalizeQuery(a.name);
+    const bNorm = normalizeQuery(b.name);
+    const aStarts = variants.some(v => aNorm.startsWith(v));
+    const bStarts = variants.some(v => bNorm.startsWith(v));
+    if (aStarts && !bStarts) return -1;
+    if (!aStarts && bStarts) return 1;
+    if (a.isPopular && !b.isPopular) return -1;
+    if (!a.isPopular && b.isPopular) return 1;
+    return a.name.localeCompare(b.name, 'pt-AO');
   });
 
-  // Quarteirões e sub-zonas (com subzone ou type 'bairro') vêm sempre no topo!
+  // Ordenar exactParentMatches: quarteirões e sub-zonas no topo alfabeticamente
   exactParentMatches.sort((a, b) => {
     const aIsSub = a.name.includes('Quarteirão') || a.name.includes('Bloco') || (a.subzone && a.subzone.includes('Zona')) || a.type === 'bairro';
     const bIsSub = b.name.includes('Quarteirão') || b.name.includes('Bloco') || (b.subzone && b.subzone.includes('Zona')) || b.type === 'bairro';
     if (aIsSub && !bIsSub) return -1;
     if (!aIsSub && bIsSub) return 1;
-
     return a.name.localeCompare(b.name, 'pt-AO');
   });
 
@@ -20899,43 +21103,41 @@ export function searchAngolaLocations(query: string, limit = 30): DetailedLocati
     return a.name.localeCompare(b.name, 'pt-AO');
   });
 
-  const parentMatchedSet = new Set([...exactParentMatches, ...partialParentMatches]);
-
-  // 3. Busca nos campos de nome, subzone, descrição, keywords e município
-  const termMatches = ANGOLA_LOCATIONS.filter((l) => {
-    if (parentMatchedSet.has(l)) return false;
-
-    const nameNorm = normalizeQuery(l.name);
-    const descNorm = normalizeQuery(l.description);
-    const subNorm = l.subzone ? normalizeQuery(l.subzone) : '';
-    const munNorm = l.municipality ? normalizeQuery(l.municipality) : '';
-    const provNorm = l.province ? normalizeQuery(l.province) : '';
-
-    if (nameNorm.includes(q)) return true;
-    if (subNorm && subNorm.includes(q)) return true;
-    if (descNorm && descNorm.includes(q)) return true;
-    if (munNorm && munNorm.includes(q)) return true;
-    if (provNorm && provNorm.includes(q)) return true;
-
-    if (l.keywords && l.keywords.some((k) => normalizeQuery(k).includes(q) || q.includes(normalizeQuery(k)))) {
-      return true;
-    }
-
-    return false;
-  });
-
-  termMatches.sort((a, b) => {
-    const aStarts = normalizeQuery(a.name).startsWith(q);
-    const bStarts = normalizeQuery(b.name).startsWith(q);
-    if (aStarts && !bStarts) return -1;
-    if (!aStarts && bStarts) return 1;
+  otherMatches.sort((a, b) => {
     if (a.isPopular && !b.isPopular) return -1;
     if (!a.isPopular && b.isPopular) return 1;
     return a.name.localeCompare(b.name, 'pt-AO');
   });
 
-  // Se houver quarteirões/sub-zonas de um bairro pai, assegurar que todos são retornados sem corte
+  // Se o utilizador pesquisou um bairro pai (como "Kilamba"), quarteirões vêm com folga para mostrar todos
   const effectiveLimit = exactParentMatches.length > 0 ? Math.max(limit, exactParentMatches.length + 15) : limit;
 
-  return [...exactParentMatches, ...partialParentMatches, ...termMatches].slice(0, effectiveLimit);
+  const combinedAll = [
+    ...directNameMatches,
+    ...exactParentMatches,
+    ...partialParentMatches,
+    ...otherMatches
+  ];
+
+  // Deduplicação inteligente para evitar locais repetidos (como Piaget duplo)
+  const deduplicated: DetailedLocationResult[] = [];
+  for (const loc of combinedAll) {
+    const locNorm = normalizeQuery(loc.name);
+    const isDup = deduplicated.some(r => {
+      const rNorm = normalizeQuery(r.name);
+      if (rNorm === locNorm) return true;
+      const dLat = Math.abs(r.coords.lat - loc.coords.lat);
+      const dLng = Math.abs(r.coords.lng - loc.coords.lng);
+      // Se estão a menos de ~2km e um nome contém o outro (ex: Piaget de Angola vs Piaget)
+      if (dLat < 0.02 && dLng < 0.02) {
+        if (rNorm.includes(locNorm) || locNorm.includes(rNorm)) return true;
+      }
+      return false;
+    });
+    if (!isDup) {
+      deduplicated.push(loc);
+    }
+  }
+
+  return deduplicated.slice(0, effectiveLimit);
 }
