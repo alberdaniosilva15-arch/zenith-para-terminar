@@ -6,6 +6,8 @@
 // Inclui detecção por magic bytes e fallback de modelos.
 // =============================================================================
 
+import { normalizeAngolanSpeech } from './angolaSpeechNormalizer';
+
 export interface AudioTranscribeResult {
   text: string;
   rawText: string;
@@ -111,14 +113,19 @@ async function transcribeWithGroq(
   formData.append('model', 'whisper-large-v3-turbo');
   formData.append('language', 'pt');
   formData.append('response_format', 'verbose_json');
-  // Prompt de contexto para Whisper — ajuda a ancorar nomes de bairros angolanos
+  // Prompt de contexto expandido para Whisper com vocabulário rico de Angola
   formData.append('prompt',
     'Zenith Ride, táxi, corrida, Luanda, Angola. ' +
-    'Bairros: Camama, Viana, Cacuaco, Talatona, Benfica, Morro Bento, ' +
-    'Maianga, Kinaxixi, Belas Shopping, Alvalade, Rangel, Samba, ' +
-    'Kilamba, Zango, Cazenga, Ingombota, Mutamba, Rocha Pinto, ' +
-    'Mundo Verde, Golf 2, Nova Vida, Patriota, Ilha de Luanda, ' +
-    'Aeroporto 4 de Fevereiro, Largo do Ambiente, Largo da Independência.'
+    'Centralidade do Kilamba, Quarteirão A, Quarteirão B, Quarteirão C, Quarteirão D, ' +
+    'Quarteirão E, Quarteirão F, Quarteirão G, Quarteirão H, Quarteirão I, Quarteirão J, ' +
+    'Quarteirão K, Quarteirão L, Quarteirão M, Quarteirão N, Quarteirão O, Quarteirão P, ' +
+    'KK 5000, Golf 2, Golf 1, Nova Vida, Zona A, Zona B, Zona C, Zona D, Mercado dos Correios, ' +
+    'Talatona, Lar do Patriota, Belas Shopping, Cidade Financeira, Morro Bento, Benfica, ' +
+    'Camama, Cidade Universitária, Viana, Estalagem, Capalanga, Kikuxi, Zango 1, Zango 2, Zango 3, ' +
+    'Vida Pacífica, Cazenga, Tala Hady, Hoji Ya Henda, Cuca, Cacuaco, Sequele, Kikolo, Panguila, ' +
+    'Mutamba, Kinaxixi, Maculusso, Maianga, Alvalade, Prenda, Sambizanga, Bairro Operário, ' +
+    'Ilha do Cabo, Aeroporto 4 de Fevereiro, Benguela, Lobito, Huambo, Lubango, Cabinda. ' +
+    'Comandos: quero ir para, leva-me ao, pede um táxi, chama um carro, quanto custa.'
   );
 
   const controller = new AbortController();
@@ -180,10 +187,11 @@ async function transcribeWithGroq(
       };
     }
 
-    console.log('[kazeAudioTranscribe] ✅ Groq/Whisper transcreveu:', rawText);
+    const normalizedText = normalizeAngolanSpeech(rawText);
+    console.log('[kazeAudioTranscribe] ✅ Groq/Whisper transcreveu:', rawText, '->', normalizedText);
 
     return {
-      text: rawText,
+      text: normalizedText,
       rawText,
       isEmpty: false,
       status: 'success',
@@ -230,19 +238,25 @@ const CANDIDATE_MODELS = [
 // Prompt optimizado: muito mais restritivo, com exemplos concretos de Angola
 const GEMINI_TRANSCRIPTION_PROMPT = `TAREFA: Transcrever este áudio de voz falada em português.
 
-CONTEXTO: O utilizador está dentro da app Zenith Ride (serviço de táxi/mobilidade em Luanda, Angola).
-Ele pode estar a pedir corridas, indicar destinos, ou dar comandos de voz ao assistente.
+CONTEXTO: O utilizador está dentro da app Zenith Ride (serviço de táxi e mobilidade em Angola).
+Ele pode estar a pedir corridas, indicar destinos ou quarteirões, ou dar comandos de voz ao assistente Kaze.
 
-VOCABULÁRIO ESPERADO (nomes de bairros de Luanda e comandos comuns):
-- Bairros: Camama, Viana, Cacuaco, Talatona, Benfica, Morro Bento, Maianga, Kinaxixi, Kilamba, Zango, Cazenga, Ingombota, Mutamba, Rocha Pinto, Alvalade, Rangel, Samba, Golf 2, Nova Vida, Patriota, Ilha de Luanda, Mundo Verde, Belas Shopping, Largo do Ambiente, Largo da Independência, Aeroporto, Morro da Cruz, São Paulo, Prenda
-- Comandos: "pede um táxi para...", "quero ir para...", "quanto custa...", "confirma", "cancela", "sim", "não", "histórico", "saldo", "ajuda"
+VOCABULÁRIO ESPERADO (nomes de centralidades, quarteirões, bairros e comandos comuns):
+- Kilamba: Quarteirão A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, KK 5000, Xyami Kilamba
+- Golf e Nova Vida: Golf 2 (Zona A, B, C, D, Mercado dos Correios, Rotunda), Golf 1, Urbanização Nova Vida
+- Talatona e Sul: Talatona, Lar do Patriota (Fases 1, 2, 3), Belas Shopping, Cidade Financeira, Benfica, Morro Bento, Futungo
+- Camama e Viana: Camama 1 e 2, Cidade Universitária, Viana Centro, Estalagem, Capalanga, Kikuxi, Zango (0, 1, 2, 3, 4, 5), Vida Pacífica
+- Cazenga e Cacuaco: Cazenga, Tala Hady, Hoji Ya Henda, Cacuaco, Centralidade do Sequele, Kikolo, Panguila
+- Luanda Centro: Mutamba, Kinaxixi, Maculusso, Maianga, Alvalade, Prenda, Sambizanga, Bairro Operário, Ilha do Cabo, Aeroporto 4 de Fevereiro
+- Províncias: Benguela, Lobito, Huambo, Lubango, Cabinda, Namibe, Malanje, Soyo
+- Comandos: "pede um táxi para...", "quero ir para...", "leva-me ao...", "quanto custa...", "confirma", "cancela", "sim", "não", "saldo"
 
 REGRAS ABSOLUTAS:
 1. Retorna APENAS e EXCLUSIVAMENTE o texto falado. Nada mais.
 2. NÃO inventes texto. Se não consegues perceber, responde: [VAZIO]
 3. NÃO incluas timestamps (00:00), aspas, prefixos ou explicações.
-4. NÃO traduzas — mantém exactamente o que foi dito.
-5. Se o áudio tiver ruído mas houver voz, transcreve a voz.
+4. Mantém nomes de quarteirões e bairros com fidelidade absoluta.
+5. Se o áudio tiver ruído mas houver voz humana, transcreve a voz.
 6. Se for APENAS ruído/silêncio sem voz humana, responde: [VAZIO]`;
 
 async function transcribeWithGemini(
@@ -336,10 +350,11 @@ async function transcribeWithGemini(
           };
         }
 
-        console.log(`[kazeAudioTranscribe] ✅ Gemini/${model} transcreveu:`, cleaned);
+        const normalizedCleaned = normalizeAngolanSpeech(cleaned);
+        console.log(`[kazeAudioTranscribe] ✅ Gemini/${model} transcreveu:`, cleaned, '->', normalizedCleaned);
 
         return {
-          text: cleaned, rawText, isEmpty: false,
+          text: normalizedCleaned, rawText, isEmpty: false,
           status: 'success', modelUsed: model, provider: 'gemini',
         };
       } catch (fetchErr: any) {

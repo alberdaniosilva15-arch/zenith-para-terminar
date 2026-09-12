@@ -1,4 +1,5 @@
 import { LOCAL_KAZE_URL, getAiModelSettings } from './aiModelSettings';
+import { normalizeAngolanSpeech } from './angolaSpeechNormalizer';
 
 type CaptureOptions = {
   maxMs?: number;
@@ -132,10 +133,10 @@ function webSpeechTranscribe(timeoutMs: number): Promise<string> {
       return;
     }
     const recognition = new SpeechRecognition();
-    recognition.lang = 'pt-PT';
+    recognition.lang = 'pt-BR';
     recognition.continuous = false;
     recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 3;
 
     const timer = window.setTimeout(() => {
       recognition.stop();
@@ -145,7 +146,7 @@ function webSpeechTranscribe(timeoutMs: number): Promise<string> {
     recognition.onresult = (event: any) => {
       window.clearTimeout(timer);
       const transcript = event.results?.[0]?.[0]?.transcript || '';
-      resolve(transcript.trim());
+      resolve(normalizeAngolanSpeech(transcript.trim()));
     };
     recognition.onerror = (event: any) => {
       window.clearTimeout(timer);

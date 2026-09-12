@@ -403,8 +403,19 @@ O fundador é o Dánio Silva, jovem empreendedor visionário de Luanda. Ele crio
 • 🚙 Comfort — +40% (veículo premium, ar condicionado)
 • 🚐 XL — +80% (veículo grande, para grupos)
 
-═══ ZONAS DE LUANDA COBERTAS ═══
-Centro/Mutamba, Maianga, Ingombota, Ilha do Cabo, Miramar, Alvalade, Talatona, Kilamba, Viana, Cacuaco, Cazenga, Rangel, Sambizanga, Golf 2, Camama, Benfica, Belas, Zango, Sequele
+═══ ZONAS E CENTRALIDADES DE ANGOLA COBERTAS ═══
+• Centralidade do Kilamba: todos os Quarteirões (A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U), KK 5000, Xyami Kilamba, Kero Kilamba
+• Golf 2 e Nova Vida: Golf 2 (Zona A, B, C, D, Mercado dos Correios, Mercado do Trinta, Rotunda do Golf 2, Hospital Geral), Golf 1, Urbanização Nova Vida (Fases 1, 2, 3)
+• Talatona e Belas: Talatona Centro, Lar do Patriota (Fases 1, 2, 3), Belas Shopping, Cidade Financeira, Morro Bento (1 e 2), Benfica, Futungo, Barra do Kwanza, Kapossoka, Mussulo
+• Camama: Camama 1 e 2, Cidade Universitária (Campus UAN), Hospital Cardeal Dom Alexandre do Nascimento, Mundo Verde
+• Viana e Zango: Viana Centro/Vila, Estalagem, Capalanga, Km 9 ao 30, Kikuxi, Zango (0, 1, 2, 3, 4, 5), Centralidade Vida Pacífica, Zango 8000
+• Cazenga: Cazenga Centro, Tala Hady, Hoji Ya Henda, Cuca, 11 de Novembro, Asa Branca
+• Cacuaco: Centralidade do Sequele (Blocos 1 ao 12), Kikolo, Panguila, Funda, Boa Esperança
+• Luanda Centro: Mutamba, Kinaxixi, Maculusso, Maianga, Alvalade, Cassenda, Prenda, Rocha Pinto, Sambizanga, Bairro Operário, Marçal, Rangel, Terra Nova, Samba, Ilha do Cabo, Aeroporto 4 de Fevereiro
+• Províncias de Angola: Benguela, Lobito, Huambo, Lubango, Cabinda, Caxito, Sumbe, N'dalatando, Malanje, Uíge, M'banza Kongo, Soyo, Saurimo, Dundo, Cuito, Luena, Moçâmedes, Menongue, Ondjiva
+
+═══ EXPRESSÕES E CULTURA ANGOLANA ═══
+Entende e acolhe gírias luandenses com simpatia natural ("mano", "kota/cota", "kandengue", "fixe", "tá-se bem", "ya", "qual é a boa", "mambo", "maka", "bué", "bazar", "estou na escuta", "bora"). Quando o passageiro falar de quarteirões ou zonas específicas, confirma com precisão e clareza.
 
 ═══ SEGURANÇA ═══
 • Todos os motoristas são verificados com BI/Passaporte e Carta de Condução
@@ -443,7 +454,7 @@ async function callDirectGeminiChat(
 
   // 1. Motor Groq (ultra-rápido < 300ms, disponível imediatamente)
   if (FRONTEND_GROQ_KEY) {
-    const groqModels = ['qwen/qwen3.8-27b', 'groq/compound', 'openai/gpt-oss-120b'];
+    const groqModels = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'];
     for (const model of groqModels) {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -956,10 +967,10 @@ export const geminiService = {
     const chat = geminiService.createKazeChat();
     const recognition = new SpeechRecognitionCtor();
 
-    recognition.lang = 'pt-PT';
+    recognition.lang = 'pt-BR';
     recognition.continuous = false;
     recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 3;
 
     let closing = false;
     let closeNotified = false;

@@ -12,6 +12,7 @@ import { mapService, LUANDA_STATIC_LOCATIONS } from './mapService';
 import { zonePriceService } from './zonePrice';
 import { supabase } from '../lib/supabase';
 import { getLocalKazeResponse } from './geminiService';
+import { normalizeAngolanSpeech } from '../lib/angolaSpeechNormalizer';
 import type { LatLng } from '../types';
 
 export type KazeActionType =
@@ -98,17 +99,17 @@ export function isWithinLuanda(coords: LatLng): boolean {
  * Remove vícios de fala como "pede para mim uma corrida para", "mais próximo de mim", etc.
  */
 export function cleanDestinationQuery(raw: string): string {
-  let q = String(raw || '').trim();
+  let q = normalizeAngolanSpeech(String(raw || '')).trim();
 
   // 1. Remover comandos e saudações comuns
-  q = q.replace(/^(?:olá|ola|ei|oi|por favor|kaze|podes|faz favor|mano)\s+/i, '');
-  q = q.replace(/^(?:pede|pedir|chama|chamar|quero|preciso de|marca|marcar|levar|leva[- ]me|ir|vai|vamos)\s+/i, '');
+  q = q.replace(/^(?:olá|ola|ei|oi|por favor|kaze|podes|faz favor|mano|cota|kota)\s+/i, '');
+  q = q.replace(/^(?:pede|pedir|chama|chamar|quero|preciso de|marca|marcar|levar|leva[- ]me|ir|vai|vamos|bazar|vamos bazar para|quero bazar para)\s+/i, '');
   q = q.replace(/^(?:para mim|pra mim|pro mim)\s+/i, '');
 
   // 2. Remover o tipo de transporte
-  q = q.replace(/^(?:uma corrida|corrida|um táxi|táxi|um taxi|taxi|um carro|carro|uma viagem|viagem|um motogo|motogo)\s+/i, '');
+  q = q.replace(/^(?:uma corrida|corrida|um táxi|táxi|um taxi|taxi|um carro|carro|uma viagem|viagem|um motogo|motogo|um mambo|o mambo)\s+/i, '');
 
-  // 3. Remover preposições e artigos
+  // 3. Remover preposições e artigos iniciais
   q = q.replace(/^(?:para|pra|pro|ao|à|a|no|na|nos|nas|em|ate|até)\s+/i, '');
   q = q.replace(/^(?:o|a|os|as|um|uma)\s+/i, '');
 
@@ -120,25 +121,34 @@ export function cleanDestinationQuery(raw: string): string {
     return 'Minha localização actual';
   }
 
-  // 5. Normalização de marcos famosos de Luanda
+  // 5. Preservar quarteirões e sub-zonas específicas (NÃO colapsar para o centro se o utilizador especificou)
+  const hasSpecificSubzone = /quarteir[aã]o|bloco|zona\s+[a-z0-9]|fase\s+[0-9]|setor|mercado|rotunda|hospital|rua|avenida|estalagem|capalanga|kikolo|sequele|patriota|kk\s*5000/i.test(q);
+  if (hasSpecificSubzone) {
+    return q.trim();
+  }
+
+  // 6. Normalização de marcos famosos gerais quando não há sub-zona detalhada
   if (/bela[s]?\s*shopping/i.test(q)) return 'Belas Shopping';
-  if (/x[y|i]ami\s*kilamba/i.test(q)) return 'Xyami Shopping Kilamba';
+  if (/x[y|i]ami\s*kilamba/i.test(q)) return 'Kilamba — Xyami Shopping Kilamba';
   if (/x[y|i]ami/i.test(q)) return 'Xyami Shopping';
   if (/aeroporto|4\s*de\s*fevereiro/i.test(q)) return 'Aeroporto 4 de Fevereiro';
   if (/ilha\s*do\s*cabo|ilha\s*de\s*luanda|\bilha\b/i.test(q) && !/maianga|talatona/i.test(q)) return 'Ilha do Cabo';
-  if (/mutamba/i.test(q)) return 'Mutamba — Baixa de Luanda';
-  if (/kinaxixi/i.test(q)) return 'Kinaxixi';
-  if (/talatona/i.test(q)) return 'Talatona';
-  if (/kilamba/i.test(q)) return 'Kilamba';
-  if (/viana/i.test(q)) return 'Viana — Centro';
-  if (/cacuaco/i.test(q)) return 'Cacuaco — Centro';
-  if (/morro\s*bento/i.test(q)) return 'Morro Bento';
-  if (/benfica/i.test(q)) return 'Benfica';
-  if (/camama/i.test(q)) return 'Camama';
-  if (/alvalade/i.test(q)) return 'Alvalade';
-  if (/maianga/i.test(q)) return 'Maianga';
-  if (/cazenga/i.test(q)) return 'Cazenga';
-  if (/samba/i.test(q)) return 'Samba';
+  if (/^mutamba$/i.test(q)) return 'Mutamba — Baixa de Luanda';
+  if (/^kinaxixi$/i.test(q)) return 'Kinaxixi';
+  if (/^talatona$/i.test(q)) return 'Talatona — Centro Administrativo';
+  if (/^kilamba$/i.test(q)) return 'Kilamba — Centro & Rotunda Principal';
+  if (/^golf\s*2$|^golfe\s*2$/i.test(q)) return 'Golf 2 — Centro';
+  if (/^golf\s*1$|^golfe\s*1$/i.test(q)) return 'Golf 1 — Centro';
+  if (/^nova\s*vida$/i.test(q)) return 'Nova Vida — Fase 1';
+  if (/^viana$/i.test(q)) return 'Viana — Vila de Viana / Centro';
+  if (/^cacuaco$/i.test(q)) return 'Cacuaco — Centro / Vila de Cacuaco';
+  if (/^morro\s*bento$/i.test(q)) return 'Morro Bento — Morro Bento 1';
+  if (/^benfica$/i.test(q)) return 'Benfica — Centro';
+  if (/^camama$/i.test(q)) return 'Camama — Centro / Rotunda da Camama';
+  if (/^alvalade$/i.test(q)) return 'Alvalade — Centro';
+  if (/^maianga$/i.test(q)) return 'Maianga — Centro';
+  if (/^cazenga$/i.test(q)) return 'Cazenga — Centro / Marco Histórico 4 de Fevereiro';
+  if (/^samba$/i.test(q)) return 'Samba — Centro / Nó da Samba';
 
   return q.trim();
 }
@@ -245,7 +255,14 @@ const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente de inteligência a
 - NUNCA respondas de forma robótica, burocrática ou como um menu pré-programado! NUNCA repitas frases feitas decoradas.
 - Se o utilizador apenas puxar conversa (ex: "fala comigo", "olá", "como estás?", "qual é a boa?", "quem és?", "estás aí?"):
   Responde com entusiasmo genuíno, conversa com ele como um parceiro real, pergunta o que ele manda e como está o dia dele por Luanda.
-- Tens conhecimento profundo e real de Luanda: trânsito, rotas, zonas e bairros (Mutamba, Talatona, Kilamba, Maianga, Alvalade, Ilha do Cabo, Viana, Cacuaco, Camama, Benfica, Morro Bento, Aeroporto 4 de Fevereiro).
+- Tens conhecimento profundo e real de Angola e Luanda:
+  - Centralidade do Kilamba com todos os Quarteirões (A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U) e KK5000
+  - Golf 2 com todas as zonas (Zona A, B, C, D, Mercado dos Correios, Rotunda, Hospital Geral) e Nova Vida (Fase 1, 2, 3)
+  - Talatona (Lar do Patriota Fases 1 a 3, Belas Shopping, UCAN, EPIC Sana), Morro Bento, Benfica
+  - Camama (1, 2, Cidade Universitária UAN), Viana (Estalagem, Capalanga, Km 9 a 30, Zango 0 a 5, Vida Pacífica)
+  - Cazenga (Tala Hady, Hoji Ya Henda, Cuca), Cacuaco (Sequele Blocos 1 ao 12, Kikolo), Mutamba, Maianga, Alvalade, Ilha do Cabo
+  - Províncias: Benguela, Lobito, Huambo, Lubango, Cabinda, etc.
+- Se o utilizador pedir para ir a um quarteirão (ex: "Quarteirão D do Kilamba") ou zona (ex: "Golf 2 Zona B"), passa o destino EXACTO e COMPLETO na ferramenta!
 
 ═══ OPERAÇÃO DO APP (TOOL CALLING) ═══
 Quando o utilizador quiser realizar uma acção no aplicativo da Zenith Ride, chama imediatamente a ferramenta adequada:
@@ -361,7 +378,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
   }
 }`;
 
-    const models = ['qwen/qwen3.8-27b', 'groq/compound', 'openai/gpt-oss-120b'];
+    const models = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'];
 
     for (const model of models) {
       try {

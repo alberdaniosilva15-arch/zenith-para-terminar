@@ -17,6 +17,7 @@ import { UserRole, RideStatus, LatLng } from '../types';
 import { supabase } from '../lib/supabase';
 import { useAppStore } from '../store/useAppStore';
 import { transcribeAudioWithGemini, AudioTranscribeResult } from '../lib/kazeAudioTranscribe';
+import { normalizeAngolanSpeech } from '../lib/angolaSpeechNormalizer';
 import { mapService } from '../services/mapService';
 import {
   KazeAudioCapture,
@@ -496,13 +497,14 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     // Se o reconhecimento nativo do navegador já captou a fala em português
     const recognizedLive = speechRecognizedTextRef.current?.trim();
     if (recognizedLive) {
-      console.log('[KazeMascot] Fala reconhecida nativamente pelo navegador:', recognizedLive);
+      const normalizedLive = normalizeAngolanSpeech(recognizedLive);
+      console.log('[KazeMascot] Fala reconhecida nativamente pelo navegador:', recognizedLive, '->', normalizedLive);
       try {
         await audioCaptureRef.current.stop();
       } catch {}
-      setInputValue(recognizedLive);
+      setInputValue(normalizedLive);
       setMicDiagnostics(null);
-      await handleSendText(undefined, recognizedLive);
+      await handleSendText(undefined, normalizedLive);
       return;
     }
 
@@ -673,12 +675,12 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         }
       }
 
-      // Auto-stop após 12 segundos
+      // Auto-stop após 20 segundos (tempo generoso para instruções completas em Luanda)
       autoStopTimerRef.current = setTimeout(() => {
         if (audioCaptureRef.current?.isRecording) {
           stopAndProcessRecording();
         }
-      }, 12000);
+      }, 20000);
     } catch (err: any) {
       console.error('[KazeMascot] Erro ao iniciar microfone:', err);
       setIsListeningMic(false);

@@ -9,6 +9,7 @@ import mapboxgl from 'mapbox-gl';
 import { getCurrentPosition, watchPosition } from '../services/gpsService';
 import { getRoute } from '../services/mapboxRoutingService';
 import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
+import { searchAngolaLocations } from '../data/angolaLocations';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -163,9 +164,22 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
           ? `&proximity=${userPos.lng},${userPos.lat}`
           : `&proximity=13.2343,-8.8390`;
 
-        const bbox = '12.8,-9.5,14.3,-7.5';
+        const bbox = '11.5,-18.0,24.1,-4.5';
 
-        // 1. Mapbox API — Focus em bairros e vias estruturantes + POIs grandes
+        // 0. Base hiper-granular de Angola (Quarteirões Kilamba, Zonas Golf 2, Talatona, etc.)
+        const angolaMatches = searchAngolaLocations(query, 15);
+        const angolaParsed: SearchResult[] = angolaMatches.map(loc => ({
+          id: `angola-${loc.name}`,
+          place_name: `${loc.name} — ${loc.description}`,
+          text: loc.name,
+          place_type: [loc.type === 'rua' ? 'address' : loc.type === 'hospital' || loc.type === 'escola' || loc.type === 'servico' ? 'poi' : 'neighborhood'],
+          center: [loc.coords.lng, loc.coords.lat],
+          distanceKm: userPos
+            ? parseFloat(haversineKm(userPos.lat, userPos.lng, loc.coords.lat, loc.coords.lng).toFixed(1))
+            : undefined,
+        }));
+
+        // 1. Mapbox API — Bairros, vias estruturantes e POIs em Angola
         const mbUrl =
           `https://api.mapbox.com/geocoding/v5/mapbox.places/` +
           `${encodeURIComponent(query)}.json` +
@@ -177,7 +191,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
           `&bbox=${bbox}` +
           `&access_token=${MAPBOX_TOKEN}`;
 
-        // 2. Photon API (OpenStreetMap) — Ibatível para Hospedarias, Colégios, Restaurantes africanos
+        // 2. Photon API (OpenStreetMap)
         const phUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&bbox=${bbox}&limit=12`;
 
         const [mbRes, phRes] = await Promise.allSettled([
@@ -209,7 +223,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
             id: `photon-${props.osm_id || Math.random()}`,
             place_name: full,
             text: label,
-            place_type: ['poi'], // força ícone POI
+            place_type: ['poi'],
             center: f.geometry.coordinates as [number, number],
             distanceKm: userPos
               ? parseFloat(haversineKm(userPos.lat, userPos.lng, f.geometry.coordinates[1], f.geometry.coordinates[0]).toFixed(1))
@@ -217,22 +231,17 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
           };
         });
 
-        // Combinar e ordenar interlavado ou apenas Photon primeiro (escolas/hospedarias vêm daqui)
-        // Usar Map para remover duplicados pelo nome exacto
+        // Combinar: Quarteirões e sub-zonas locais vêm no topo!
         const combinedMap = new Map<string, SearchResult>();
-        [...phParsed, ...mbParsed].forEach(item => {
-          if (!combinedMap.has(item.text.toLowerCase())) {
-            combinedMap.set(item.text.toLowerCase(), item);
+        [...angolaParsed, ...phParsed, ...mbParsed].forEach(item => {
+          const key = item.text.toLowerCase().trim();
+          if (!combinedMap.has(key)) {
+            combinedMap.set(key, item);
           }
         });
 
-        // Ordenar por distância
-        const finalResults = Array.from(combinedMap.values()).sort((a, b) => {
-          if (a.distanceKm && b.distanceKm) return a.distanceKm - b.distanceKm;
-          return 0;
-        });
-
-        setResults(finalResults.slice(0, 15));
+        const finalResults = Array.from(combinedMap.values());
+        setResults(finalResults.slice(0, 20));
       } catch (err) {
         console.warn('Geocoding error:', err);
         setError('Erro na pesquisa — verifica a ligação');
