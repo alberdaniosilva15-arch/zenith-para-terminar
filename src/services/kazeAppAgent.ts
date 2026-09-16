@@ -292,6 +292,24 @@ Quando o utilizador quiser realizar uma acção no aplicativo da Zenith Ride, ch
 
 Se for apenas conversa, NÃO chames ferramentas; responde com texto acolhedor, inteligente e com atitude positiva!`;
 
+/**
+ * Orçamento de tempo para resolver uma ferramenta pedida pela VOZ.
+ *
+ * Porque existe: a Live API só aceita *function calling* síncrono — o modelo
+ * fica bloqueado à espera do `sendToolResponse`. O caminho `request_ride`
+ * geocodifica o destino e a origem, e essas chamadas ao Mapbox **não tinham
+ * limite nenhum**: com a rede pendurada, o `sendToolResponse` nunca saía, o
+ * turno morria e o Kaze ficava em silêncio absoluto.
+ *
+ * Medido contra o código real (`.tmp-kaze-ferramenta-voz.mjs`, rede pendurada):
+ *   - destino conhecido → ~2,2 s de silêncio
+ *   - destino desconhecido → **nunca respondia**
+ *
+ * 2,5 s deixa passar os casos que hoje já funcionam (2,2 s) e transforma o
+ * silêncio infinito numa resposta honesta. Não altera preços nem rotas.
+ */
+const PRAZO_FERRAMENTA_VOZ_MS = 2_500;
+
 export class KazeAppAgent {
   /**
    * Processa a mensagem do utilizador e determina se há acção para executar no app
@@ -386,7 +404,44 @@ export class KazeAppAgent {
     fallbackText = '',
     rawUserMessage = '',
   ): Promise<KazeAgentResult> {
-    return this._resolveToolAction(toolName, args, fallbackText, context, rawUserMessage);
+    const resolvido = await this._comPrazo(
+      this._resolveToolAction(toolName, args, fallbackText, context, rawUserMessage),
+      PRAZO_FERRAMENTA_VOZ_MS,
+    );
+
+    if (resolvido) return resolvido;
+
+    // O prazo estourou. O modelo TEM de receber alguma coisa — é a única forma
+    // de o Live continuar a conversa em vez de ficar à espera para sempre.
+    return {
+      text: 'Não consegui confirmar os detalhes agora. Podes repetir o destino, mano?',
+      speakText: 'Não consegui confirmar isso agora. Podes dizer outra vez?',
+    };
+  }
+
+  /**
+   * Corre `tarefa` com um tecto de tempo. Devolve `null` se o prazo estourar.
+   *
+   * Usa `Promise.race` e não `AbortController` porque as chamadas que podem
+   * pendurar-se estão em `mapService`, que ainda não aceita um sinal em todas
+   * as rotas. O pedido pendurado fica pendurado — mas o Kaze responde na
+   * mesma, que é o que o utilizador ouve. Fica aqui o único ponto a mudar
+   * quando o `mapService` passar a cancelar a sério.
+   */
+  private async _comPrazo<T>(
+    tarefa: Promise<T>,
+    ms: number,
+  ): Promise<T | null> {
+    let temporizador: ReturnType<typeof setTimeout> | undefined;
+    const prazo = new Promise<null>((res) => {
+      temporizador = setTimeout(() => res(null), ms);
+    });
+
+    try {
+      return await Promise.race([tarefa, prazo]);
+    } finally {
+      if (temporizador) clearTimeout(temporizador);
+    }
   }
 
   /**
