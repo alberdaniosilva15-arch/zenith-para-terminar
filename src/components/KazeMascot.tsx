@@ -1080,13 +1080,17 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         <div className="zr-card" style={{ marginBottom: '16px', width: '92vw', maxWidth: '400px', height: '65vh', maxHeight: '540px', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', pointerEvents: 'auto', border: '1px solid var(--gold-soft)', boxShadow: '0 20px 40px rgba(0,0,0,0.85)' }}>
 
           {/* Header */}
-          <div className="zr-header" style={{ padding: '14px 16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, rgba(230,195,100,0.15), transparent)' }}>
-            <div className="zr-inline zr-inline--between">
-              <div className="zr-inline" style={{ gap: '12px' }}>
-                <div style={{ width: '44px', height: '44px', background: 'var(--surface-3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+          {/* Header — `zr-header--panel` tira o `position: sticky; top: 64px`
+              da classe de página. Sem ele o cabeçalho descia ~65px, caía por
+              cima da barra de tabs e o ✕ (z-index 10) engolia o clique na tab
+              "Voz Ao Vivo" — tocar na tab fechava o painel. */}
+          <div className="zr-header zr-header--panel" style={{ padding: '14px 16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, rgba(230,195,100,0.15), transparent)' }}>
+            <div className="zr-inline zr-inline--between" style={{ flexWrap: 'nowrap', width: '100%' }}>
+              <div className="zr-inline" style={{ gap: '12px', flexWrap: 'nowrap', minWidth: 0, flex: 1 }}>
+                <div style={{ width: '44px', height: '44px', flexShrink: 0, background: 'var(--surface-3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
                   <span className="material-symbols-outlined" style={{ color: 'var(--gold)', fontSize: '26px' }}>auto_awesome</span>
                 </div>
-                <div>
+                <div style={{ minWidth: 0 }}>
                   <h4 className="zr-section-title" style={{ fontSize: '13px', margin: 0, letterSpacing: '0.05em' }}>KAZE AGENT 3.0</h4>
                   <span className="zr-meta" style={{ color: 'var(--gold)', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px' }}>
                     <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: kazeOnline ? '#4ade80' : 'var(--gold)' }} />
@@ -1094,7 +1098,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                   </span>
                 </div>
               </div>
-              <div className="zr-inline" style={{ gap: '4px' }}>
+              <div className="zr-inline" style={{ gap: '4px', flexWrap: 'nowrap', flexShrink: 0 }}>
                 <button
                   onClick={openMicSettings}
                   className="zr-icon-button"
@@ -1124,8 +1128,9 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
             </div>
           </div>
 
-          {/* Tabs de modo */}
-          <div style={{ padding: '0 16px', marginTop: '12px' }}>
+          {/* Tabs de modo — flexShrink 0 para o painel nunca as comprimir a zero
+              quando o conteúdo cresce (o corpo do chat tem flex: 1). */}
+          <div style={{ padding: '0 16px', marginTop: '12px', flexShrink: 0 }}>
             <div className="zr-scroll-x" style={{ background: 'var(--surface-3)', borderRadius: '12px', padding: '4px' }}>
               {(['chat', 'explore', 'voice'] as const).map(m => (
                 <button
@@ -1396,7 +1401,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
 
           {/* Barra de Input & Diagnóstico de Áudio */}
           {mode !== 'voice' && (
-            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--surface-3)', background: 'var(--surface-2)', position: 'relative' }}>
+            <div style={{ padding: '12px 16px', borderTop: '1px solid var(--surface-3)', background: 'var(--surface-2)', position: 'relative', flexShrink: 0 }}>
               
               {/* MODAL / POPOVER DE CONFIGURAÇÃO DE MICROFONE */}
               {showMicSettings && (

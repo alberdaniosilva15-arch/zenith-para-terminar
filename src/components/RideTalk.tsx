@@ -303,8 +303,10 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
   return (
     <div className="zr-card" style={{ marginTop: '16px', padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
 
-      {/* Header */}
-      <div className="zr-header" style={{ padding: '16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, var(--surface-2), transparent)' }}>
+      {/* Header — mesmo defeito do painel do Kaze: `.zr-header` é sticky com
+          `top: 64px` para a página, e dentro deste card (overflow: hidden) isso
+          empurra-o para baixo, por cima da fila de filtros. */}
+      <div className="zr-header zr-header--panel" style={{ padding: '16px', borderBottom: '1px solid var(--surface-3)', background: 'linear-gradient(90deg, var(--surface-2), transparent)' }}>
         <div className="zr-inline zr-inline--between">
           <div className="zr-inline" style={{ gap: '12px' }}>
             <span className="material-symbols-outlined" style={{ fontSize: '24px', verticalAlign: 'middle' }}>radio</span>
