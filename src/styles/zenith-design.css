@@ -67,6 +67,22 @@
   border-bottom: 0;
 }
 
+/* Cabeçalho DENTRO de um painel com scroll próprio (Kaze, RideTalk).
+   O .zr-header é `position: sticky; top: 64px; z-index: 10` porque é feito
+   para o cabeçalho da página, que fica por baixo da barra de topo. Dentro de
+   um painel não há essa barra: o `top: 64px` empurra o cabeçalho ~65px para
+   baixo, ele sobrepõe-se à linha seguinte e, com z-index 10, fica por cima
+   dela a apanhar os cliques. Medido no painel do Kaze: o cabeçalho caía em
+   y=347 com a barra de tabs em y=368, e o ✕ tapava a tab "Voz Ao Vivo" —
+   tocar na tab fechava o painel em vez de abrir a voz. */
+.zr-header--panel {
+  position: relative;
+  top: auto;
+  z-index: auto;
+  flex-shrink: 0;
+  align-items: center;
+}
+
 .zr-header-copy {
   min-width: 0;
 }
