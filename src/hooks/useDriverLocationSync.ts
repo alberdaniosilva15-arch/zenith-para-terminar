@@ -16,6 +16,7 @@ import { latLngToCell } from 'h3-js';
 import { supabase } from '../lib/supabase';
 import { mapService } from '../services/mapService';
 import { rideService } from '../services/rideService';
+import { rideTrackService } from '../services/rideTrack';
 import type { LatLng } from '../types';
 
 interface UseDriverLocationSyncArgs {
@@ -78,6 +79,13 @@ export function useDriverLocationSync({
       // Índice H3 de resolução 9 — usado pelo despacho por vizinhança.
       setH3Cell(latLngToCell(coords.lat, coords.lng, 9));
       await rideService.updateDriverLocation(driverId, coords, heading);
+
+      // Traço da corrida. O `updateDriverLocation` acima faz UPSERT por
+      // `driver_id` — substitui a posição anterior. Este acumula, e é o que
+      // permite desenhar a rota REAL no recibo e alimentar o SOS.
+      // O serviço trata do throttle (20 s) e nunca lança: se falhar, a
+      // corrida continua.
+      void rideTrackService.registar(coords, heading);
     });
   }, [driverId]);
 
@@ -87,6 +95,25 @@ export function useDriverLocationSync({
       gpsRef.current = null;
     }
   }, []);
+
+  // ── Traço real da corrida ─────────────────────────────────────────────────
+  //  Ligado à corrida activa. A limpeza corre quando a corrida muda ou o
+  //  componente sai — e é aí que o ÚLTIMO ponto é gravado à força: sem isto, o
+  //  traço terminaria até 20 s antes do destino, e a rota ficaria cortada
+  //  exactamente no sítio que interessa.
+  useEffect(() => {
+    rideTrackService.definirCorrida(activeRideId ?? null, activeRideId ? driverId : null);
+
+    return () => {
+      const ultimas = driverCoordsRef.current;
+      if (ultimas && activeRideId) {
+        // Forçado, e ANTES de desligar: `registar` captura a corrida e o
+        // motorista de forma síncrona, por isso a ordem é segura.
+        void rideTrackService.registar(ultimas, null, null, true);
+      }
+      rideTrackService.definirCorrida(null);
+    };
+  }, [activeRideId, driverId]);
 
   // Ligar/desligar com o estado online
   useEffect(() => {
