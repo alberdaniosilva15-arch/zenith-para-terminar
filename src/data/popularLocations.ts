@@ -1,0 +1,88 @@
+import type { LocationResult } from '../types';
+
+export const POPULAR_LOCATIONS: LocationResult[] = [
+  {
+    name: 'Aeroporto Internacional 4 de Fevereiro',
+    type: 'aeroporto',
+    description: 'Avenida 21 de Janeiro, Maianga, Luanda',
+    coords: { lat: -8.8584, lng: 13.2312 },
+    isPopular: true,
+  },
+  {
+    name: 'Kilamba — Quarteirão A',
+    type: 'bairro',
+    description: 'Centralidade do Kilamba, Luanda',
+    coords: { lat: -8.9780, lng: 13.2180 },
+    isPopular: true,
+  },
+  {
+    name: 'Talatona — Centro de Convenções',
+    type: 'bairro',
+    description: 'Via C3, Talatona, Luanda',
+    coords: { lat: -8.9200, lng: 13.1800 },
+    isPopular: true,
+  },
+  {
+    name: 'Baía de Luanda — Marginal',
+    type: 'bairro',
+    description: 'Avenida 4 de Fevereiro, Ingombota, Luanda',
+    coords: { lat: -8.8050, lng: 13.2380 },
+    isPopular: true,
+  },
+  {
+    name: 'Mutamba — Largo do Ambiente',
+    type: 'bairro',
+    description: 'Ingombota, Luanda Centro',
+    coords: { lat: -8.8145, lng: 13.2330 },
+    isPopular: true,
+  },
+  {
+    name: 'Maianga — Largo da Maianga',
+    type: 'bairro',
+    description: 'Maianga, Luanda',
+    coords: { lat: -8.8280, lng: 13.2280 },
+    isPopular: true,
+  },
+  {
+    name: 'Nova Vida — Urbanização',
+    type: 'bairro',
+    description: 'Projecto Nova Vida, Kilamba Kiaxi, Luanda',
+    coords: { lat: -8.8950, lng: 13.2200 },
+    isPopular: true,
+  },
+  {
+    name: 'Patriota — Entrada Principal',
+    type: 'bairro',
+    description: 'Lar do Patriota, Talatona, Luanda',
+    coords: { lat: -8.9350, lng: 13.2100 },
+    isPopular: true,
+  },
+  {
+    name: 'Viana — Vila de Viana',
+    type: 'bairro',
+    description: 'Estrada de Catete, Viana, Luanda',
+    coords: { lat: -8.9050, lng: 13.3700 },
+    isPopular: true,
+  },
+  {
+    name: 'Cazenga — Marco Histórico',
+    type: 'bairro',
+    description: 'Cazenga, Luanda',
+    coords: { lat: -8.8350, lng: 13.2850 },
+    isPopular: true,
+  },
+  {
+    name: 'Alvalade — Praça José Pirão',
+    type: 'bairro',
+    description: 'Alvalade, Maianga, Luanda',
+    coords: { lat: -8.8360, lng: 13.2340 },
+    isPopular: true,
+  },
+  {
+    name: 'Ilha de Luanda — Ponto Final',
+    type: 'bairro',
+    description: 'Avenida Murtala Mohamed, Ilha de Cabo, Luanda',
+    coords: { lat: -8.7650, lng: 13.2550 },
+    isPopular: true,
+  },
+];

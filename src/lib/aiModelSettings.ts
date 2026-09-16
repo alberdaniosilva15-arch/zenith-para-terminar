@@ -107,13 +107,19 @@ export function getAiModelSettings(): AiModelSettings {
     model = getDefaultModel(provider);
   }
 
+  // Nota: os fallbacks `GEMINI_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY`
+  // foram REMOVIDOS de propósito.
+  //
+  // O envPrefix do vite.config.ts inlina no bundle do browser tudo o que comece
+  // por VITE_/GEMINI_/GROQ_/OPENAI_/OPENROUTER_/RESEND_. Esses nomes sem prefixo
+  // VITE_ são secrets do SERVIDOR (usados pelo Edge Function gemini-proxy) —
+  // lê-los aqui punha-os no JavaScript público. A chave do Gemini chegou a ser
+  // marcada pela Google como "leaked" exactamente por isto.
+  //
+  // Mantêm-se apenas as variáveis VITE_*, que são de uso público por desenho.
   const effectiveKey = (
-    (provider === 'groq' ? (import.meta.env.VITE_GROQ_API_KEY || (import.meta.env as any).GROQ_API_KEY) : null) ||
-    (provider === 'google' ? (import.meta.env.VITE_GEMINI_API_KEY || (import.meta.env as any).GEMINI_API_KEY) : null) ||
+    (provider === 'groq' ? import.meta.env.VITE_GROQ_API_KEY : null) ||
     import.meta.env.VITE_GROQ_API_KEY ||
-    (import.meta.env as any).GROQ_API_KEY ||
-    import.meta.env.VITE_GEMINI_API_KEY ||
-    (import.meta.env as any).GEMINI_API_KEY ||
     import.meta.env.VITE_IA_API_KEY ||
     ''
   ).trim();
@@ -127,9 +133,10 @@ export function getAiModelSettings(): AiModelSettings {
 }
 
 export function buildKazeApiKeys(settings = getAiModelSettings()) {
-  const groqKey = (import.meta.env.VITE_GROQ_API_KEY || (import.meta.env as any).GROQ_API_KEY || '').trim();
-  const geminiKey = (import.meta.env.VITE_GEMINI_API_KEY || (import.meta.env as any).GEMINI_API_KEY || '').trim();
-  const iaKey = (import.meta.env.VITE_IA_API_KEY || (import.meta.env as any).OPENROUTER_API_KEY || '').trim();
+  const groqKey = (import.meta.env.VITE_GROQ_API_KEY || '').trim();
+  // Vazio por desenho: a chave do Gemini vive no servidor (Edge Function).
+  const geminiKey = '';
+  const iaKey = (import.meta.env.VITE_IA_API_KEY || '').trim();
 
   return {
     [settings.provider]: settings.apiKey,

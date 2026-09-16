@@ -41,12 +41,33 @@ page.html
 # Supabase
 supabase/.temp/
 
+# Diagnóstico local (scripts e SQL de auditoria) — nunca versionar
+.tmp-*
+.tmp-import/
+.tmp-build-*.mjs
+
+# Builds de verificação (o `dist/` já está acima) e temporários do Vite
+dist-*/
+vite*.config.ts.timestamp-*.mjs
+scratch/
+
+# Evidência de auditoria gerada localmente
+advisors-*.json
+audit-rls-*.txt
+rollback-grants-antes.csv
+
 # Ficheiros Sensíveis e de Prompt
 *Lukéni Bot*.json
 src_tree.txt
 src_files.txt
-supabase/functions/whatsapp-webhook/
-supabase/functions/dispatch-cascade/
+# NOTA: whatsapp-webhook/ e dispatch-cascade/ estiveram aqui ignorados, e o
+# resultado foi que a função inteira do bot NUNCA chegou ao GitHub — a API do
+# GitHub devolvia 404 para supabase/functions/whatsapp-webhook/index.ts.
+# Verificado: nenhum dos dois ficheiros tem segredos escritos; tudo vem de
+# Deno.env.get(...). Passam a ser versionados como as outras funções.
+# (Ficam aqui só os padrões de ficheiros de segredos, por segurança.)
+supabase/functions/**/*.env
+supabase/functions/**/.env
 kaze-agent/.kaze-token
 kaze-agent/logs/
 kaze-agent/.hermes-kaze/

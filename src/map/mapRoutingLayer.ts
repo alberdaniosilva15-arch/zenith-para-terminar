@@ -1,7 +1,7 @@
 // src/map/mapRoutingLayer.ts
 // Desenha rota animada no Mapbox GL JS v3 — compatível com dark-v11 + pitch 45°
 
-import mapboxgl from 'mapbox-gl';
+import type mapboxgl from 'mapbox-gl';
 import type { RouteResult } from '../services/mapboxRoutingService';
 
 const SOURCE_ID = 'zenith-route-source';

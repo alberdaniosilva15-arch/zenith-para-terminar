@@ -177,6 +177,11 @@ class RideService {
 
         const { data, error } = await supabase.rpc('find_drivers_h3', {
           p_h3_indexes: hexes,
+          // ⚠️ A origem é obrigatória: sem ela a função não consegue medir a
+          // distância até ao passageiro e o termo de proximidade do _score
+          // fica constante (era o caso antes — devolvia distance_m = 500 fixo).
+          p_origin_lat: pickupCoords.lat,
+          p_origin_lng: pickupCoords.lng,
           p_limit: 8,
         });
 

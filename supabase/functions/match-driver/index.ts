@@ -113,6 +113,17 @@ Deno.serve(async (req: Request) => {
 
     // ── H3: calcular hexágonos de vizinhança a partir da origem ────────────
     // k=2 (~19 hexs ≈ 600m), k=4 (~61 hexs ≈ 1.2km), k=7 (~127 hexs ≈ 2km)
+    //
+    // ⚠️ Chama `find_drivers_h3_with_cooldown`, NÃO `find_drivers_h3`.
+    // Há dois contratos diferentes e este ficheiro usa o rico: só a versão
+    // `_with_cooldown` devolve `acceptance_rate`, `cancel_rate` e
+    // `avg_response_time_s` (lidos abaixo) e uma distância REAL via
+    // ST_Distance. A `find_drivers_h3(text[], int)` devolve distance_m = 500
+    // fixo e não tem estas colunas.
+    // Os nomes têm de ser distintos: com dois overloads do mesmo nome o
+    // PostgREST devolvia HTTP 300 (PGRST203) e este bloco caía sempre no
+    // fallback PostGIS. Ver migration
+    // 20260915233000_fix_find_drivers_h3_overload_ambiguity.sql.
     const centerHex  = latLngToCell(ride.origin_lat, ride.origin_lng, H3_RES_DRIVER);
     let drivers: MatchedDriver[] = [];
 
@@ -120,12 +131,20 @@ Deno.serve(async (req: Request) => {
       const hexes = gridDisk(centerHex, k);
 
       const { data: h3Drivers, error: h3Err } = await supabaseAdmin.rpc(
-        'find_drivers_h3',
-        { p_h3_indexes: hexes, p_limit: 8 }
+        'find_drivers_h3_with_cooldown',
+        {
+          p_h3_indexes: hexes,
+          // A origem é obrigatória: é o que permite à função medir a distância
+          // REAL até ao ponto de recolha. Sem ela não há proximidade no score.
+          p_origin_lat: ride.origin_lat,
+          p_origin_lng: ride.origin_lng,
+          p_limit: 8,
+          p_cooldown_s: DRIVER_COOLDOWN_S,
+        }
       );
 
       if (h3Err) {
-        console.warn(`[match-driver] find_drivers_h3 error (k=${k}):`, h3Err.message);
+        console.warn(`[match-driver] find_drivers_h3_with_cooldown error (k=${k}):`, h3Err.message);
         continue;
       }
 

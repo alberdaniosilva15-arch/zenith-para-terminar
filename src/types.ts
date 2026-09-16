@@ -209,9 +209,10 @@ export interface AuthState {
 
 export interface LocationResult {
   name: string;
-  type: 'bairro' | 'restaurante' | 'rua' | 'monumento' | 'servico' | 'hospital' | 'escola' | 'hospedaria';
+  type: 'bairro' | 'restaurante' | 'rua' | 'monumento' | 'servico' | 'hospital' | 'escola' | 'hospedaria' | string;
   description: string; coords: LatLng;
   rating?: number; address?: string; isPopular?: boolean;
+  mapboxId?: string;
 }
 
 export interface NearbyDriver {

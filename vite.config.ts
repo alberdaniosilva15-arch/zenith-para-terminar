@@ -75,6 +75,10 @@ export default defineConfig({
             return 'app-shell';
           }
 
+          if (normalizedId.includes('/src/data/angolaLocations')) {
+            return 'locations-db';
+          }
+
           if (!normalizedId.includes('/node_modules/')) {
             return undefined;
           }

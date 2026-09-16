@@ -72,15 +72,30 @@ export interface KazeAgentResult {
   isConfirmationQuery?: boolean;
 }
 
-import { getResolvedKazeGroqKey } from '../lib/kazeKey';
+import { getResolvedKazeGroqKey, getResolvedKazeOpenRouterKey } from '../lib/kazeKey';
 
 export const FRONTEND_GROQ_KEY = getResolvedKazeGroqKey();
 
-const FRONTEND_GEMINI_KEY = (
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GEMINI_API_KEY) ||
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_IA_API_KEY) ||
-  ''
-).trim();
+/**
+ * Rota HTTP alternativa para modelos Gemini 3.x (via OpenRouter).
+ * Fica vazia se a chave não estiver configurada — nesse caso a rota é saltada
+ * silenciosamente e a cadeia segue para o elo seguinte.
+ */
+export const FRONTEND_OPENROUTER_KEY = getResolvedKazeOpenRouterKey();
+
+// Chave do Gemini no frontend: DELIBERADAMENTE VAZIA.
+//
+// A chave anterior foi marcada pela Google como "leaked" e revogada — porque
+// uma variável com prefixo GEMINI_/VITE_ é INLINADA no bundle pelo Vite
+// (ver envPrefix em vite.config.ts), ficando visível a qualquer visitante.
+//
+// O caminho Google directo vive agora no servidor: Edge Function `gemini-proxy`,
+// que lê o secret GEMINI_API_KEY. Com esta constante vazia, o bloco
+// `if (FRONTEND_GEMINI_KEY)` abaixo é saltado e a cadeia segue para a rota
+// OpenRouter/Gemini 3.x, que está a funcionar.
+//
+// ⚠️ NÃO repor uma chave aqui. Para Gemini no cliente, usa o Edge Function.
+const FRONTEND_GEMINI_KEY = '';
 
 // Centro de Luanda (Mutamba / Baixa)
 const LUANDA_CENTER: LatLng = { lat: -8.8390, lng: 13.2343 };
@@ -107,7 +122,7 @@ export function cleanDestinationQuery(raw: string): string {
   q = q.replace(/^(?:para mim|pra mim|pro mim)\s+/i, '');
 
   // 2. Remover o tipo de transporte
-  q = q.replace(/^(?:uma corrida|corrida|um táxi|táxi|um taxi|taxi|um carro|carro|uma viagem|viagem|um motogo|motogo|um mambo|o mambo)\s+/i, '');
+  q = q.replace(/^(?:uma corrida|corrida|um táxi|táxi|um taxi|taxi|um carro|carro|uma viagem|viagem|uma moto|moto|um mambo|o mambo)\s+/i, '');
 
   // 3. Remover preposições e artigos iniciais
   q = q.replace(/^(?:para|pra|pro|ao|à|a|no|na|nos|nas|em|ate|até)\s+/i, '');
@@ -154,7 +169,7 @@ export function cleanDestinationQuery(raw: string): string {
 }
 
 // ── Definição das Ferramentas para o Gemini ───────────────────────────────────
-const KAZE_APP_TOOLS = [
+export const KAZE_APP_TOOLS = [
   {
     function_declarations: [
       {
@@ -174,7 +189,7 @@ const KAZE_APP_TOOLS = [
             vehicle_type: {
               type: 'STRING',
               enum: ['standard', 'moto', 'comfort', 'xl'],
-              description: 'Tipo de viatura: standard (táxi normal), moto (MotoGo), comfort ou xl',
+              description: 'Tipo de viatura: standard (táxi normal), moto (Zenith Moto), comfort ou xl',
             },
           },
           required: ['destination'],
@@ -247,7 +262,7 @@ const KAZE_APP_TOOLS = [
   },
 ];
 
-const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente de inteligência artificial de elite e executivo da Zenith Ride em Luanda, Angola.
+export const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente de inteligência artificial de elite e executivo da Zenith Ride em Luanda, Angola.
 
 ═══ PERSONALIDADE E FORMA DE FALAR ═══
 - Fala de forma 100% natural, viva, calorosa e autêntica, como um companheiro luandense moderno, educado e experiente.
@@ -324,7 +339,18 @@ export class KazeAppAgent {
       console.warn('[KazeAppAgent] Groq tool call falhou:', err);
     }
 
-    // ── 3. Tentar via Gemini Function Calling (IA Nativa de reserva) ───────────
+    // ── 3. Gemini 3.x via OpenRouter (rota HTTP independente) ────────────────
+    //  Independente da chave directa do Google: se uma rota cair, esta segura.
+    if (FRONTEND_OPENROUTER_KEY) {
+      try {
+        const orResult = await this._callOpenRouterGeminiWithTools(trimmed, context);
+        if (orResult) return orResult;
+      } catch (err) {
+        console.warn('[KazeAppAgent] OpenRouter/Gemini 3.x falhou:', err);
+      }
+    }
+
+    // ── 4. Tentar via Gemini Function Calling (IA Nativa de reserva) ───────────
     if (FRONTEND_GEMINI_KEY) {
       try {
         const aiResult = await this._callGeminiWithTools(trimmed, context);
@@ -334,24 +360,57 @@ export class KazeAppAgent {
       }
     }
 
-    // ── 4. Fallback Local Inteligente (Regex & NLP local sem rede) ───────────
+    // ── 5. Fallback Local Inteligente (Regex & NLP local sem rede) ───────────
     return await this._processLocalIntent(trimmed, context);
   }
 
   /**
-   * Chamada primária de alta performance via Groq (Qwen 3.8 27B / Compound)
-   * Suporta extração de intenções, chamadas de acções e conversa rica em português de Luanda
+   * Resolve uma tool call vinda de uma sessão **Live (voz)** reutilizando
+   * exactamente a mesma lógica de `_resolveToolAction` que o Groq/Gemini usam.
+   *
+   * Puramente aditivo — não altera nenhum fluxo existente. Existe para que a
+   * voz bidirecional do Kaze possa despoletar acções reais (pedir corrida,
+   * agendar, abrir contrato) sem duplicar a camada de resolução de intenções
+   * nem manter duas fontes de verdade sobre o que cada ferramenta faz.
    */
-  private async _callGroqWithTools(
+  async resolveToolCall(
+    toolName: string,
+    args: Record<string, unknown>,
+    context: {
+      userId?: string;
+      userRole?: string;
+      userLocation?: LatLng | null;
+      userAddress?: string | null;
+      hasActiveRide?: boolean;
+    },
+    fallbackText = '',
+    rawUserMessage = '',
+  ): Promise<KazeAgentResult> {
+    return this._resolveToolAction(toolName, args, fallbackText, context, rawUserMessage);
+  }
+
+  /**
+   * Chamada a qualquer endpoint compatível com OpenAI (Groq, OpenRouter, …) em
+   * modo JSON, resolvendo acções pelo mesmo `_resolveToolAction`.
+   *
+   * Existe para que todas as rotas HTTP de texto do Kaze partilhem uma única
+   * implementação — o prompt, o parsing e o tratamento de erros não são
+   * duplicados. Comportamento idêntico ao anterior, apenas parametrizado.
+   */
+  private async _callOpenAiCompatibleWithTools(
+    endpoint: string,
+    apiKey: string,
+    models: string[],
     message: string,
     context: {
       userId?: string;
       userLocation?: LatLng | null;
       userAddress?: string | null;
       hasActiveRide?: boolean;
-    }
+    },
+    timeoutMs = 4500,
   ): Promise<KazeAgentResult | null> {
-    if (!FRONTEND_GROQ_KEY) return null;
+    if (!apiKey) return null;
 
     const userLocContext = context.userAddress
       ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${context.userAddress}"]`
@@ -378,19 +437,17 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
   }
 }`;
 
-    const models = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'];
-
     for (const model of models) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4500);
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        const res = await fetch(endpoint, {
           method: 'POST',
           signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${FRONTEND_GROQ_KEY}`,
+            Authorization: `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
             model,
@@ -406,7 +463,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
         clearTimeout(timeoutId);
 
         if (!res.ok) {
-          console.warn(`[KazeAppAgent] Groq ${model} status ${res.status}`);
+          console.warn(`[KazeAppAgent] ${model} status ${res.status}`);
           continue;
         }
 
@@ -441,11 +498,60 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
           }
         }
       } catch (err) {
-        console.warn(`[KazeAppAgent] Erro ao chamar Groq ${model}:`, err);
+        console.warn(`[KazeAppAgent] Erro ao chamar ${model}:`, err);
       }
     }
 
     return null;
+  }
+
+  /**
+   * Chamada primária de alta performance via Groq (Qwen 3.8 27B / Compound)
+   * Suporta extração de intenções, chamadas de acções e conversa rica em português de Luanda
+   */
+  private async _callGroqWithTools(
+    message: string,
+    context: {
+      userId?: string;
+      userLocation?: LatLng | null;
+      userAddress?: string | null;
+      hasActiveRide?: boolean;
+    }
+  ): Promise<KazeAgentResult | null> {
+    return this._callOpenAiCompatibleWithTools(
+      'https://api.groq.com/openai/v1/chat/completions',
+      FRONTEND_GROQ_KEY,
+      ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'],
+      message,
+      context,
+    );
+  }
+
+  /**
+   * Rota alternativa com **Gemini 3.x** servido por HTTP via OpenRouter.
+   *
+   * Porque existe: o Live API (voz) precisa da chave directa do Google, mas os
+   * modelos Gemini 3.x de *texto* também estão disponíveis via OpenRouter. Isto
+   * dá uma segunda rota independente — se uma chave cair, a outra mantém o Kaze
+   * a conversar. Timeout mais generoso porque o pedido atravessa mais hops.
+   */
+  private async _callOpenRouterGeminiWithTools(
+    message: string,
+    context: {
+      userId?: string;
+      userLocation?: LatLng | null;
+      userAddress?: string | null;
+      hasActiveRide?: boolean;
+    }
+  ): Promise<KazeAgentResult | null> {
+    return this._callOpenAiCompatibleWithTools(
+      'https://openrouter.ai/api/v1/chat/completions',
+      FRONTEND_OPENROUTER_KEY,
+      ['google/gemini-3.1-flash-lite', 'google/gemini-3.5-flash-lite', 'google/gemini-2.5-flash'],
+      message,
+      context,
+      7000,
+    );
   }
 
   /**
@@ -468,10 +574,11 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
 
     const systemInstruction = `${KAZE_AGENT_SYSTEM_PROMPT}${userLocContext}`;
 
-    // Modelos com alta disponibilidade, latência ultra-baixa e cotas ativas
+    // Gemini 3.1 primeiro — é o modelo que queremos para a demo.
+    // Os restantes ficam como degradação progressiva se a cota apertar.
     const modelsToTry = [
-      'gemini-flash-lite-latest',
       'gemini-3.1-flash-lite',
+      'gemini-flash-lite-latest',
       'gemini-3.5-flash-lite',
       'gemini-2.5-flash',
     ];
@@ -875,7 +982,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
     const text = message.toLowerCase();
 
     // 1. Pedir Corrida
-    if (/(?:pede|pedir|chama|chamar|quero|preciso de|levar|leva[- ]me|ir |vai |corrida|t[aá]xi|carro|motogo)\b/i.test(text) && !/agenda|amanh|saldo|contrato/i.test(text)) {
+    if (/(?:pede|pedir|chama|chamar|quero|preciso de|levar|leva[- ]me|ir |vai |corrida|t[aá]xi|carro|moto)\b/i.test(text) && !/agenda|amanh|saldo|contrato/i.test(text)) {
       let origin: string | undefined;
       let dest: string | undefined;
 
@@ -910,7 +1017,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
       }
 
       // Se ainda não temos destino válido, PERGUNTAR ao utilizador em vez de enviar lixo
-      if (!dest || dest.length < 2 || /^(corrida|táxi|taxi|carro|viagem|motogo)$/i.test(dest)) {
+      if (!dest || dest.length < 2 || /^(corrida|táxi|taxi|carro|viagem|moto)$/i.test(dest)) {
         return {
           text: 'Para onde gostarias de ir em Luanda, mano? Diz-me o destino! 🗺️',
           speakText: 'Para onde queres ir?',

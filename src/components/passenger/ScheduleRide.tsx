@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
-import { searchAngolaLocations } from '../../data/angolaLocations';
+import { searchAngolaLocationsLazy } from '../../services/angolaLocationsService';
+import { POPULAR_LOCATIONS } from '../../data/popularLocations';
 import type { LocationResult } from '../../types';
 
 interface ScheduleRideProps {
@@ -63,12 +64,21 @@ const ScheduleRide: React.FC<ScheduleRideProps> = ({
   const effectivePickupName = pickupName || 'Minha Localização (Luanda)';
   const effectivePickupCoords = initialPickupCoords || { lat: -8.8390, lng: 13.2343 };
 
-  // Sugestões de destino
-  const destSuggestions = useMemo(() => {
+  // Sugestões de destino (lazy loaded)
+  const [destSuggestions, setDestSuggestions] = useState<LocationResult[]>(() => POPULAR_LOCATIONS.slice(0, 5));
+
+  useEffect(() => {
     if (!destSearchQuery || destSearchQuery.trim().length < 2) {
-      return searchAngolaLocations('', 5);
+      setDestSuggestions(POPULAR_LOCATIONS.slice(0, 5));
+      return;
     }
-    return searchAngolaLocations(destSearchQuery, 8);
+    let isCurrent = true;
+    searchAngolaLocationsLazy(destSearchQuery, 8).then((matches) => {
+      if (isCurrent) setDestSuggestions(matches);
+    });
+    return () => {
+      isCurrent = false;
+    };
   }, [destSearchQuery]);
 
   const handleSelectDest = (loc: LocationResult) => {

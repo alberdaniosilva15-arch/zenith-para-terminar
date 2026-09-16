@@ -10,7 +10,7 @@ import { rideService } from '../services/rideService';
 import { useAuth } from '../contexts/AuthContext';
 import type { DbWallet, DbTransaction } from '../types';
 import { UserRole } from '../types';
-import ZenithPayPartners from './MotoGoPayPartners';
+import ZenithPayPartners from './ZenithPayPartners';
 import DriverRecharge from './driver/DriverRecharge';
 
 const ZENITHPAY_ENABLED = false;

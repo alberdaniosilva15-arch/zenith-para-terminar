@@ -12,6 +12,7 @@ import React, { Suspense } from 'react';
 import { RideState, RideStatus } from '../../types';
 import RideChat from '../RideChat';
 import { LiveShareButton } from './LiveShareButton';
+import ErrorBoundary from '../ErrorBoundary';
 
 const AgoraCall = React.lazy(() => import('../AgoraCall'));
 
@@ -64,15 +65,25 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
     <div className="space-y-4">
       {/* ── Listener contínuo de chamada em background ── */}
       {resolvedRideId && !isEnRoute && ride.status !== RideStatus.IN_PROGRESS && (
-        <Suspense fallback={null}>
-          <AgoraCall
-            corridaId={resolvedRideId}
-            userId={userId}
-            peerName={resolvedDriverName}
-            silentIdle={true}
-            onEndCall={() => {}}
-          />
-        </Suspense>
+        <ErrorBoundary
+          name="AgoraCall"
+          compact
+          fallback={
+            <p className="text-[10px] text-white/40 font-bold text-center px-2">
+              Chamada de voz indisponível neste momento.
+            </p>
+          }
+        >
+          <Suspense fallback={null}>
+            <AgoraCall
+              corridaId={resolvedRideId}
+              userId={userId}
+              peerName={resolvedDriverName}
+              silentIdle={true}
+              onEndCall={() => {}}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {/* ── SEARCHING ─────────────────────────────────────────────────────── */}
@@ -184,14 +195,24 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
 
           {/* Chamada Agora */}
           {resolvedRideId && (
-            <Suspense fallback={<div className="text-white/50 text-xs p-2 text-center">A iniciar chamada...</div>}>
-              <AgoraCall
-                corridaId={resolvedRideId}
-                userId={userId}
-                peerName={resolvedDriverName}
-                onEndCall={() => {}}
-              />
-            </Suspense>
+            <ErrorBoundary
+              name="AgoraCall"
+              compact
+              fallback={
+                <p className="text-[10px] text-white/40 font-bold text-center px-2">
+                  Chamada de voz indisponível. Podes continuar a acompanhar a corrida.
+                </p>
+              }
+            >
+              <Suspense fallback={<div className="text-white/50 text-xs p-2 text-center">A iniciar chamada...</div>}>
+                <AgoraCall
+                  corridaId={resolvedRideId}
+                  userId={userId}
+                  peerName={resolvedDriverName}
+                  onEndCall={() => {}}
+                />
+              </Suspense>
+            </ErrorBoundary>
           )}
 
           {/* Chat directo */}
@@ -264,14 +285,24 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
 
           {/* Chamada Agora */}
           {resolvedRideId && (
-            <Suspense fallback={<div className="text-white/50 text-xs p-2 text-center">A iniciar chamada...</div>}>
-              <AgoraCall
-                corridaId={resolvedRideId}
-                userId={userId}
-                peerName={resolvedDriverName}
-                onEndCall={() => {}}
-              />
-            </Suspense>
+            <ErrorBoundary
+              name="AgoraCall"
+              compact
+              fallback={
+                <p className="text-[10px] text-white/40 font-bold text-center px-2">
+                  Chamada de voz indisponível. Podes continuar a acompanhar a corrida.
+                </p>
+              }
+            >
+              <Suspense fallback={<div className="text-white/50 text-xs p-2 text-center">A iniciar chamada...</div>}>
+                <AgoraCall
+                  corridaId={resolvedRideId}
+                  userId={userId}
+                  peerName={resolvedDriverName}
+                  onEndCall={() => {}}
+                />
+              </Suspense>
+            </ErrorBoundary>
           )}
 
           {/* Chat directo */}

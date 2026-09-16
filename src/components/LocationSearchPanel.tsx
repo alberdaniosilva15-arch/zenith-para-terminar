@@ -5,11 +5,12 @@
 // Design superior ao Yango — tema dark Zenith Ride
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import mapboxgl from 'mapbox-gl';
+import type mapboxgl from 'mapbox-gl';
 import { getCurrentPosition, watchPosition } from '../services/gpsService';
 import { getRoute } from '../services/mapboxRoutingService';
 import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
-import { searchAngolaLocations } from '../data/angolaLocations';
+import { mapService } from '../services/mapService';
+import { prefetchAngolaLocations } from '../services/angolaLocationsService';
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -21,6 +22,7 @@ interface SearchResult {
   place_type: string[];
   center: [number, number]; // [lng, lat]
   distanceKm?: number;
+  mapboxId?: string;
 }
 
 interface Props {
@@ -80,6 +82,7 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const originMarker = useRef<mapboxgl.Marker | null>(null);
   const destMarker = useRef<mapboxgl.Marker | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -119,7 +122,8 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
             border-radius:50%;
             box-shadow:0 0 0 4px rgba(0,212,255,0.25), 0 0 16px rgba(0,212,255,0.6);
           `;
-          originMarker.current = new mapboxgl.Marker({ element: el })
+          const mbModule = await import('mapbox-gl');
+          originMarker.current = new mbModule.default.Marker({ element: el })
             .setLngLat([pos.lng, pos.lat])
             .addTo(mapRef.current);
 
@@ -148,9 +152,9 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
     return () => { stopWatch?.(); };
   }, []);
 
-  // ── Search autocomplete ─────────────────────────────────────────────────────
+  // ── Search autocomplete com Mapbox Search Box API + Base Local Lazy ─────────
   const searchPlaces = useCallback(
-    async (query: string) => {
+    async (query: string, signal?: AbortSignal) => {
       if (query.trim().length < 2) {
         setResults([]);
         return;
@@ -160,93 +164,33 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
       setError(null);
 
       try {
-        const proximity = userPos
-          ? `&proximity=${userPos.lng},${userPos.lat}`
-          : `&proximity=13.2343,-8.8390`;
+        const places = await mapService.searchPlaces(query, userPos ?? undefined, signal);
+        if (signal?.aborted) return;
 
-        const bbox = '11.5,-18.0,24.1,-4.5';
-
-        // 0. Base hiper-granular de Angola (Quarteirões Kilamba, Zonas Golf 2, Talatona, etc.)
-        const angolaMatches = searchAngolaLocations(query, 35);
-        const angolaParsed: SearchResult[] = angolaMatches.map(loc => ({
-          id: `angola-${loc.name}`,
-          place_name: `${loc.name} — ${loc.description}`,
-          text: loc.name,
-          place_type: [loc.type === 'rua' ? 'address' : loc.type === 'hospital' || loc.type === 'escola' || loc.type === 'servico' ? 'poi' : 'neighborhood'],
-          center: [loc.coords.lng, loc.coords.lat],
-          distanceKm: userPos
-            ? parseFloat(haversineKm(userPos.lat, userPos.lng, loc.coords.lat, loc.coords.lng).toFixed(1))
+        const mapped: SearchResult[] = places.map((r, idx) => ({
+          id: r.mapboxId ? `mb-${r.mapboxId}` : `loc-${r.name}-${idx}`,
+          place_name: r.description ? `${r.name} — ${r.description}` : r.name,
+          text: r.name,
+          place_type: [r.type],
+          center: [r.coords.lng, r.coords.lat],
+          mapboxId: r.mapboxId,
+          distanceKm: userPos && r.coords.lat !== 0 && r.coords.lng !== 0
+            ? parseFloat(haversineKm(userPos.lat, userPos.lng, r.coords.lat, r.coords.lng).toFixed(1))
             : undefined,
         }));
 
-        // 1. Mapbox API — Bairros, vias estruturantes e POIs em Angola
-        const mbUrl =
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/` +
-          `${encodeURIComponent(query)}.json` +
-          `?country=AO` +
-          `&language=pt` +
-          `&types=poi,address,neighborhood,locality,place` +
-          `&limit=8` +
-          proximity +
-          `&bbox=${bbox}` +
-          `&access_token=${MAPBOX_TOKEN}`;
-
-        // 2. Photon API (OpenStreetMap)
-        const phUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&bbox=${bbox}&limit=12`;
-
-        const [mbRes, phRes] = await Promise.allSettled([
-          fetch(mbUrl).then(r => r.json()),
-          fetch(phUrl).then(r => r.json()),
-        ]);
-
-        const mapboxFeatures = mbRes.status === 'fulfilled' ? (mbRes.value.features || []) : [];
-        const photonFeatures = phRes.status === 'fulfilled' ? (phRes.value.features || []) : [];
-
-        // Traduzir Mapbox
-        const mbParsed: SearchResult[] = mapboxFeatures.map((f: any) => ({
-          id: f.id,
-          place_name: f.place_name,
-          text: f.text,
-          place_type: f.place_type,
-          center: f.center,
-          distanceKm: userPos
-            ? parseFloat(haversineKm(userPos.lat, userPos.lng, f.center[1], f.center[0]).toFixed(1))
-            : undefined,
-        }));
-
-        // Traduzir Photon
-        const phParsed: SearchResult[] = photonFeatures.map((f: any) => {
-          const props = f.properties || {};
-          const label = props.name || props.street || props.city || 'Desconhecido';
-          const full = [label, props.street, props.city].filter(Boolean).join(', ');
-          return {
-            id: `photon-${props.osm_id || Math.random()}`,
-            place_name: full,
-            text: label,
-            place_type: ['poi'],
-            center: f.geometry.coordinates as [number, number],
-            distanceKm: userPos
-              ? parseFloat(haversineKm(userPos.lat, userPos.lng, f.geometry.coordinates[1], f.geometry.coordinates[0]).toFixed(1))
-              : undefined,
-          };
-        });
-
-        // Combinar: Quarteirões e sub-zonas locais vêm no topo!
-        const combinedMap = new Map<string, SearchResult>();
-        [...angolaParsed, ...phParsed, ...mbParsed].forEach(item => {
-          const key = item.text.toLowerCase().trim();
-          if (!combinedMap.has(key)) {
-            combinedMap.set(key, item);
-          }
-        });
-
-        const finalResults = Array.from(combinedMap.values());
-        setResults(finalResults.slice(0, 35));
-      } catch (err) {
-        console.warn('Geocoding error:', err);
+        setResults(mapped);
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          // Cancelamento deliberado: NÃO limpar os resultados válidos existentes nem devolver []
+          return;
+        }
+        console.warn('[LocationSearchPanel] Erro na busca:', err);
         setError('Erro na pesquisa — verifica a ligação');
       } finally {
-        setSearching(false);
+        if (!signal?.aborted) {
+          setSearching(false);
+        }
       }
     },
     [userPos]
@@ -256,8 +200,21 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
     setDestQuery(val);
     setSelectedDest(null);
     setRouteInfo(null);
-    if (searchTimeout.current) clearTimeout(searchTimeout.current);
-    searchTimeout.current = setTimeout(() => searchPlaces(val), 350);
+
+    // Cancelar requisição anterior em voo
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    if (searchTimeout.current) {
+      clearTimeout(searchTimeout.current);
+    }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    searchTimeout.current = setTimeout(() => {
+      searchPlaces(val, controller.signal);
+    }, 350);
   };
 
   // ── Selecciona destino e calcula rota ────────────────────────────────────────
@@ -267,6 +224,18 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
     setResults([]);
 
     if (!userPos || !mapRef.current) return;
+
+    // Se o resultado veio do Mapbox Search Box API, recuperar as coordenadas exatas via /retrieve
+    if (result.mapboxId && (!result.center || (result.center[0] === 0 && result.center[1] === 0))) {
+      try {
+        const coords = await mapService.retrievePlace(result.mapboxId);
+        if (coords) {
+          result.center = [coords.lng, coords.lat];
+        }
+      } catch (err) {
+        console.warn('[LocationSearchPanel] Falha no retrieve do local:', err);
+      }
+    }
 
     const dest = { lat: result.center[1], lng: result.center[0] };
 
@@ -280,7 +249,9 @@ export function LocationSearchPanel({ mapRef, onRideRequest }: Props) {
       border-radius:50%;
       box-shadow:0 0 0 4px rgba(255,90,31,0.25), 0 0 12px rgba(255,90,31,0.5);
     `;
-    destMarker.current = new mapboxgl.Marker({ element: el })
+
+    const mbModule = await import('mapbox-gl');
+    destMarker.current = new mbModule.default.Marker({ element: el })
       .setLngLat([dest.lng, dest.lat])
       .addTo(mapRef.current);
 

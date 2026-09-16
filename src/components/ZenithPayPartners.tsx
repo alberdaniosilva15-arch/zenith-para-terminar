@@ -1,5 +1,5 @@
 // =============================================================================
-// ZENITH RIDE v3.0 — src/components/MotoGoPayPartners.tsx (ZenithPayPartners)
+// ZENITH RIDE v3.3 — src/components/ZenithPayPartners.tsx
 //
 // Aba de parceiros da carteira Zenith Pay.
 // Motoristas podem gastar o saldo em combustível, comida, seguros.
@@ -9,7 +9,12 @@
 //   1. Adiciona um tab "Parceiros" ao lado de "Transacções"
 //   2. Quando tab activo, renderiza <ZenithPayPartners userId={userId} walletBalance={wallet?.balance ?? 0} />
 //
-//   import ZenithPayPartners from './MotoGoPayPartners';
+//   import ZenithPayPartners from './ZenithPayPartners';
+//
+// NOTA DE MIGRAÇÃO: a tabela canónica é agora `zenithpay_partners`. Enquanto a
+// instância do Supabase não aplicar a migration
+// `20260427180000_rename_motogopay_partners.sql`, mantém-se um fallback
+// silencioso para a tabela legada `motogopay_partners` — zero regressões.
 // =============================================================================
 
 import React, { useState, useEffect } from 'react';
@@ -17,32 +22,36 @@ import { supabase } from '../lib/supabase';
 import type { ZenithPayPartner, PartnerCategory } from '../types';
 
 interface ZenithPayPartnersProps {
-  userId:        string;
+  userId: string;
   walletBalance: number;
 }
 
 const CATEGORY_ICONS: Record<PartnerCategory, string> = {
-  fuel:        'local_gas_station',
-  food:        'restaurant',
-  insurance:   'shield',
-  mechanic:    'build',
+  fuel: 'local_gas_station',
+  food: 'restaurant',
+  insurance: 'shield',
+  mechanic: 'build',
   supermarket: 'shopping_cart',
 };
 
 const CATEGORY_LABELS: Record<PartnerCategory, string> = {
-  fuel:        'Combustível',
-  food:        'Restaurantes',
-  insurance:   'Seguros',
-  mechanic:    'Mecânica',
+  fuel: 'Combustível',
+  food: 'Restaurantes',
+  insurance: 'Seguros',
+  mechanic: 'Mecânica',
   supermarket: 'Supermercado',
 };
 
+/** Tabela canónica e tabela legada (fallback de leitura durante a migração). */
+const PARTNERS_TABLE = 'zenithpay_partners';
+const LEGACY_PARTNERS_TABLE = 'motogopay_partners';
+
 const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBalance }) => {
-  const [partners,  setPartners]  = useState<ZenithPayPartner[]>([]);
-  const [loading,   setLoading]   = useState(true);
+  const [partners, setPartners] = useState<ZenithPayPartner[]>([]);
+  const [loading, setLoading] = useState(true);
   const [activeCategory, setActiveCategory] = useState<PartnerCategory | 'all'>('all');
-  const [payingId,  setPayingId]  = useState<string | null>(null);
-  const [payMsg,    setPayMsg]    = useState<{ text: string; ok: boolean } | null>(null);
+  const [payingId, setPayingId] = useState<string | null>(null);
+  const [payMsg, setPayMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [selectedPartner, setSelectedPartner] = useState<ZenithPayPartner | null>(null);
 
@@ -51,12 +60,27 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
   }, []);
 
   const loadPartners = async () => {
-    const { data } = await supabase
-      .from('motogopay_partners')
+    // 1) Tabela canónica
+    const primary = await supabase
+      .from(PARTNERS_TABLE)
       .select('*')
       .eq('active', true)
       .order('category');
-    setPartners((data ?? []) as ZenithPayPartner[]);
+
+    if (!primary.error && primary.data && primary.data.length > 0) {
+      setPartners(primary.data as ZenithPayPartner[]);
+      setLoading(false);
+      return;
+    }
+
+    // 2) Fallback silencioso para a tabela legada (instância ainda não migrada)
+    const legacy = await supabase
+      .from(LEGACY_PARTNERS_TABLE)
+      .select('*')
+      .eq('active', true)
+      .order('category');
+
+    setPartners((legacy.data ?? []) as ZenithPayPartner[]);
     setLoading(false);
   };
 
@@ -132,7 +156,7 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
 
       {/* ── Saldo disponível ─────────────────────────────────────────────── */}
       <div className="bg-primary rounded-[2rem] p-5 flex items-center gap-4">
-        <div className="text-3xl"><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>credit_card</span></div>
+        <div className="text-3xl"><span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle' }}>credit_card</span></div>
         <div>
           <p className="text-[8px] font-black text-primary/70 uppercase tracking-widest">Saldo Zenith Pay</p>
           <p className="text-2xl font-black text-white tracking-tighter">
@@ -144,9 +168,8 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
 
       {/* Mensagem de resultado */}
       {payMsg && (
-        <div className={`rounded-[2rem] p-4 text-center text-sm font-bold ${
-          payMsg.ok ? 'bg-primary/10 text-primary border border-primary/30' : 'bg-error-container/20 text-error border border-error/30'
-        }`}>
+        <div className={`rounded-[2rem] p-4 text-center text-sm font-bold ${payMsg.ok ? 'bg-primary/10 text-primary border border-primary/30' : 'bg-error-container/20 text-error border border-error/30'
+          }`}>
           {payMsg.text}
         </div>
       )}
@@ -157,13 +180,12 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
           <button
             key={cat}
             onClick={() => setActiveCategory(cat)}
-            className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-widest shrink-0 transition-all ${
-              activeCategory === cat
+            className={`px-4 py-2 rounded-full text-[9px] font-black uppercase tracking-widest shrink-0 transition-all ${activeCategory === cat
                 ? 'bg-surface-container-highest text-white shadow-lg'
                 : 'bg-surface-container-low text-on-surface-variant/70 border border-outline-variant/20'
-            }`}
+              }`}
           >
-            {cat === 'all' ? 'Todos' : <><span className="material-symbols-outlined" style={{fontSize:'inherit',verticalAlign:'middle'}}>{CATEGORY_ICONS[cat]}</span> {CATEGORY_LABELS[cat]}</>}
+            {cat === 'all' ? 'Todos' : <><span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle' }}>{CATEGORY_ICONS[cat]}</span> {CATEGORY_LABELS[cat]}</>}
           </button>
         ))}
       </div>
@@ -178,9 +200,8 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
           {filtered.map(partner => (
             <div
               key={partner.id}
-              className={`bg-surface-container-low border rounded-[2rem] overflow-hidden transition-all ${
-                selectedPartner?.id === partner.id ? 'border-primary/50 shadow-md' : 'border-outline-variant/20'
-              }`}
+              className={`bg-surface-container-low border rounded-[2rem] overflow-hidden transition-all ${selectedPartner?.id === partner.id ? 'border-primary/50 shadow-md' : 'border-outline-variant/20'
+                }`}
             >
               {/* Card principal */}
               <button
@@ -190,7 +211,7 @@ const ZenithPayPartners: React.FC<ZenithPayPartnersProps> = ({ userId, walletBal
                 className="w-full flex items-center gap-4 p-5 text-left"
               >
                 <div className="w-14 h-14 bg-surface-container-lowest rounded-2xl flex items-center justify-center text-2xl shrink-0">
-                  <span className="material-symbols-outlined" style={{fontSize:'inherit'}}>{CATEGORY_ICONS[partner.category]}</span>
+                  <span className="material-symbols-outlined" style={{ fontSize: 'inherit' }}>{CATEGORY_ICONS[partner.category]}</span>
                 </div>
                 <div className="flex-1">
                   <p className="font-black text-on-surface text-sm">{partner.name}</p>

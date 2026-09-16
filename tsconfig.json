@@ -18,7 +18,8 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "google-auth-library": ["./src/stubs/google-auth-library.d.ts"]
     }
   },
   "include": ["src"],

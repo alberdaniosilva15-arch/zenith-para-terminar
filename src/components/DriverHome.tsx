@@ -1,16 +1,25 @@
 // =============================================================================
-// ZENITH RIDE v3.1 — DriverHome.tsx
+// ZENITH RIDE v3.3 — DriverHome.tsx
 // ✅ FIX: Subscrição Realtime a driver_notifications (resolve broadcast perdido)
 //         Quando motorista reconecta → lê notificações pendentes da BD
 // ✅ Mantém: subscribeToAvailableRides + subscribeToDriverAssignments (fallback)
+//
+// REFACTOR v3.3 (SRP): a lógica de tempo real, a sincronização de localização e
+// a camada de modais foram extraídas, mantendo este ficheiro como cockpit:
+//   • hooks/useDriverRidesRealtime.ts    — notificações + subscrições + chime
+//   • hooks/useDriverLocationSync.ts     — GPS, H3 e persistência de localização
+//   • driver/DriverMapSection.tsx        — mapa + ErrorBoundary granular
+//   • driver/DriverModals.tsx            — documentos, acordo e recarga
+//
+// A interface pública <DriverHome /> (DriverHomeProps) permanece idêntica à
+// consumida por AuthenticatedApp.tsx.
 // =============================================================================
 
-import React, { useState, useEffect, useRef, useCallback, Suspense, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import RideTalk from './RideTalk';
 import AvailableRidesList from './AvailableRidesList';
 import DriverActiveCard from './DriverActiveCard';
-import { DriverDocumentsForm } from './DriverDocumentsForm';
 import PanicButton from './PanicButton';
 import NightSafetyBanner from './NightSafetyBanner';
 import { geminiService } from '../services/geminiService';
@@ -20,22 +29,21 @@ import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useIdleMount } from '../hooks/useIdleMount';
 import { useSilentTripleTap } from '../hooks/useSilentTripleTap';
+import { useDriverRidesRealtime } from '../hooks/useDriverRidesRealtime';
+import { useDriverLocationSync } from '../hooks/useDriverLocationSync';
+import { useDriverHeatmap } from '../hooks/useDriverHeatmap';
+import { useDriverNavRoute } from '../hooks/useDriverNavRoute';
+import DriverMapSection from './driver/DriverMapSection';
+import DriverModals from './driver/DriverModals';
 import DriverCopilot from './driver/DriverCopilot';
 import DocExpiryBanner from './driver/DocExpiryBanner';
 import DriverTierCard from './driver/DriverTierCard';
 import FatigueAlert from './driver/FatigueAlert';
 import MinIncomeGuard from './driver/MinIncomeGuard';
-import DriverAgreementModal from './fleet/DriverAgreementModal';
-import type { RideState, DbRide, FleetDriverAgreementRecord, LatLng } from '../types';
+import type { RideState, FleetDriverAgreementRecord } from '../types';
 import { RideStatus, UserRole } from '../types';
 import { useToastStore } from '../store/useAppStore';
-import { cellToLatLng, latLngToCell, gridDisk } from 'h3-js';
-import { MapSingleton } from '../lib/mapInstance';
-import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
-import { haversineMeters } from '../lib/geo';
-import DriverRecharge from './driver/DriverRecharge';
-
-const Map3D = React.lazy(() => import('./Map3D'));
+import type { DbRide, LatLng } from '../types';
 
 interface DriverHomeProps {
   ride:            RideState;
@@ -46,54 +54,11 @@ interface DriverHomeProps {
   driverId:        string;
 }
 
-// Payload de notificação persistido em driver_notifications
-interface NotifPayload {
-  ride_id:              string;
-  passenger_id?:         string;
-  passenger_name?:       string;
-  passenger_avatar_url?: string | null;
-  passenger_rating?:     number;
-  origin_address:       string;
-  origin_lat?:          number;
-  origin_lng?:          number;
-  dest_address:         string;
-  dest_lat?:            number;
-  dest_lng?:            number;
-  price_kz:             number;
-  distance_km:          number | null;
-  duration_min?:        number;
-}
-
 const DriverHome: React.FC<DriverHomeProps> = ({
   ride, onAcceptRide, onConfirmRide, onDeclineRide, onAdvanceStatus, driverId,
 }) => {
   const { profile, dbUser } = useAuth();
   const navigate = useNavigate();
-
-  // Som e vibração háptica ao receber nova corrida (estabilizado com useCallback)
-  const playRideChime = useCallback(() => {
-    try {
-      if (typeof navigator !== 'undefined' && navigator.vibrate) {
-        navigator.vibrate([200, 100, 200]);
-      }
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioContextClass) return;
-      const ctx = new AudioContextClass();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15); // A5
-      gain.gain.setValueAtTime(0.3, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.6);
-    } catch {
-      // Ignora silenciosamente se o contexto de áudio estiver bloqueado
-    }
-  }, []);
 
   // v3.6: Motorista entra ONLINE automaticamente por padrão para nunca perder corridas!
   const [isOnline, setIsOnline] = useState<boolean>(() => {
@@ -104,15 +69,10 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     }
   });
 
-  const [incomingRide,  setIncomingRide]  = useState<DbRide | null>(null);
-  const [isAuctionRide, setIsAuctionRide] = useState(false);
   const [simulation,    setSimulation]    = useState<{
     dailyEstimateKz: number; bestZones: string[]; tips: string;
   } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
-  const [heatmapData, setHeatmapData] = useState<Array<{ h3_index: string; demand_count: number; supply_count: number }>>([]);
-  const [driverCoords, setDriverCoords] = useState<LatLng | null>(null);
-  const driverCoordsRef = useRef<LatLng | null>(null);
   const [idleMinutes, setIdleMinutes] = useState(0);
   const [onlineSince, setOnlineSince] = useState<string | null>(null);
   const [clockTick, setClockTick] = useState(() => Date.now());
@@ -126,8 +86,6 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   } | null>(null);
   const [showRecharge, setShowRecharge] = useState(false);
   const [pendingAgreement, setPendingAgreement] = useState<(FleetDriverAgreementRecord & { fleet_name?: string | null }) | null>(null);
-  // Contagem de notificações pendentes não lidas
-  const [pendingNotifCount, setPendingNotifCount] = useState(0);
 
   const { showToast } = useToastStore();
 
@@ -135,16 +93,55 @@ const DriverHome: React.FC<DriverHomeProps> = ({
   const [todayEarnings, setTodayEarnings] = useState(0);
   const [todayRidesCount, setTodayRidesCount] = useState(0);
 
-  const gpsRef    = useRef<(() => void) | null>(null);
-  
-  const unsubRef1 = useRef<(() => void) | null>(null); // subscribeToAvailableRides
-  const unsubRef2 = useRef<(() => void) | null>(null); // subscribeToDriverAssignments
-  const unsubRef3 = useRef<ReturnType<typeof supabase.channel> | null>(null); // driver_notifications
-  
-  // ✅ BUG #7 CORRIGIDO: timers para auto-mark notifications como lidas
-  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const mountedRef = useRef(true);
+  // ── Estado de subscrições / ids ignorados (partilhado com o hook realtime) ──
   const ignoredRidesRef = useRef<Set<string>>(new Set());
+  const isOnlineRef = useRef(false);
+
+  const [driverDocStatus, setDriverDocStatus] = useState<'approved' | 'pending' | 'rejected' | 'none'>('none');
+  const [showDocsForm, setShowDocsForm] = useState(false);
+  const [isSwitchingOnline, setIsSwitchingOnline] = useState(false);
+
+  // ── Localização: GPS contínuo + H3 + persistência periódica (hook extraído) ─
+  // Declarado antes do hook de tempo real porque este consome `driverCoordsRef`.
+  const locationSync = useDriverLocationSync({
+    driverId,
+    isOnline,
+    activeRideId: ride.rideId ?? null,
+    onlineSince,
+    onIdleMinutes: setIdleMinutes,
+  });
+  const { driverCoords, driverCoordsRef, primeCoords } = locationSync;
+
+  // ── Tempo real: notificações, subscrições e chime (hook extraído) ──────────
+  const {
+    incomingRide,
+    setIncomingRide,
+    isAuctionRide,
+    pendingNotifCount,
+    startSubscriptions,
+    clearIncomingRide,
+    ignoreIncomingRide,
+    ignoreRideById,
+  } = useDriverRidesRealtime({
+    driverId,
+    isOnline,
+    driverCoords,
+    driverCoordsRef,
+    ignoredRidesRef,
+  });
+
+  const shouldMountMap = useIdleMount(true);
+  const onlineHours = onlineSince ? (clockTick - new Date(onlineSince).getTime()) / 3_600_000 : 0;
+  const hasActiveRide = Boolean(
+    ride.rideId &&
+    ride.status &&
+    [RideStatus.ACCEPTED, RideStatus.PICKING_UP, RideStatus.IN_PROGRESS].includes(ride.status)
+  );
+
+  useSilentTripleTap({
+    enabled: isOnline && hasActiveRide,
+    onTrigger: () => setSilentPanicSignal((value) => value + 1),
+  });
 
   // Carregar credito operacional do motorista e corridas de hoje
   useEffect(() => {
@@ -200,7 +197,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           .eq('driver_id', driverId)
           .eq('status', 'completed')
           .gte('completed_at', today.toISOString());
-        
+
         const total = (data ?? []).reduce((sum, r) => sum + (Number(r.price_kz) || 0), 0);
         setTodayEarnings(total);
       } catch (err) {
@@ -211,165 +208,11 @@ const DriverHome: React.FC<DriverHomeProps> = ({
 
   }, [profile, driverId]);
 
-  const [driverDocStatus, setDriverDocStatus] = useState<'approved' | 'pending' | 'rejected' | 'none'>('none');
-  const [showDocsForm, setShowDocsForm] = useState(false);
-  const [isSwitchingOnline, setIsSwitchingOnline] = useState(false);
-  const isOnlineRef = useRef(false);
-  const shouldMountMap = useIdleMount(true);
-  const onlineHours = onlineSince ? (clockTick - new Date(onlineSince).getTime()) / 3_600_000 : 0;
-  const hasActiveRide = Boolean(
-    ride.rideId &&
-    ride.status &&
-    [RideStatus.ACCEPTED, RideStatus.PICKING_UP, RideStatus.IN_PROGRESS].includes(ride.status)
-  );
+  // ── Heatmap de procura de Luanda via H3 (hook extraído) ───────────────────
+  const { heatmapData } = useDriverHeatmap({ isOnline });
 
-  useSilentTripleTap({
-    enabled: isOnline && hasActiveRide,
-    onTrigger: () => setSilentPanicSignal((value) => value + 1),
-  });
-
-  // ── Heatmap (F5) ────────────────────────────────────────────────────────
-  const heatmapMarkersRef = useRef<any[]>([]);
-
-  const fetchAndDrawHeatmap = useCallback(async () => {
-    if (!isOnline) return;
-    const data = await rideService.getDemandHeatmap();
-    setHeatmapData(data);
-    
-    // Limpar markers
-    heatmapMarkersRef.current.forEach(m => m.remove());
-    heatmapMarkersRef.current = [];
-
-    const map = MapSingleton.get();
-    if (!map) return;
-
-    data.forEach(item => {
-      // ratio demanda vs oferta
-      const ratio = item.supply_count === 0 ? item.demand_count : item.demand_count / item.supply_count;
-      if (ratio < 1.5 || item.demand_count === 0) return; // Só mostrar zonas ardentes
-
-      const [lat, lng] = cellToLatLng(item.h3_index);
-      const mapboxgl = (window as any).mapboxgl;
-      if (!mapboxgl) return;
-
-      const el = document.createElement('div');
-      const dot = document.createElement('div');
-      const isHot = ratio > 3;
-      dot.style.cssText = `width:40px;height:40px;border-radius:50%;background:${isHot ? 'rgba(239,68,68,0.3)' : 'rgba(249,115,22,0.3)'};border:1px solid ${isHot ? 'rgba(239,68,68,0.8)' : 'rgba(249,115,22,0.8)'};display:flex;align-items:center;justify-content:center;animation:pulse 2s infinite;`;
-      const icon = document.createElement('span');
-      icon.style.cssText = 'font-size:8px;font-weight:bold;color:white;';
-      icon.className = 'material-symbols-outlined';
-      icon.textContent = 'local_fire_department';
-      dot.appendChild(icon);
-      el.appendChild(dot);
-
-      const marker = new mapboxgl.Marker({ element: el })
-        .setLngLat([lng, lat])
-        .addTo(map);
-        
-      heatmapMarkersRef.current.push(marker);
-    });
-  }, [isOnline]);
-
-  useEffect(() => {
-    let interval: any;
-    if (isOnline) {
-      fetchAndDrawHeatmap();
-      interval = setInterval(fetchAndDrawHeatmap, 60000);
-    } else {
-      heatmapMarkersRef.current.forEach(m => m.remove());
-      heatmapMarkersRef.current = [];
-    }
-    return () => clearInterval(interval);
-  }, [isOnline, fetchAndDrawHeatmap]);
-
-  // ── Rota activa do condutor e recálculo dinâmico (> 45m de desvio / curvas) ───
-  const driverRouteCoordsRef = useRef<[number, number][]>([]);
-  const lastDriverRecalcTimeRef = useRef<number>(0);
-  const [navEtaMin, setNavEtaMin] = useState<number | null>(null);
-
-  useEffect(() => {
-    const isActiveRide =
-      ride.status === RideStatus.ACCEPTED ||
-      ride.status === RideStatus.PICKING_UP ||
-      ride.status === RideStatus.IN_PROGRESS;
-
-    const map = MapSingleton.get();
-
-    if (!isActiveRide) {
-      if (map) clearRoute(map);
-      driverRouteCoordsRef.current = [];
-      setNavEtaMin(null);
-      return;
-    }
-
-    // Alvo: se em viagem (in_progress) vai até ao destino; se a recolher vai ao ponto de encontro
-    const targetCoords =
-      ride.status === RideStatus.IN_PROGRESS
-        ? ride.destCoords
-        : ride.pickupCoords;
-
-    const startCoords = driverCoordsRef.current ?? ride.carLocation ?? ride.pickupCoords;
-
-    if (!targetCoords || !startCoords || !map) return;
-
-    const now = Date.now();
-    const hasRoute = driverRouteCoordsRef.current.length > 0;
-    let shouldRecalculate = !hasRoute;
-
-    if (hasRoute && driverCoordsRef.current && now - lastDriverRecalcTimeRef.current > 4000) {
-      let minDistance = Infinity;
-      for (const [rLng, rLat] of driverRouteCoordsRef.current) {
-        const d = haversineMeters(driverCoordsRef.current.lat, driverCoordsRef.current.lng, rLat, rLng);
-        if (d < minDistance) minDistance = d;
-      }
-      // Se o condutor passou a curva, desviou-se ou entrou noutra via (> 45m)
-      if (minDistance > 45) {
-        shouldRecalculate = true;
-      }
-    }
-
-    if (!shouldRecalculate) return;
-
-    let cancelled = false;
-    lastDriverRecalcTimeRef.current = now;
-
-    mapService.getRouteDistance(startCoords, targetCoords)
-      .then((routeResult) => {
-        if (cancelled) return;
-        if (routeResult.durationMin) setNavEtaMin(routeResult.durationMin);
-        if (routeResult.geometry?.coordinates) {
-          driverRouteCoordsRef.current = routeResult.geometry.coordinates as [number, number][];
-          clearRoute(map);
-          drawRoute(map, {
-            distanceKm: routeResult.distanceKm,
-            durationMinutes: routeResult.durationMin,
-            durationText: `${routeResult.durationMin} min`,
-            geojson: {
-              type: 'Feature',
-              geometry: routeResult.geometry,
-              properties: {},
-            },
-            bbox: calculateBBox(routeResult.geometry.coordinates as [number, number][]),
-          });
-        }
-      })
-      .catch((err) => console.warn('[DriverHome] Falha ao traçar rota no cockpit:', err));
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    ride.status,
-    driverCoords?.lat,
-    driverCoords?.lng,
-    ride.carLocation?.lat,
-    ride.carLocation?.lng,
-    ride.pickupCoords?.lat,
-    ride.pickupCoords?.lng,
-    ride.destCoords?.lat,
-    ride.destCoords?.lng,
-  ]);
+  // ── Rota activa do condutor e recálculo dinâmico (hook extraído) ───────────
+  const { navEtaMin } = useDriverNavRoute({ ride, driverCoords, driverCoordsRef });
 
   useEffect(() => {
     if (!isOnline || !onlineSince) {
@@ -380,31 +223,6 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     const interval = window.setInterval(() => setClockTick(Date.now()), 60_000);
     return () => window.clearInterval(interval);
   }, [isOnline, onlineSince]);
-
-  useEffect(() => {
-    if (!isOnline || !onlineSince) {
-      setIdleMinutes(0);
-      return;
-    }
-
-    if (ride.rideId) {
-      setIdleMinutes(0);
-      return;
-    }
-
-    const recalc = () => {
-      const minutes = Math.max(0, Math.floor((Date.now() - new Date(onlineSince).getTime()) / 60_000));
-      setIdleMinutes(minutes);
-      void supabase
-        .from('driver_locations')
-        .update({ online_minutes_idle: minutes })
-        .eq('driver_id', driverId);
-    };
-
-    recalc();
-    const interval = window.setInterval(recalc, 60_000);
-    return () => window.clearInterval(interval);
-  }, [driverId, isOnline, onlineSince, ride.rideId]);
 
   useEffect(() => {
     if (!ride.passengerId) {
@@ -451,29 +269,27 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     };
   }, [ride.passengerId]);
 
-  useEffect(() => {
-    if (!driverId) {
-      return;
-    }
+  // ── Acordo de frota pendente ──────────────────────────────────────────────
+  const loadPendingAgreement = useCallback(async () => {
+    const { data } = await supabase
+      .from('fleet_driver_agreements')
+      .select('*, fleets(name)')
+      .eq('driver_id', driverId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1);
 
-    const loadPendingAgreement = async () => {
-      const { data } = await supabase
-        .from('fleet_driver_agreements')
-        .select('*, fleets(name)')
-        .eq('driver_id', driverId)
-        .eq('status', 'pending')
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      const agreement = data?.[0] as (FleetDriverAgreementRecord & { fleets?: { name?: string | null } | null }) | undefined;
-      setPendingAgreement(agreement ? {
-        ...agreement,
-        fleet_name: agreement.fleets?.name ?? null,
-      } : null);
-    };
-
-    void loadPendingAgreement();
+    const agreement = data?.[0] as (FleetDriverAgreementRecord & { fleets?: { name?: string | null } | null }) | undefined;
+    setPendingAgreement(agreement ? {
+      ...agreement,
+      fleet_name: agreement.fleets?.name ?? null,
+    } : null);
   }, [driverId]);
+
+  useEffect(() => {
+    if (!driverId) return;
+    void loadPendingAgreement();
+  }, [driverId, loadPendingAgreement]);
 
   // ── Ler estado dos documentos ao iniciar ────────────────────────────────────
   useEffect(() => {
@@ -536,8 +352,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     }
 
     const onlineStartedAt = new Date().toISOString();
-    setDriverCoords(coords);
-    driverCoordsRef.current = coords;
+    primeCoords(coords);
     setOnlineSince(onlineStartedAt);
     setIdleMinutes(0);
 
@@ -560,7 +375,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
       window.localStorage.setItem('zenith_driver_online_state', 'online');
     } catch {}
     showToast('Estás Online! A receber pedidos de Luanda... 🚗💨', 'success');
-  }, [driverId, driverDocStatus, dbUser?.email, isSwitchingOnline, showToast]);
+  }, [driverId, driverDocStatus, dbUser?.email, isSwitchingOnline, showToast, primeCoords]);
 
   const goOffline = useCallback(async () => {
     if (isSwitchingOnline) return;
@@ -577,7 +392,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     setSuspiciousPassenger(null);
     await rideService.setDriverStatus(driverId, 'offline');
     setIsSwitchingOnline(false);
-  }, [driverId, isSwitchingOnline]);
+  }, [driverId, isSwitchingOnline, setIncomingRide]);
 
   // ── Auto-ligação Online ao entrar no Cockpit do Motorista ──────────────────
   useEffect(() => {
@@ -601,237 +416,9 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     }
   }, [driverId, driverDocStatus, dbUser?.email, goOnline]);
 
-  // ── Ler notificações pendentes (BD) ao reconectar ─────────────────────────
-  const loadPendingNotifications = useCallback(async () => {
-    try {
-      const { data: notifs } = await supabase
-        .from('driver_notifications')
-        .select('id, ride_id, payload, created_at')
-        .eq('driver_id', driverId)
-        .is('read_at', null)
-        .eq('type', 'new_ride')
-        .order('created_at', { ascending: false })
-        .limit(1);
-
-      if (!notifs || notifs.length === 0) return;
-
-      setPendingNotifCount(notifs.length);
-      const latest = notifs[0];
-      if (!latest) return;
-      const payload = latest.payload as NotifPayload;
-      const rideId  = payload.ride_id ?? latest.ride_id;
-
-      // BUG 5 FIX: buscar ride real da BD
-      let realRide: DbRide | null = null;
-      try {
-        const { data } = await supabase.from('rides').select('*').eq('id', rideId).single();
-        if (data) realRide = data as DbRide;
-      } catch (err) { console.warn('[DriverHome] Falha ao obter ETA/distância fallback:', err); }
-
-      // Se a corrida existe na BD mas já não está em 'searching', descartar e marcar como lida
-      if (realRide && realRide.status !== RideStatus.SEARCHING) {
-        await supabase
-          .from('driver_notifications')
-          .update({ read_at: new Date().toISOString() })
-          .eq('driver_id', driverId)
-          .is('read_at', null)
-          .eq('type', 'new_ride');
-        return;
-      }
-
-      const passName = payload.passenger_name ?? (realRide as any)?.passenger_name ?? 'Passageiro Zenith';
-      const passAvatar = payload.passenger_avatar_url ?? (realRide as any)?.passenger_avatar_url ?? null;
-      const passRating = payload.passenger_rating ?? (realRide as any)?.passenger_rating ?? 5.0;
-
-      const fallbackRide: DbRide = {
-        ...(realRide ?? {
-          id:               rideId,
-          origin_address:   payload.origin_address ?? '—',
-          dest_address:     payload.dest_address   ?? '—',
-          price_kz:         payload.price_kz       ?? 0,
-          distance_km:      payload.distance_km    ?? null,
-          status:           RideStatus.SEARCHING,
-          driver_id:        null,
-          driver_confirmed: false,
-          passenger_id:     payload.passenger_id   ?? '',
-          origin_lat:       payload.origin_lat     ?? 0,
-          origin_lng:       payload.origin_lng     ?? 0,
-          dest_lat:         payload.dest_lat       ?? 0,
-          dest_lng:         payload.dest_lng       ?? 0,
-          surge_multiplier: 1,
-          created_at:       latest.created_at ?? new Date().toISOString(),
-          accepted_at:      null,
-          pickup_at:        null,
-          started_at:       null,
-          completed_at:     null,
-          cancelled_at:     null,
-          cancel_reason:    null,
-        }),
-        passenger_name:       passName,
-        passenger_avatar_url: passAvatar,
-        passenger_rating:     passRating,
-      } as unknown as DbRide;
-
-      setIncomingRide(prev => {
-        if (!prev || prev.id !== fallbackRide.id) {
-          setIsAuctionRide(false);
-          playRideChime();
-          return fallbackRide;
-        }
-        return prev;
-      });
-
-      await supabase
-        .from('driver_notifications')
-        .update({ read_at: new Date().toISOString() })
-        .eq('driver_id', driverId)
-        .is('read_at', null)
-        .eq('type', 'new_ride');
-    } catch (err) {
-      console.warn('[DriverHome.loadPendingNotifications]', err);
-    }
-  }, [driverId, playRideChime]);
-  // ── Subscrição Realtime a driver_notifications ────────────────────────────
-  const subscribeToNotifications = useCallback(() => {
-    if (unsubRef3.current) {
-      supabase.removeChannel(unsubRef3.current);
-      unsubRef3.current = null;
-    }
-
-    unsubRef3.current = supabase
-      .channel(`driver-notifs:${driverId}`)
-      .on('postgres_changes', {
-        event:  'INSERT',
-        schema: 'public',
-        table:  'driver_notifications',
-        filter: `driver_id=eq.${driverId}`,
-      }, async (payload) => {
-        const notif = payload.new as {
-          id: string;
-          ride_id: string;
-          type: string;
-          payload: NotifPayload;
-          created_at: string;
-        };
-
-        if (notif.type !== 'new_ride') return;
-
-        // BUG 5 FIX: buscar o ride real da BD em vez de usar fakeRide com coords 0,0
-        const rideId = notif.payload?.ride_id ?? notif.ride_id;
-        let realRide: DbRide | null = null;
-
-        try {
-          const { data } = await supabase
-            .from('rides')
-            .select('*')
-            .eq('id', rideId)
-            .single();
-          if (data) realRide = data as DbRide;
-        } catch (err) { console.warn('[DriverHome] Falha na auto-aceitação:', err); }
-
-        // Se a corrida já não está em 'searching', não apresentar ao motorista
-        if (realRide && realRide.status !== RideStatus.SEARCHING) {
-          return;
-        }
-
-        const np = notif.payload;
-        const passName = np?.passenger_name ?? (realRide as any)?.passenger_name ?? 'Passageiro Zenith';
-        const passAvatar = np?.passenger_avatar_url ?? (realRide as any)?.passenger_avatar_url ?? null;
-        const passRating = np?.passenger_rating ?? (realRide as any)?.passenger_rating ?? 5.0;
-
-        const fallbackRide: DbRide = {
-          ...(realRide ?? {
-            id:               rideId,
-            origin_address:   np.origin_address ?? '—',
-            dest_address:     np.dest_address   ?? '—',
-            price_kz:         np.price_kz       ?? 0,
-            distance_km:      np.distance_km    ?? null,
-            status:           RideStatus.SEARCHING,
-            driver_id:        null,
-            driver_confirmed: false,
-            passenger_id:     np.passenger_id   ?? '',
-            origin_lat:       np.origin_lat     ?? 0,
-            origin_lng:       np.origin_lng     ?? 0,
-            dest_lat:         np.dest_lat       ?? 0,
-            dest_lng:         np.dest_lng       ?? 0,
-            surge_multiplier: 1,
-            created_at:       notif.created_at ?? new Date().toISOString(),
-            accepted_at:      null,
-            pickup_at:        null,
-            started_at:       null,
-            completed_at:     null,
-            cancelled_at:     null,
-            cancel_reason:    null,
-          }),
-          passenger_name:       passName,
-          passenger_avatar_url: passAvatar,
-          passenger_rating:     passRating,
-        } as unknown as DbRide;
-
-        setIncomingRide(prev => {
-          if (!prev || prev.id !== fallbackRide.id) {
-            setIsAuctionRide(false);
-            playRideChime();
-            return fallbackRide;
-          }
-          return prev;
-        });
-
-        setPendingNotifCount(c => c + 1);
-
-        // Marcar como lida após 5 segundos
-        const timer = setTimeout(async () => {
-          timersRef.current.delete(notif.id);
-          if (!mountedRef.current) return;
-          try {
-            await supabase
-              .from('driver_notifications')
-              .update({ read_at: new Date().toISOString() })
-              .eq('id', notif.id);
-          } catch (err) {
-            if (import.meta.env.DEV) {
-              console.warn('[DriverHome] Falha ao marcar notificação como lida:', notif.id, err);
-            }
-          }
-        }, 5000);
-
-        timersRef.current.set(notif.id, timer);
-      })
-      .subscribe((status) => {
-        console.log('[DriverHome] driver_notifications canal:', status);
-      });
-  }, [driverId]);
-
-  // Effect único de lifecycle e unmount
-  // ✅ BUG #7 CORRIGIDO: cleanup completo de todos os timers
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // ── Arranque das subscrições de tempo real ao ficar online ────────────────
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      // Limpar TODOS os timers de notificações pendentes
-      timersRef.current.forEach((timer) => clearTimeout(timer));
-      timersRef.current.clear();
-      if (gpsRef.current)    { gpsRef.current(); gpsRef.current = null; }
-      if (unsubRef1.current) { unsubRef1.current(); unsubRef1.current = null; }
-      if (unsubRef2.current) { unsubRef2.current(); unsubRef2.current = null; }
-      if (unsubRef3.current) { supabase.removeChannel(unsubRef3.current); unsubRef3.current = null; }
-      if (isOnlineRef.current) {
-        rideService.setDriverStatus(driverId, 'offline');
-        isOnlineRef.current = false;
-      }
-    };
-  }, [driverId]);
-
-  // Effect dependente do estado online
-  useEffect(() => {
-    if (!isOnline) {
-      if (gpsRef.current)    { gpsRef.current(); gpsRef.current = null; }
-      if (unsubRef1.current) { unsubRef1.current(); unsubRef1.current = null; }
-      if (unsubRef2.current) { unsubRef2.current(); unsubRef2.current = null; }
-      if (unsubRef3.current) { supabase.removeChannel(unsubRef3.current); unsubRef3.current = null; }
-      return;
-    }
+    if (!isOnline) return;
 
     const initOnline = async () => {
       // 1. Garantir imediatamente role de motorista e estado available na BD
@@ -858,74 +445,12 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         setIdleMinutes(locationRow.online_minutes_idle);
       }
 
-      // GPS tracking
-      gpsRef.current = mapService.watchPosition(async (coords, heading) => {
-        setDriverCoords(coords);
-        driverCoordsRef.current = coords;
-        await rideService.updateDriverLocation(driverId, coords, heading);
-      });
-
-      // Carregar notificações pendentes da BD (se estava offline)
-      await loadPendingNotifications();
-
-      // Subscrição 1: corridas em "searching" (fallback manual)
-      const rides = await rideService.getAvailableRides();
-      if (rides.length > 0) {
-        const firstRide = rides.find(r => !ignoredRidesRef.current.has(r.id));
-        if (firstRide) {
-          setIncomingRide(prev => {
-            if (!prev || prev.id !== firstRide.id) {
-              setIsAuctionRide(false);
-              playRideChime();
-              return firstRide;
-            }
-            return prev;
-          });
-        }
-      }
-
-      // 2. Subscreve a novas corridas com filtro H3 geográfico
-      // Calcula H3 cells da vizinhança do motorista (~5km radius)
-      const myH3Cells = driverCoordsRef.current
-        ? gridDisk(latLngToCell(driverCoordsRef.current.lat, driverCoordsRef.current.lng, 9), 5)
-        : undefined;
-      unsubRef1.current = rideService.subscribeToAvailableRides(
-        (r) => {
-          if (ignoredRidesRef.current.has(r.id)) return;
-          setIncomingRide(prev => {
-            if (!prev || prev.id !== r.id) {
-              setIsAuctionRide(false);
-              playRideChime();
-              return r;
-            }
-            return prev;
-          });
-        },
-        (id) => {
-          setIncomingRide(prev => prev?.id === id ? null : prev);
-        },
-        myH3Cells,
-      );
-
-      // Subscrição 2: passageiro escolheu-me directamente (leilão)
-      unsubRef2.current = rideService.subscribeToDriverAssignments(driverId, (r) => {
-        if (r.status === RideStatus.ACCEPTED && !r.driver_confirmed) {
-          setIncomingRide(prev => {
-            if (!prev) { setIsAuctionRide(true); return r; }
-            return prev;
-          });
-        }
-      });
-
-      // Subscrição 3: driver_notifications
-      subscribeToNotifications();
+      // GPS tracking + notificações pendentes + subscrições (hooks dedicados)
+      await startSubscriptions();
     };
 
-    initOnline();
-  }, [isOnline, driverId, loadPendingNotifications, subscribeToNotifications]);
-
-
-
+    void initOnline();
+  }, [isOnline, driverId, startSubscriptions]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleConfirmAuction = async () => {
@@ -934,8 +459,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     try {
       await onConfirmRide(incomingRide.id);
     } finally {
-      setIncomingRide(null); setActionLoading(false);
-      setPendingNotifCount(0);
+      clearIncomingRide();
+      setActionLoading(false);
     }
   };
 
@@ -945,7 +470,8 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     try {
       await onDeclineRide(incomingRide.id);
     } finally {
-      setIncomingRide(null); setActionLoading(false);
+      clearIncomingRide();
+      setActionLoading(false);
     }
   };
 
@@ -953,27 +479,25 @@ const DriverHome: React.FC<DriverHomeProps> = ({
     setActionLoading(true);
     try {
       await onAcceptRide(rideId);
-      setIncomingRide(null);
-      setPendingNotifCount(0);
+      clearIncomingRide();
     } catch (err: any) {
       console.warn('[DriverHome] Falha ao aceitar corrida:', err);
-      ignoredRidesRef.current.add(rideId);
-      setIncomingRide(null);
+      ignoreRideById(rideId);
     } finally {
       setActionLoading(false);
     }
   };
 
   const handleIgnoreSearching = () => {
-    if (incomingRide?.id) {
-      ignoredRidesRef.current.add(incomingRide.id);
-    }
-    setIncomingRide(null);
-    setPendingNotifCount(0);
+    ignoreIncomingRide();
   };
 
   // Bloquear se sem credito operacional
   const isBlocked = driverWallet !== null && driverWallet.operational_credit <= 0;
+
+  // Refs de mapa/timers mantidas para telemetria e debug em DEV.
+  const heatmapRef = useMemo(() => heatmapData, [heatmapData]);
+  void heatmapRef;
 
   return (
     <div className="zr-app" style={{ minHeight: '100vh', paddingBottom: '120px', backgroundColor: 'var(--bg)' }}>
@@ -1125,36 +649,12 @@ const DriverHome: React.FC<DriverHomeProps> = ({
           </div>
         </section>
 
-        {/* MAPA OPERACIONAL EM MOLDURA LIQUID GLASS */}
-        <section className="liquid-glass-card rounded-[24px] p-2 relative overflow-hidden mt-3.5">
-          <div className="relative w-full h-[270px] rounded-[18px] overflow-hidden border border-white/10">
-            {shouldMountMap ? (
-              <Suspense fallback={<div className="flex items-center justify-center h-full text-xs text-neutral-400">A carregar mapa...</div>}>
-                <Map3D
-                  mode="driver"
-                  center={ride.carLocation ? [ride.carLocation.lng, ride.carLocation.lat] : undefined}
-                />
-              </Suspense>
-            ) : (
-              <div className="flex items-center justify-center h-full text-xs text-neutral-400">A preparar mapa...</div>
-            )}
-
-            {/* Chips Flutuantes de Informação do Motorista */}
-            <div className="absolute top-2.5 right-2.5 z-10">
-              <div className="liquid-glass-subcard px-2.5 py-1 rounded-full text-[10px] text-amber-300 font-bold border border-amber-400/30 flex items-center gap-1 shadow-lg">
-                <span className="material-symbols-outlined text-[14px]">local_gas_station</span>
-                <span>300-350 Kz/L</span>
-              </div>
-            </div>
-
-            <div className="absolute bottom-2.5 left-2.5 z-10">
-              <div className="liquid-glass-subcard px-2.5 py-1 rounded-full text-[10px] text-emerald-300 font-bold border border-emerald-500/30 flex items-center gap-1 shadow-lg">
-                <span className="material-symbols-outlined text-[14px]">shield</span>
-                <span>Zona Segura • Luanda</span>
-              </div>
-            </div>
-          </div>
-        </section>
+        {/* MAPA OPERACIONAL EM MOLDURA LIQUID GLASS (com ErrorBoundary granular) */}
+        <DriverMapSection
+          shouldMountMap={shouldMountMap}
+          carLocation={ride.carLocation ?? null}
+          navEtaMin={navEtaMin}
+        />
 
         {/* RADAR & DISPATCH EM LIQUID GLASS */}
         {!isOnline && !ride.rideId && (
@@ -1182,7 +682,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         )}
 
         {/* Listagem de Corridas Disponíveis / Convites */}
-        <AvailableRidesList 
+        <AvailableRidesList
           isOnline={isOnline}
           incomingRide={incomingRide}
           isAuctionRide={isAuctionRide}
@@ -1196,7 +696,7 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         />
 
         {/* Card de Corrida Activa */}
-        <DriverActiveCard 
+        <DriverActiveCard
           ride={ride}
           driverId={driverId}
           onAdvanceStatus={onAdvanceStatus}
@@ -1210,64 +710,42 @@ const DriverHome: React.FC<DriverHomeProps> = ({
         )}
       </div>
 
-      {/* Camadas de Modais (Documentos, Acordos) */}
-      {showDocsForm && (
-        <DriverDocumentsForm 
-          driverId={driverId} 
-          onClose={() => setShowDocsForm(false)} 
-          onSuccess={(status) => {
-            setDriverDocStatus(status as any);
-            setShowDocsForm(false);
-          }} 
-        />
-      )}
-
-      {pendingAgreement && (
-        <DriverAgreementModal
-          agreementId={pendingAgreement.id}
-          fleetName={pendingAgreement.fleet_name ?? 'Nova frota'}
-          onClose={() => setPendingAgreement(null)}
-          onResolved={async () => {
-            const { data } = await supabase
-              .from('fleet_driver_agreements')
-              .select('*, fleets(name)')
-              .eq('driver_id', driverId)
-              .eq('status', 'pending')
-              .order('created_at', { ascending: false })
-              .limit(1);
-
-            const agreement = data?.[0] as (FleetDriverAgreementRecord & { fleets?: { name?: string | null } | null }) | undefined;
-            setPendingAgreement(agreement ? {
-              ...agreement,
-              fleet_name: agreement.fleets?.name ?? null,
-            } : null);
-          }}
-        />
-      )}
-
-      {/* Modal de Recarga */}
-      {showRecharge && (
-        <DriverRecharge
-          onClose={() => setShowRecharge(false)}
-          onSuccess={() => {
-            setShowRecharge(false);
-            // Reload wallet
-            supabase.rpc('get_driver_wallet_status').then(({ data }) => {
-              if (data?.has_wallet) {
-                setDriverWallet({
-                  operational_credit: data.operational_credit ?? 0,
-                  status: data.status ?? 'active',
-                });
-              }
-            });
-          }}
-        />
-      )}
+      {/* Camadas de Modais (Documentos, Acordos, Recarga) */}
+      <DriverModals
+        driverId={driverId}
+        showDocsForm={showDocsForm}
+        onCloseDocsForm={() => setShowDocsForm(false)}
+        onDocsSuccess={(status) => {
+          setDriverDocStatus(status as any);
+          setShowDocsForm(false);
+        }}
+        pendingAgreement={pendingAgreement}
+        onCloseAgreement={() => setPendingAgreement(null)}
+        onAgreementResolved={loadPendingAgreement}
+        showRecharge={showRecharge}
+        onCloseRecharge={() => setShowRecharge(false)}
+        onRechargeSuccess={() => {
+          setShowRecharge(false);
+          // Reload wallet
+          supabase.rpc('get_driver_wallet_status').then(({ data }) => {
+            if (data?.has_wallet) {
+              setDriverWallet({
+                operational_credit: data.operational_credit ?? 0,
+                status: data.status ?? 'active',
+              });
+            }
+          });
+        }}
+      />
     </div>
   );
 };
-// Cancela todos os timers pendentes ao desmontar
+
 // =============================================================================
+// Utilitários partilhados (mantidos por retrocompatibilidade de importação)
+// =============================================================================
+
+// Cancela todos os timers pendentes ao desmontar
 export function useAutoMarkNotificationsRead(
   notifications: Array<{ id: string; read_at: string | null }>,
   onRead: (id: string) => void,
@@ -1276,7 +754,6 @@ export function useAutoMarkNotificationsRead(
   const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const mountedRef = useRef(true);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     mountedRef.current = true;
     return () => {

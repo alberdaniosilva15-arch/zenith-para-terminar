@@ -35,6 +35,30 @@ const CORS_OPTIONS = {
   methods: 'POST, OPTIONS',
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// VOZ BIDIRECIONAL (Gemini Live API)
+// Modelo de áudio-para-áudio de baixa latência. O token efémero fica travado
+// a este modelo + responseModalities AUDIO, por isso estes valores não podem
+// ser alterados pelo cliente.
+//
+// ⚠️ O nome tem de existir mesmo na conta, senão o Kaze fica MUDO.
+// Verificado a 15/09 contra `GET /v1beta/models` com a chave em produção:
+//   • `gemini-3.1-flash-live-preview` (valor anterior) NÃO EXISTE — não há
+//     nenhum `3.1-flash-live` nos 50 modelos da conta.
+//   • Os únicos que suportam `bidiGenerateContent` (a Live API) são
+//     `gemini-2.5-flash-native-audio-latest` e `gemini-3.5-transcribe-live`.
+//
+// O erro era difícil de ver porque `authTokens.create` NÃO valida o modelo:
+// devolve um token na mesma. O modelo só é validado quando o WebSocket da
+// sessão abre — ou seja, o cliente recebia token, tentava ligar, e não vinha
+// som nenhum. Sintoma: "o Kaze não fala nada", sem erro visível.
+// ─────────────────────────────────────────────────────────────────────────────
+const LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest';
+/** Janela para iniciar a sessão (o cliente tem de ligar dentro deste prazo). */
+const LIVE_SESSION_WINDOW_MS = 5 * 60 * 1000;
+/** Tempo total durante o qual a sessão pode trocar mensagens. */
+const LIVE_TOKEN_TTL_MS = 30 * 60 * 1000;
+
 // Rate limits por acção (requests por hora)
 const RATE_LIMITS: Record<string, number> = {
   kaze_chat:            20,
@@ -92,11 +116,11 @@ O fundador é o Dánio Silva, jovem empreendedor visionário de Luanda. Ele crio
 
 ═══ TIPOS DE VEÍCULO ═══
 • 🚗 Táxi (Standard) — preço normal
-• 🏍️ Moto (MotoGo) — -40% do preço normal (rápido, ideal para trânsito)
+• 🏍️ Moto (Zenith Moto) — -40% do preço normal (rápido, ideal para trânsito)
 • 🚙 Comfort — +40% (veículo premium, ar condicionado)
 • 🚐 XL — +80% (veículo grande, para grupos)
 
-═══ SEGURO MOTOGO BASIC ═══
+═══ SEGURO ZENITH MOTO BASIC ═══
 • Custo: +50 Kz por viagem (opcional)
 • Protecção durante a viagem de moto-táxi
 • Activado pelo passageiro antes de confirmar a corrida
@@ -179,6 +203,32 @@ function cleanupUserCounters() {
 // Se a operação DB falhar, cair para o fallback em memória.
 const supabasePersist = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 const supabaseAdmin   = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+
+async function logAiUsage(params: { userId: string; action: string; tokensUsed?: number; estimatedCost?: number; errorReturned?: string | null; }) {
+  try {
+    await supabaseAdmin.from('ai_usage_logs').insert({
+      user_id: params.userId,
+      action: params.action,
+      tokens_used: params.tokensUsed ?? 0,
+      estimated_cost: params.estimatedCost ?? 0,
+      error_returned: params.errorReturned ?? null,
+      created_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('[gemini-proxy] Falha ao registar ai_usage_logs:', err);
+  }
+}
+
+function detectIntent(text: string): string {
+  const lower = String(text || '').toLowerCase();
+  if (/emergência|polícia|socorro|perigo|113|115|112|urgente/i.test(lower)) return 'emergency';
+  if (/preço|quanto custa|valor|tarifa|kz|desconto|preços/i.test(lower)) return 'fare_inquiry';
+  if (/onde está|motorista|chegou|a caminho|tempo|chegada|rastreio/i.test(lower)) return 'ride_status';
+  if (/cancelar|parar|desistir|anular/i.test(lower)) return 'cancel_intent';
+  if (/rota|caminho|destino|mutamba|talatona|kilamba|viana|aeroporto|levar/i.test(lower)) return 'location_route';
+  if (/olá|oi|bom dia|boa tarde|boa noite|kaze/i.test(lower)) return 'greeting';
+  return 'general_chat';
+}
 
 async function checkIpRateLimit(ip: string): Promise<boolean> {
   const now = Date.now();
@@ -269,11 +319,20 @@ Deno.serve(async (req: Request) => {
 
     const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
     if (authErr || !user) {
-      supabaseAdmin.from('ai_usage_logs').insert({
-        user_id: 'anonymous',
-        action: 'auth_failure',
-      }).then(() => {});
+      logAiUsage({ userId: 'anonymous', action: 'auth_failure', errorReturned: authErr?.message ?? 'Sessão inválida' });
       return err('Sessão inválida ou expirada. Faz login novamente.', 401);
+    }
+
+    // 1.1 Verificação de permissões da conta (bloquear utilizadores inactivos/suspensos)
+    const { data: userProfile } = await supabaseAdmin
+      .from('profiles')
+      .select('is_suspended, is_active')
+      .eq('user_id', user.id)
+      .maybeSingle();
+
+    if (userProfile && (userProfile.is_suspended === true || userProfile.is_active === false)) {
+      logAiUsage({ userId: user.id, action: 'permission_denied', errorReturned: 'Utilizador suspenso ou inactivo' });
+      return err('Conta sem permissão para utilizar o assistente de IA.', 403);
     }
 
     // ----------------------------------------------------------------
@@ -290,6 +349,7 @@ Deno.serve(async (req: Request) => {
 
     if (userLimitEntry && (Date.now() - userLimitEntry.windowStart) < USER_WINDOW_MS) {
       if (userLimitEntry.count >= userLimit) {
+        logAiUsage({ userId: user.id, action, errorReturned: `Rate limit in-memory atingido (${userLimit}/h)` });
         return err(`Limite de ${userLimit} pedidos/hora para "${action}" atingido. Aguarda um momento.`, 429);
       }
       userLimitEntry.count++;
@@ -306,12 +366,11 @@ Deno.serve(async (req: Request) => {
       .gte('created_at', oneHourAgo);
 
     if (typeof dbCount === 'number' && dbCount >= userLimit) {
+      logAiUsage({ userId: user.id, action, errorReturned: `Rate limit DB atingido (${userLimit}/h)` });
       return err(`Limite de ${userLimit} pedidos/hora para "${action}" atingido. Aguarda um momento.`, 429);
     }
 
-    supabaseAdmin.from('ai_usage_logs').insert({
-      user_id: user.id, action, created_at: new Date().toISOString()
-    }).catch(() => {});
+    logAiUsage({ userId: user.id, action, tokensUsed: 0, estimatedCost: 0 });
 
     // ----------------------------------------------------------------
     // 3. ROTEAMENTO
@@ -381,7 +440,7 @@ Máximo 8 resultados. Usa coordenadas geográficas REAIS de Luanda.`,
         const res = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
           contents: `Insight curto (máx 2 frases) para ${context.name ?? 'utilizador'}
-(role: ${context.role}, status: ${context.status}${context.extraText ? `, contexto: ${context.extraText}` : ''}) da MotoGo Luanda.
+(role: ${context.role}, status: ${context.status}${context.extraText ? `, contexto: ${context.extraText}` : ''}) da Zenith Ride Luanda.
 JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           config: { responseMimeType: 'application/json', systemInstruction: KAZE_SYSTEM_PROMPT },
         });
@@ -476,7 +535,8 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
              return err(`[${activeProvider}] API Erro: ${errBody}`, proxyRes.status);
            }
            const proxyData = await proxyRes.json();
-           return ok({ text: proxyData.choices?.[0]?.message?.content ?? '', provider: activeProvider, model: activeModel });
+           const outText = proxyData.choices?.[0]?.message?.content ?? '';
+           return ok({ text: outText, message: outText, intent: detectIntent(message), action: null, confidence: 0.94, provider: activeProvider, model: activeModel });
         }
 
         if (activeProvider === 'anthropic') {
@@ -513,7 +573,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           }
           const anthropicData = await anthropicRes.json();
           const text = (anthropicData.content || []).map((part:any) => part?.text || '').join('\n').trim();
-          return ok({ text, provider: 'anthropic', model: activeModel });
+          return ok({ text, message: text, intent: detectIntent(message), action: null, confidence: 0.95, provider: 'anthropic', model: activeModel });
         }
 
         // 4. Roteamento Clássico: GOOGLE GEMINI (com fallback para Groq)
@@ -544,12 +604,22 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           });
 
           const res = await chatSession.sendMessage(message);
-          return ok({ text: res.response.text() });
+          const outText = res.response.text();
+          return ok({ text: outText, message: outText, intent: detectIntent(message), action: null, confidence: 0.96, provider: 'google', model: activeModel });
         } catch (geminiErr: any) {
           console.warn('[gemini-proxy] Gemini falhou, fallback para Groq:', geminiErr);
           
           if (!GROQ_API_KEY) {
-            return err(`IA temporariamente indisponível. Erro: ${geminiErr?.message || 'Desconhecido'}`, 503);
+            logAiUsage({ userId: user.id, action: 'kaze_chat', errorReturned: String(geminiErr?.message || 'Gemini indisponível') });
+            return ok({
+              text: 'Não consegui responder agora devido a uma oscilação momentânea da rede. Podes tentar novamente dentro de instantes.',
+              message: 'Não consegui responder agora.',
+              intent: 'fallback',
+              action: null,
+              confidence: 0.5,
+              fallback: true,
+              provider: 'offline_fallback',
+            });
           }
           
           const mappedHistory = (Array.isArray(history) ? history : []).map(entry => {
@@ -558,22 +628,36 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
             return { role: r, content: text };
           }).filter((v: any) => v.content);
           
-          const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'llama-3.1-8b-instant',
-              messages: [
-                { role: 'system', content: finalPreamble },
-                ...mappedHistory,
-                { role: 'user', content: message },
-              ],
-            }),
-          });
-          
-          if (!groqRes.ok) return err('IA indisponível (fallback também falhou).', 503);
-          const groqData = await groqRes.json();
-          return ok({ text: groqData.choices?.[0]?.message?.content ?? '', provider: 'groq_fallback' });
+          try {
+            const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                model: 'llama-3.1-8b-instant',
+                messages: [
+                  { role: 'system', content: finalPreamble },
+                  ...mappedHistory,
+                  { role: 'user', content: message },
+                ],
+              }),
+            });
+            
+            if (!groqRes.ok) throw new Error(`Groq HTTP ${groqRes.status}`);
+            const groqData = await groqRes.json();
+            const groqText = groqData.choices?.[0]?.message?.content ?? '';
+            return ok({ text: groqText, message: groqText, intent: detectIntent(message), action: null, confidence: 0.90, provider: 'groq_fallback' });
+          } catch (groqErr: any) {
+            logAiUsage({ userId: user.id, action: 'kaze_chat', errorReturned: String(groqErr?.message || 'Fallback falhou') });
+            return ok({
+              text: 'Não consegui responder agora devido a uma oscilação momentânea da rede. Podes tentar novamente dentro de instantes.',
+              message: 'Não consegui responder agora.',
+              intent: 'fallback',
+              action: null,
+              confidence: 0.5,
+              fallback: true,
+              provider: 'offline_fallback',
+            });
+          }
         }
       }
 
@@ -597,7 +681,7 @@ JSON: { dailyEstimateKz: number, weeklyEstimateKz: number, bestZones: string[], 
         const { context } = payload;
         const res = await ai.models.generateContent({
           model: 'gemini-2.5-flash',
-          contents: `SISTEMA VIGILANTE MOTOGO LUANDA. Contexto: ${JSON.stringify(context)}.
+          contents: `SISTEMA VIGILANTE ZENITH RIDE LUANDA. Contexto: ${JSON.stringify(context)}.
 JSON: { commands: Array<{ id, type: REALLOCATE|SURGE_PRICE|SECURITY_DISPATCH|ROUTE_OPTIMIZE,
 target, reason, intensity, timestamp, status: EXECUTED|LOGGED }> }`,
           config: { thinkingConfig: { thinkingBudget: 8192 }, responseMimeType: 'application/json' },
@@ -642,14 +726,85 @@ JSON: { text: string }`,
 
       // ----------------------------------------------------------------
       case 'get_live_token': {
-        // O frontend usa fallback local de voz (Web Speech API) nesta versão.
-        // Mantemos uma resposta 200 para não quebrar clientes antigos que ainda
-        // chamam este endpoint, sem expor qualquer credencial sensível.
-        return ok({
-          ephemeral_token: 'local-web-speech-fallback',
-          mode: 'web_speech',
-          message: 'Voz em modo local activa no cliente.',
-        });
+        // ----------------------------------------------------------------
+        // Voz bidirecional do Kaze (Gemini Live API).
+        //
+        // A GEMINI_API_KEY NUNCA sai daqui. O que devolvemos ao browser é um
+        // *ephemeral token*: curto, de uso único e travado ao modelo + config.
+        // Se for extraído do cliente, expira em minutos — ao contrário de uma
+        // API key, que daria acesso permanente a toda a conta.
+        //
+        // Token fica travado (liveConnectConstraints) a:
+        //   • modelo  LIVE_MODEL (ver constante no topo do ficheiro)
+        //   • saída   AUDIO
+        //   • sessionResumption (necessário para reconectar a cada ~10 min)
+        // Assim o browser não pode alterar o modelo nem a configuração.
+        // ----------------------------------------------------------------
+        if (!GEMINI_API_KEY) {
+          return err('Serviço de voz indisponível: chave do Gemini não configurada no servidor.', 503);
+        }
+
+        try {
+          const expireTime = new Date(Date.now() + LIVE_TOKEN_TTL_MS).toISOString();
+          const newSessionExpireTime = new Date(Date.now() + LIVE_SESSION_WINDOW_MS).toISOString();
+
+          const token = await ai.authTokens.create({
+            config: {
+              uses: 1, // uma única sessão por token
+              expireTime,
+              newSessionExpireTime,
+              liveConnectConstraints: {
+                model: LIVE_MODEL,
+                config: {
+                  sessionResumption: {},
+                  responseModalities: ['AUDIO'],
+                },
+              },
+            },
+          });
+
+          // O valor utilizável pelo cliente está em `token.name`.
+          const tokenValue = token?.name ?? '';
+
+          if (!tokenValue) {
+            logAiUsage({
+              userId: user.id,
+              action: 'get_live_token',
+              errorReturned: 'SDK não devolveu token.name',
+            });
+            return err('Não foi possível gerar o token de voz. Tenta novamente.', 502);
+          }
+
+          logAiUsage({ userId: user.id, action: 'get_live_token' });
+
+          return ok({
+            // `ephemeral_token` mantém compatibilidade com clientes antigos.
+            ephemeral_token: tokenValue,
+            token: tokenValue,
+            model: LIVE_MODEL,
+            mode: 'live_api',
+            expires_at: expireTime,
+            new_session_expires_at: newSessionExpireTime,
+          });
+        } catch (liveErr) {
+          const detail = liveErr instanceof Error ? liveErr.message : String(liveErr);
+          console.error('[gemini-proxy] get_live_token falhou:', detail);
+          logAiUsage({
+            userId: user.id,
+            action: 'get_live_token',
+            errorReturned: detail.slice(0, 200),
+          });
+
+          // Erros de chave inválida/expirada merecem mensagem própria — é o
+          // problema mais provável durante a configuração inicial.
+          const isKeyProblem = /API key|API_KEY|permission|leaked|invalid|unauthor/i.test(detail);
+          return err(
+            isKeyProblem
+              ? 'A chave do Gemini no servidor é inválida ou foi revogada. Actualiza o secret GEMINI_API_KEY.'
+              : 'Não foi possível iniciar a voz do Kaze. Tenta novamente.',
+            isKeyProblem ? 503 : 502,
+          );
+        }
       }
 
       default:
