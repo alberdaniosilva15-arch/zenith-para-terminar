@@ -60,6 +60,21 @@ const WHATSAPP_VERIFY_TOKEN =
 // Já estava configurado no Supabase, mas o código nunca o usava.
 const WHATSAPP_APP_SECRET = Deno.env.get('WHATSAPP_APP_SECRET') ?? '';
 
+// Janela de tolerância para mensagens recebidas.
+//
+// Quando o bot está desligado, a Meta guarda as mensagens e entrega-as todas de
+// uma vez quando voltamos a estar online. Sem este corte, o bot respondia a SMS
+// de dias antes — parecia avariado e enchia o utilizador com respostas a coisas
+// que já não interessam.
+//
+// 15 minutos cobrem atrasos normais de rede e reenvios da Meta, e cortam o
+// histórico acumulado. Afinável por secret (WHATSAPP_JANELA_MENSAGEM_MIN).
+const JANELA_MENSAGEM_SEGUNDOS = (() => {
+  const minutos = Number(Deno.env.get('WHATSAPP_JANELA_MENSAGEM_MIN') ?? '');
+  if (Number.isFinite(minutos) && minutos > 0) return Math.floor(minutos * 60);
+  return 15 * 60;
+})();
+
 // Geocodificação de endereços escritos à mão (o pin de localização já traz
 // coordenadas e não precisa disto).
 const MAPBOX_TOKEN = Deno.env.get('MAPBOX_TOKEN') ?? '';
@@ -400,6 +415,49 @@ async function sendWhatsAppMessage(to: string, text: string): Promise<boolean> {
     console.warn('[whatsapp-webhook] Falha no envio WhatsApp API:', err);
     return false;
   }
+}
+
+/**
+ * Marca a mensagem como lida e liga o indicador "a escrever…" no WhatsApp.
+ *
+ * É o detalhe que mais denuncia um robô: responder em 200 ms, sempre, sem
+ * nunca aparecer "a escrever". A Meta aceita o `typing_indicator` na Cloud API;
+ * se a versão da Graph API em uso não o aceitar, falha em silêncio — o
+ * indicador é cosmético e a conversa não pode depender dele.
+ */
+async function marcarALer(msgId: string | null): Promise<void> {
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID || !msgId) return;
+  try {
+    await fetch(
+      `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${WHATSAPP_API_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          status: 'read',
+          message_id: msgId,
+          typing_indicator: { type: 'text' },
+        }),
+      },
+    );
+  } catch {
+    // Cosmético — nunca deve rebentar o fluxo.
+  }
+}
+
+/**
+ * Pausa curta e proporcional ao tamanho da resposta.
+ *
+ * Uma resposta instantânea a uma mensagem longa parece script. Não passa de
+ * ~2 s para não atrasar o pedido nem aproximar o limite de tempo da função.
+ */
+async function pausaHumana(texto: string): Promise<void> {
+  const ms = Math.min(2200, 450 + texto.length * 12);
+  await new Promise((r) => setTimeout(r, ms));
 }
 
 // ─── Geocodificação ──────────────────────────────────────────────────────────
@@ -1595,20 +1653,127 @@ function ehPedidoDeCorrida(texto: string): boolean {
   return PEDIDO_DE_CORRIDA.test(texto.trim());
 }
 
-const AJUDA = [
-  '👋 *Bot Lukéni — Zenith Ride*',
+// ─── Voz humana ──────────────────────────────────────────────────────────────
+// Um humano não repete a mesma frase palavra por palavra de cada vez, nem
+// despeja o manual inteiro a quem só disse "bom dia". Estas peças dão variedade
+// e tratamento pelo nome — é o que tira o cheiro a robô das respostas.
+
+/**
+ * Escolhe uma das formulações, de forma determinística a partir de `semente`.
+ *
+ * Determinístico de propósito: a Meta reenvia o mesmo webhook quando não
+ * recebe 200, e um `Math.random()` faria a mesma mensagem sair diferente em
+ * cada reenvio. Com a semente, a variação é estável por conversa.
+ */
+function variar(opcoes: string[], semente: string): string {
+  if (opcoes.length === 0) return '';
+  if (opcoes.length === 1) return opcoes[0]!;
+  let h = 0;
+  for (let i = 0; i < semente.length; i += 1) h = (h * 31 + semente.charCodeAt(i)) | 0;
+  return opcoes[Math.abs(h) % opcoes.length]!;
+}
+
+/** Primeiro nome, só quando parece mesmo um nome de pessoa. */
+function primeiroNome(nome: string): string {
+  const bruto = (nome ?? '').trim().split(/\s+/)[0] ?? '';
+  if (bruto.length < 2 || bruto.length > 20) return '';
+  if (!/^[A-Za-zÀ-ÿ'’-]+$/.test(bruto)) return '';
+  return bruto.charAt(0).toUpperCase() + bruto.slice(1).toLowerCase();
+}
+
+/** ", Dánio" ou "" — para encaixar o nome sem deixar vírgula solta. */
+function comNome(nome: string): string {
+  const n = primeiroNome(nome);
+  return n ? `, ${n}` : '';
+}
+
+// ⚠️ Nada de `\b` no fim: em JavaScript o `\b` é ASCII, portanto depois de
+// uma letra acentuada — "olá", "até amanhã" — não vê fronteira nenhuma e o
+// padrão nunca casava. `(?!\p{L})` com a flag `u` faz o que se pretendia:
+// "não pode vir outra letra a seguir".
+const CUMPRIMENTO =
+  /^(ol[áa]|oi+|hey|hello|hi|bom dia|boa tarde|boa noite|boas|tudo bem|como est[áa]s?|como vai|sauda[çc][õo]es)(?!\p{L})/iu;
+const AGRADECIMENTO = /^(obrigad[oa]s?|valeu|vlw|agradecido|thanks|thank you|obg)(?!\p{L})/iu;
+const DESPEDIDA = /^(adeus|at[ée] (logo|breve|amanh[ãa])|fica bem|boa sorte|xau|bye)(?!\p{L})/iu;
+
+const AJUDA_ABERTURAS = [
+  'Oi{no}! Sou o Lukéni, da Zenith Ride 👋',
+  'Olá{no}! Aqui é o Lukéni, da Zenith Ride 👋',
+  'Boas{no}! Lukéni, da Zenith Ride 👋',
+  'Ei{no}! Sou o Lukéni, da Zenith Ride 👋',
+];
+
+const AJUDA_CORPO = [
+  'Diz-me só *corrida* e eu trato do resto — pergunto-te de onde sais e para onde vais.',
   '',
-  'Fala comigo assim:',
-  '• *Corrida* — para pedir uma viagem',
-  '• 📎 → *Localização* — para eu usar onde estás',
-  '• *Cancelar* — para desistir do pedido',
+  'Se preferires, toca em 📎 → *Localização* e eu uso logo onde estás, sem escreveres nada.',
   '',
-  'Conheço os bairros, ruas, hospitais, escolas e mercados de Luanda.',
-  'Se escreveres um sítio que ainda não conheço, digo-te e peço-te a',
-  'localização — guardo-o para as próximas vezes.',
-  '',
-  'Assim que tiveres uma corrida a caminho, digo-te quem vem buscar-te.',
+  'Conheço os bairros, ruas, hospitais, escolas e mercados de Luanda. Se me disseres um sítio que ainda não conheço, peço-te a localização e guardo-o para a próxima vez.',
 ].join('\n');
+
+function textoAjuda(nome: string, semente: string): string {
+  const abertura = variar(AJUDA_ABERTURAS, semente).replace('{no}', comNome(nome));
+  return [abertura, '', AJUDA_CORPO].join('\n');
+}
+
+/**
+ * Responde a conversa que não é um pedido de corrida.
+ *
+ * Antes, quem escrevia "bom dia" ou "obrigado" recebia o manual de instruções
+ * completo — era a coisa mais robótica que o bot fazia. Devolve `true` quando
+ * já respondeu (e o fluxo normal deve parar).
+ */
+async function tratarConversaSolta(
+  telefone: string,
+  texto: string,
+  nome: string,
+  sessao: Sessao | null,
+): Promise<boolean> {
+  const t = texto.trim();
+  if (!t) return false;
+  const semente = telefone + t;
+
+  if (CUMPRIMENTO.test(t)) {
+    // A meio de um pedido, o cumprimento é só um cumprimento: repetir o manual
+    // faria o utilizador perder o fio à meada.
+    const aMeio = sessao?.state === 'awaiting_origin' || sessao?.state === 'awaiting_dest';
+    await sendWhatsAppMessage(
+      telefone,
+      aMeio
+        ? variar([
+            `Oi${comNome(nome)}! Continuo à espera da tua resposta 👇`,
+            `Boas${comNome(nome)}! Estou aqui — falta só aquilo que te pedi 👇`,
+          ], semente)
+        : textoAjuda(nome, semente),
+    );
+    return true;
+  }
+
+  if (AGRADECIMENTO.test(t)) {
+    await sendWhatsAppMessage(
+      telefone,
+      variar([
+        `De nada${comNome(nome)} 🙌`,
+        `Sempre às ordens${comNome(nome)} 👊`,
+        `Ora essa${comNome(nome)}, é para isso que estou aqui.`,
+      ], semente),
+    );
+    return true;
+  }
+
+  if (DESPEDIDA.test(t)) {
+    await sendWhatsAppMessage(
+      telefone,
+      variar([
+        `Até à próxima${comNome(nome)} 👋`,
+        `Fica bem${comNome(nome)}! Quando precisares, é só chamar.`,
+      ], semente),
+    );
+    return true;
+  }
+
+  return false;
+}
 
 /**
  * Trata uma mensagem de passageiro. Devolve a resposta a enviar, ou null se
@@ -1648,15 +1813,17 @@ async function processarDestino(
   }, sessao);
 
   const linhas = [
-    '🧾 *Resumo da tua viagem*',
+    'Aqui está o resumo 🧾',
     '',
-    `📍 *De:* ${origem.endereco}`,
-    `🏁 *Para:* ${destino.endereco}`,
-    `📏 *Distância:* ${preco.distance_km} km`,
-    `⏱️ *Tempo estimado:* ~${preco.duration_min} min`,
-    `💰 *Preço:* ${kz(preco.price_kz)} Kz${preco.is_zone_price ? ' _(preço fixo da zona)_' : ''}`,
+    `De — ${origem.endereco}`,
+    `Para — ${destino.endereco}`,
+    `Distância — ${preco.distance_km} km (~${preco.duration_min} min)`,
+    `Preço — *${kz(preco.price_kz)} Kz*${preco.is_zone_price ? ' _(preço fixo da zona)_' : ''}`,
     '',
-    'Responde *1* para confirmar ou *2* para cancelar.',
+    variar([
+      'Confirmas? Responde *1* para seguir ou *2* para deixar estar.',
+      'Digo ao motorista? *1* para avançar, *2* para cancelar.',
+    ], telefone + String(preco.price_kz)),
   ];
   await sendWhatsAppMessage(telefone, linhas.join('\n'));
 }
@@ -1707,6 +1874,7 @@ async function iniciarAprendizagem(
   texto: string,
   slot: 'origem' | 'destino',
   sessao: Sessao | null,
+  nomePessoa = '',
 ): Promise<void> {
   await guardarSessao(supabaseAdmin, telefone, {
     state: 'aprendendo_nome',
@@ -1718,10 +1886,10 @@ async function iniciarAprendizagem(
   await sendWhatsAppMessage(
     telefone,
     [
-      `🤔 Ainda não conheço *«${texto}»* — e estou a aprender!`,
+      `Hmm${comNome(nomePessoa)} — ainda não conheço *«${texto}»* 🤔`,
       '',
-      'Manda a *localização* desse sítio (📎 → *Localização*) e eu guardo-o com esse nome, ' +
-        'com cerca de 1 km à volta. A partir daí nunca mais pergunto.',
+      'Manda-me a *localização* desse sítio (📎 → *Localização*) e eu guardo-o com esse ' +
+        'nome e cerca de 1 km à volta. A partir daí nunca mais te pergunto.',
       '',
       'Ou escreve o nome completo, ex.: _Zango 3, Viana_.',
     ].join('\n'),
@@ -1894,7 +2062,13 @@ async function tratarPassageiro(
       dest_address: null, dest_lat: null, dest_lng: null,
       estimated_price: null, ride_id: null,
     }, sessao);
-    await sendWhatsAppMessage(telefone, '✅ Pedido cancelado. Quando quiseres, escreve *corrida* que eu trato de tudo.');
+    await sendWhatsAppMessage(
+      telefone,
+      variar([
+        `Pronto${comNome(msg.nome)}, cancelei o pedido 👍 Quando quiseres, escreve *corrida*.`,
+        `Já está${comNome(msg.nome)}, pedido cancelado. É só escreveres *corrida* quando precisares.`,
+      ], telefone + texto),
+    );
     return;
   }
 
@@ -1920,7 +2094,9 @@ async function tratarPassageiro(
     if (estadoCorrida === 'searching') {
       await sendWhatsAppMessage(
         telefone,
-        `⏳ A tua corrida *${sessao.ride_id.slice(0, 8).toUpperCase()}* continua à procura de motorista. Escreve *cancelar* se quiseres desistir.`,
+        `Ainda estou à procura de motorista para ti${comNome(msg.nome)} ⏳\n\n` +
+          `Código da viagem: *${sessao.ride_id.slice(0, 8).toUpperCase()}*. ` +
+          'Se quiseres desistir, escreve *cancelar*.',
       );
       return;
     }
@@ -1931,7 +2107,10 @@ async function tratarPassageiro(
     ) {
       await sendWhatsAppMessage(
         telefone,
-        '✅ Já tens um motorista a caminho! Vê os dados na mensagem anterior.',
+        variar([
+          'Já tens um motorista a caminho 🚗 Está tudo na mensagem anterior.',
+          `Boa notícia${comNome(msg.nome)} — o motorista já vem a caminho 🚗 Vê os dados acima.`,
+        ], telefone),
       );
       return;
     }
@@ -1945,9 +2124,16 @@ async function tratarPassageiro(
     estado = 'awaiting_origin';
   }
 
+  // ── Conversa solta: cumprimentar, agradecer, despedir-se ──
+  // Só corre quando estamos à espera de input. A meio de um pedido, "obrigado"
+  // não pode atropelar o fluxo — e "bom dia" não deve despejar o manual.
+  if (estado === null || estado === 'awaiting_origin' || estado === 'awaiting_dest') {
+    if (await tratarConversaSolta(telefone, texto, msg.nome, sessao)) return;
+  }
+
   // ── Sem sessão: só arranco se for um pedido explícito ──
   if (estado === null && !veioLocalizacao && !ehPedidoDeCorrida(texto)) {
-    await sendWhatsAppMessage(telefone, AJUDA);
+    await sendWhatsAppMessage(telefone, textoAjuda(msg.nome, telefone + texto));
     return;
   }
 
@@ -1966,7 +2152,12 @@ async function tratarPassageiro(
       }, sessao);
       await sendWhatsAppMessage(
         telefone,
-        `📍 Recebi a tua localização:\n*${endereco}*\n\n🏁 Para onde queres ir?`,
+        `Recebi${comNome(msg.nome)} 📍 Estás em *${endereco}*.\n\n` +
+          variar([
+            'Para onde vamos?',
+            'E para onde é que te levo?',
+            'Diz-me só o destino.',
+          ], telefone + endereco),
       );
       return;
     }
@@ -1979,7 +2170,10 @@ async function tratarPassageiro(
     }, sessao);
     await sendWhatsAppMessage(
       telefone,
-      '🚕 Vamos a isso!\n\n📍 *De onde sais?*\n\nO mais rápido é tocar em 📎 → *Localização* para eu usar onde estás. Também podes escrever o ponto de partida (ex.: _Belas_, _Talatona_).',
+      `${variar(['Vamos a isso', 'Bora', 'Perfeito'], telefone + texto)}${comNome(msg.nome)} 🚕\n\n` +
+        '*De onde é que sais?*\n\n' +
+        'O mais rápido é tocares em 📎 → *Localização* e eu uso logo onde estás. ' +
+        'Também podes escrever (ex.: _Belas_, _Talatona_, _Kilamba_).',
     );
     return;
   }
@@ -1991,7 +2185,9 @@ async function tratarPassageiro(
     if (ehPedidoDeCorrida(texto)) {
       await sendWhatsAppMessage(
         telefone,
-        '📍 Já estou a tratar disso! Falta só saber *de onde sais*.\n\nToca em 📎 → *Localização* para eu usar onde estás, ou escreve o ponto de partida (ex.: _Belas_, _Talatona_).',
+        `Já estou nisso${comNome(msg.nome)} — falta só saber *de onde sais* 📍\n\n` +
+          'Toca em 📎 → *Localização* e eu uso logo onde estás, ou escreve ' +
+          '(ex.: _Belas_, _Talatona_).',
       );
       return;
     }
@@ -2002,21 +2198,29 @@ async function tratarPassageiro(
         state: 'awaiting_dest',
         origin_address: endereco, origin_lat: msg.lat, origin_lng: msg.lng,
       }, sessao);
-      await sendWhatsAppMessage(telefone, `📍 *${endereco}*\n\n🏁 Para onde queres ir?`);
+      await sendWhatsAppMessage(
+        telefone,
+        `Anotado 📍 *${endereco}*\n\n` +
+          variar(['Para onde vamos?', 'E o destino?', 'Diz-me para onde é.'], telefone + endereco),
+      );
       return;
     }
 
     const coords = await geocodificar(supabaseAdmin, texto);
     if (!coords) {
       // Não conhecemos este sítio — em vez de recusar, o bot APRENDE.
-      await iniciarAprendizagem(supabaseAdmin, telefone, texto, 'origem', sessao);
+      await iniciarAprendizagem(supabaseAdmin, telefone, texto, 'origem', sessao, msg.nome);
       return;
     }
     await guardarSessao(supabaseAdmin, telefone, {
       state: 'awaiting_dest',
       origin_address: coords.endereco, origin_lat: coords.lat, origin_lng: coords.lng,
     }, sessao);
-    await sendWhatsAppMessage(telefone, `📍 *${coords.endereco}*\n\n🏁 Para onde queres ir?`);
+    await sendWhatsAppMessage(
+      telefone,
+      `Anotado 📍 *${coords.endereco}*\n\n` +
+        variar(['Para onde vamos?', 'E o destino?', 'Diz-me para onde é.'], telefone + coords.endereco),
+    );
     return;
   }
 
@@ -2044,7 +2248,7 @@ async function tratarPassageiro(
     }
 
     if (!destino) {
-      await iniciarAprendizagem(supabaseAdmin, telefone, texto, 'destino', sessao);
+      await iniciarAprendizagem(supabaseAdmin, telefone, texto, 'destino', sessao, msg.nome);
       return;
     }
 
@@ -2071,12 +2275,24 @@ async function tratarPassageiro(
         dest_address: null, dest_lat: null, dest_lng: null,
         estimated_price: null, ride_id: null,
       }, sessao);
-      await sendWhatsAppMessage(telefone, '👌 Sem problema. Quando precisares, escreve *corrida*.');
+      await sendWhatsAppMessage(
+        telefone,
+        variar([
+          `Sem problema${comNome(msg.nome)} 👌 Quando precisares, é só escreveres *corrida*.`,
+          `Fica à vontade${comNome(msg.nome)}. Escreve *corrida* quando quiseres.`,
+        ], telefone + texto),
+      );
       return;
     }
 
     if (!CONFIRMA.test(texto)) {
-      await sendWhatsAppMessage(telefone, 'Responde *1* para confirmar a viagem ou *2* para cancelar.');
+      await sendWhatsAppMessage(
+        telefone,
+        variar([
+          'Só preciso de um *1* para confirmar ou *2* para cancelar 👍',
+          'Diz-me *1* para seguir com a viagem ou *2* para deixar estar.',
+        ], telefone + texto),
+      );
       return;
     }
 
@@ -2122,7 +2338,9 @@ async function tratarPassageiro(
 
     await sendWhatsAppMessage(
       telefone,
-      `✅ Corrida confirmada!\n\nEstou a procurar o motorista mais próximo. Código da viagem: *${rideId.slice(0, 8).toUpperCase()}*.\n\nAviso-te assim que alguém aceitar.`,
+      `Feito${comNome(msg.nome)} ✅ Já estou a procurar o motorista mais próximo.\n\n` +
+        `Código da viagem: *${rideId.slice(0, 8).toUpperCase()}* — guarda-o, é o que o motorista vai pedir.\n\n` +
+        'Aviso-te assim que alguém aceitar.',
     );
 
     const resultado = await notificarMotoristas(
@@ -2152,14 +2370,15 @@ async function tratarPassageiro(
       }, sessao);
       await sendWhatsAppMessage(
         telefone,
-        '😔 Não há motoristas disponíveis por perto neste momento. Tenta novamente dentro de 2 minutos.',
+        `Pois${comNome(msg.nome)}, neste momento não tenho motorista por perto 😔\n\n` +
+          'Deixei o pedido de lado. Tenta daqui a 2 minutos que eu volto a procurar.',
       );
     }
     return;
   }
 
   // Rede de segurança — não devia chegar aqui.
-  await sendWhatsAppMessage(telefone, AJUDA);
+  await sendWhatsAppMessage(telefone, textoAjuda(msg.nome, telefone + texto));
 }
 
 /** Motorista a responder "ACEITAR <código>". */
@@ -2531,6 +2750,24 @@ Deno.serve(async (req: Request) => {
               .insert({ message_id: chaveDedup });
           }
 
+          // ── Mensagens antigas: a Meta guarda o que chega com o bot desligado
+          // e entrega tudo de uma vez quando voltamos. Responder a uma SMS de há
+          // três dias é o que fazia o bot parecer avariado — e enchia o
+          // utilizador com respostas a coisas que já não interessam.
+          //
+          // A janela é de 15 minutos por omissão: cobre atrasos normais de rede
+          // e reenvios da Meta, e corta o histórico acumulado.
+          const tsMensagem = Number(m?.timestamp ?? 0);
+          if (tsMensagem > 0) {
+            const idadeSeg = Math.floor(Date.now() / 1000) - tsMensagem;
+            if (idadeSeg > JANELA_MENSAGEM_SEGUNDOS) {
+              console.log(
+                `[whatsapp-webhook] Mensagem ${m?.id ?? '?'} com ${Math.floor(idadeSeg / 60)} min — ignorada (fora da janela).`,
+              );
+              continue;
+            }
+          }
+
           const tipo = String(m?.type ?? 'text');
           const texto = String(
             m?.text?.body ??
@@ -2553,6 +2790,10 @@ Deno.serve(async (req: Request) => {
             msgId: m?.id ?? null,
           };
 
+          // Marca como lida e liga o "a escrever…" antes de tratar. É o sinal
+          // que faz o utilizador sentir que há alguém do outro lado.
+          await marcarALer(m?.id ?? null);
+
           // Motorista primeiro: "ACEITAR xxxx" tem de funcionar em qualquer estado.
           const tratadoComoMotorista = await tratarMotorista(supabaseAdmin, msg);
           if (tratadoComoMotorista) continue;
@@ -2560,10 +2801,15 @@ Deno.serve(async (req: Request) => {
           if (!texto && msg.lat === null) {
             await sendWhatsAppMessage(
               telefone,
-              'Recebi a tua mensagem, mas ainda não sei ler esse tipo de conteúdo. Escreve *corrida* ou manda a tua localização em 📎 → *Localização*.',
+              'Recebi a tua mensagem, mas ainda não sei ler esse tipo de conteúdo. ' +
+                'Escreve *corrida* ou manda a tua localização em 📎 → *Localização*.',
             );
             continue;
           }
+
+          // Uma resposta instantânea parece script — sobretudo quando a
+          // pergunta era longa. Pequena pausa antes de responder.
+          await pausaHumana(texto);
 
           await tratarPassageiro(supabaseAdmin, msg);
         }

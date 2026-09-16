@@ -3,7 +3,7 @@
 //
 // Voz bidirecional do Kaze via **Gemini Live API** (áudio-para-áudio).
 //
-// MODELO: gemini-2.5-flash-native-audio-latest
+// MODELO: gemini-3.8-live (vem do servidor, ver `gemini-proxy`)
 //   • entrada  PCM 16-bit, 16 kHz, little-endian
 //   • saída    PCM 16-bit, 24 kHz, little-endian
 //   • protocolo WebSocket stateful (gerido pelo SDK @google/genai)
@@ -12,6 +12,18 @@
 // O valor escrito aqui é só recurso para o caso de o servidor não o enviar.
 // Tem de ser um modelo que exista mesmo na conta e que suporte
 // `bidiGenerateContent`, senão o Kaze fica mudo sem dar erro.
+//
+// PORQUE ESTE FICHEIRO MUDOU (16/09)
+//   O servidor SEMPRE devolveu áudio — confirmado com o mesmo SDK em Node,
+//   sem browser: 180 480 bytes (~3,8 s) num único turno. O silêncio estava
+//   todo do lado do browser:
+//     1. os AudioContext nasciam depois de dois `await` (SDK + rede), fora do
+//        gesto do utilizador — em Safari o de saída ficava `suspended` para
+//        sempre, e o erro era engolido por um `.catch(() => {})`;
+//     2. o `interrupted` do servidor (barge-in) era aceite mesmo quando era
+//        apenas o microfone a ouvir o altifalante, cortando a fala no arranque.
+//   Ambos estão corrigidos abaixo, e `getAudioStats()` passa a tornar a cadeia
+//   observável — "não se ouve nada" deixou de ser uma caixa negra.
 //
 // SEGURANÇA
 //   A GEMINI_API_KEY nunca chega ao browser. Pedimos um *ephemeral token* ao
@@ -177,6 +189,35 @@ export interface KazeLiveSession {
   isMicEnabled(): boolean;
   /** Handle de resumption actual (para reconexão transparente). */
   getResumptionHandle(): string | null;
+  /**
+   * Contadores de diagnóstico da cadeia de voz.
+   *
+   * Existe porque "o Kaze não fala" pode ser três coisas diferentes — o
+   * servidor não mandou áudio, o browser bloqueou a saída, ou o barge-in cortou
+   * tudo — e sem números as três são indistinguíveis do lado de fora.
+   */
+  getAudioStats(): KazeAudioStats;
+}
+
+export interface KazeAudioStats {
+  /** Blocos de áudio que chegaram do servidor. */
+  blocosRecebidos: number;
+  /** Bytes de PCM recebidos (24 kHz, 16-bit mono → 48000 B/s). */
+  bytesRecebidos: number;
+  /** Blocos efectivamente agendados para reprodução. */
+  blocosReproduzidos: number;
+  /** Segundos de fala recebidos do servidor. */
+  segundosRecebidos: number;
+  /** Interrupções de barge-in aceites. */
+  interrupcoes: number;
+  /** Interrupções descartadas por serem eco do altifalante. */
+  interrupcoesIgnoradas: number;
+  /** `true` se o contexto de saída esteve suspenso em algum momento. */
+  contextoSuspenso: boolean;
+  /** Estado actual do AudioContext de saída. */
+  estadoSaida: string;
+  /** Último aviso relevante ('' se não houve). */
+  ultimoAviso: string;
 }
 
 // ─── Utilitários de áudio ─────────────────────────────────────────────────────
@@ -260,7 +301,63 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     throw new Error('Este dispositivo não suporta captura de microfone.');
   }
 
-  // ── 0b. Carregar o SDK só agora ───────────────────────────────────────────
+  // ── 0b. Contextos de áudio — criados JÁ, antes de qualquer await ─────────
+  //  A política de autoplay dos browsers só deixa criar/retomar um AudioContext
+  //  durante um gesto do utilizador. `startKazeLiveSession` é chamada a partir
+  //  de um clique, mas o `await import(...)` do SDK (~400 kB) e o pedido do
+  //  token à rede levam segundos — em Safari o gesto expira pelo caminho e o
+  //  contexto de SAÍDA ficava `suspended` para sempre.
+  //
+  //  Sintoma exacto: o servidor envia o áudio, o browser aceita os pacotes,
+  //  a transcrição aparece no ecrã — e não se ouve nada, sem um único erro na
+  //  consola. Criar os contextos aqui, de forma síncrona, é o que garante que
+  //  nascem dentro do gesto.
+  //
+  //  Entrada: 16 kHz para o formato exigido pela Live API.
+  //  Saída:   24 kHz para reproduzir o que o modelo devolve.
+  const AudioContextClass = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) {
+    throw new Error('Este browser não suporta processamento de áudio.');
+  }
+
+  const inputCtx = new AudioContextClass({ sampleRate: INPUT_SAMPLE_RATE });
+  const outputCtx = new AudioContextClass({ sampleRate: OUTPUT_SAMPLE_RATE });
+
+  const actualInputRate = inputCtx.sampleRate;
+
+  // Ganho mestre a 1. Existe para o caminho fonte -> ganho -> destino estar
+  // sempre montado num único sítio (e para um mudo futuro ser uma linha).
+  const masterGain = outputCtx.createGain();
+  masterGain.gain.value = 1;
+  masterGain.connect(outputCtx.destination);
+
+  /** Retoma os dois contextos e diz se o de SAÍDA ficou mesmo a correr. */
+  const garantirAudioActivo = async (): Promise<boolean> => {
+    if (inputCtx.state === 'suspended') await inputCtx.resume().catch(() => {});
+    if (outputCtx.state === 'suspended') await outputCtx.resume().catch(() => {});
+    return outputCtx.state === 'running';
+  };
+
+  // Desbloqueio clássico para iOS: reproduzir um buffer de 1 amostra dentro do
+  // gesto marca o contexto como autorizado. Sem isto o primeiro som real pode
+  // ser descartado pelo sistema, e os seguintes também.
+  try {
+    const unlock = outputCtx.createBufferSource();
+    unlock.buffer = outputCtx.createBuffer(1, 1, OUTPUT_SAMPLE_RATE);
+    unlock.connect(masterGain);
+    unlock.start(0);
+  } catch { /* cosmético — não pode impedir a sessão */ }
+
+  const audioLibertado = await garantirAudioActivo();
+  if (!audioLibertado) {
+    // Não desistimos: `enqueueAudio` volta a tentar retomar no primeiro bloco.
+    // Registar aqui é o que permite distinguir este caso nos diagnósticos.
+    console.warn(
+      '[kazeLiveClient] Saída de áudio suspensa logo no arranque — retomada tentada no primeiro bloco.',
+    );
+  }
+
+  // ── 0c. Carregar o SDK só agora ───────────────────────────────────────────
   //  Só depois de sabermos que o browser consegue capturar áudio é que vale a
   //  pena descarregar ~400 kB de SDK. Se falhar aqui, nada foi gasto.
   const { GoogleGenAI, Modality } = await import('@google/genai');
@@ -273,29 +370,15 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     token = (res as { ephemeral_token?: string; token?: string }).ephemeral_token
       ?? (res as { token?: string }).token
       ?? '';
-    model = (res as { model?: string }).model ?? 'gemini-2.5-flash-native-audio-latest';
+    model = (res as { model?: string }).model ?? 'gemini-3.8-live';
     if (!token) throw new Error('O servidor não devolveu um token de voz.');
   } catch (err) {
+    // Os contextos já existem — fechá-los antes de desistir.
+    void inputCtx.close().catch(() => {});
+    void outputCtx.close().catch(() => {});
     const msg = err instanceof Error ? err.message : 'Serviço de voz indisponível.';
     throw new Error(`Não foi possível iniciar a voz do Kaze. ${msg}`);
   }
-
-  // ── 2. Contextos de áudio ─────────────────────────────────────────────────
-  //  Entrada: 16 kHz para o formato exigido pela Live API.
-  //  Saída:   24 kHz para reproduzir o que o modelo devolve.
-  const AudioContextClass = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!AudioContextClass) {
-    throw new Error('Este browser não suporta processamento de áudio.');
-  }
-
-  const inputCtx = new AudioContextClass({ sampleRate: INPUT_SAMPLE_RATE });
-  const outputCtx = new AudioContextClass({ sampleRate: OUTPUT_SAMPLE_RATE });
-
-  // Autoplay policy: sem isto o primeiro som pode ser bloqueado.
-  if (inputCtx.state === 'suspended') await inputCtx.resume().catch(() => {});
-  if (outputCtx.state === 'suspended') await outputCtx.resume().catch(() => {});
-
-  const actualInputRate = inputCtx.sampleRate;
 
   // ── 3. Estado da sessão ───────────────────────────────────────────────────
   let closed = false;
@@ -306,6 +389,27 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
   let nextPlayTime = 0;
   const activeSources = new Set<AudioBufferSourceNode>();
   let speaking = false;
+
+  // ── Diagnóstico ───────────────────────────────────────────────────────────
+  //  Sem isto, "não se ouve nada" é indistinguível entre: o servidor não mandou
+  //  áudio, o browser bloqueou a saída, ou o barge-in cortou tudo. Estes
+  //  números são expostos por `getAudioStats()` e mostrados na interface.
+  const stats = {
+    blocosRecebidos: 0,
+    bytesRecebidos: 0,
+    blocosReproduzidos: 0,
+    interrupcoes: 0,
+    interrupcoesIgnoradas: 0,
+    contextoSuspenso: false,
+    ultimoAviso: '' as string,
+  };
+  let jaAvisouBloqueio = false;
+  let inicioFalaAtual = 0;
+
+  /** Instante em que a fala actual começou (0 = não está a falar). */
+  const registarInicioFala = () => {
+    if (inicioFalaAtual === 0) inicioFalaAtual = Date.now();
+  };
 
   let micStream: MediaStream | null = null;
   let micSource: MediaStreamAudioSourceNode | null = null;
@@ -325,14 +429,34 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     });
     activeSources.clear();
     nextPlayTime = 0;
+    inicioFalaAtual = 0;
     setSpeaking(false);
   };
+
+  /**
+   * O `interrupted` do servidor é barge-in a sério, ou é o microfone a ouvir o
+   * próprio altifalante?
+   *
+   * O `echoCancellation` do browser ajuda, mas em telemóvel com o volume alto
+   * não chega: o Kaze começa a falar, o mic capta a voz dele, o servidor conclui
+   * "o utilizador interrompeu" e o cliente corta o áudio. Repetido a cada turno,
+   * o resultado é um Kaze sempre mudo que responde só por escrito — exactamente
+   * o sintoma reportado.
+   *
+   * Uma interrupção nos primeiros 400 ms de fala é eco, não intenção: ninguém
+   * interrompe antes de ter ouvido o que quer que seja.
+   */
+  const interrupcaoEhEco = (): boolean =>
+    inicioFalaAtual > 0 && Date.now() - inicioFalaAtual < 400;
 
   /** Descarrega e agenda um bloco de PCM 24 kHz vindo do modelo. */
   const enqueueAudio = (base64: string) => {
     if (closed) return;
     try {
       const bytes = base64ToBytes(base64);
+      stats.blocosRecebidos += 1;
+      stats.bytesRecebidos += bytes.byteLength;
+
       // O buffer pode ter comprimento ímpar se houver padding; truncar é seguro.
       const usable = bytes.byteLength - (bytes.byteLength % 2);
       const pcm = new Int16Array(bytes.buffer, bytes.byteOffset, usable / 2);
@@ -345,10 +469,15 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
 
       const src = outputCtx.createBufferSource();
       src.buffer = buffer;
-      src.connect(outputCtx.destination);
+      // Pelo ganho mestre, não directo ao destino: assim há um só ponto onde o
+      // caminho pode ser quebrado (ou silenciado), e é fácil de inspeccionar.
+      src.connect(masterGain);
       src.onended = () => {
         activeSources.delete(src);
-        if (activeSources.size === 0) setSpeaking(false);
+        if (activeSources.size === 0) {
+          setSpeaking(false);
+          inicioFalaAtual = 0;
+        }
       };
 
       // Agenda em sequência para não haver sobreposição nem buracos.
@@ -356,9 +485,24 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
       src.start(startAt);
       nextPlayTime = startAt + buffer.duration;
       activeSources.add(src);
+      stats.blocosReproduzidos += 1;
+      registarInicioFala();
       setSpeaking(true);
+
+      // Aviso único: chegou áudio mas o browser não o vai tocar. É a única
+      // falha desta cadeia que é silenciosa por natureza — por isso é a única
+      // que vale a pena reportar ao utilizador.
+      if (outputCtx.state !== 'running' && !jaAvisouBloqueio) {
+        stats.contextoSuspenso = true;
+        stats.ultimoAviso = 'O browser bloqueou a saída de áudio.';
+        jaAvisouBloqueio = true;
+        void garantirAudioActivo().then((activo) => {
+          if (!activo) callbacks.onError?.(stats.ultimoAviso);
+        });
+      }
     } catch (err) {
       console.warn('[kazeLiveClient] Falha ao enfileirar áudio:', err);
+      stats.ultimoAviso = 'Falha ao processar o áudio recebido.';
     }
   };
 
@@ -403,6 +547,16 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     callbacks: {
       onopen: () => {
         if (closed) return;
+        // O socket abriu — vale a pena voltar a confirmar que a SAÍDA está
+        // viva. Se o browser a tiver suspenso entretanto, é aqui que se
+        // recupera, antes de chegar o primeiro bloco de áudio.
+        void garantirAudioActivo().then((activo) => {
+          stats.contextoSuspenso = !activo;
+          if (!activo) {
+            stats.ultimoAviso = 'O browser bloqueou a saída de áudio.';
+            console.warn('[kazeLiveClient] Contexto de saída suspenso no arranque da sessão.');
+          }
+        });
         callbacks.onReady?.();
       },
 
@@ -454,9 +608,17 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
         if (!content) return;
 
         // Barge-in: o utilizador falou por cima → cortar imediatamente.
+        // A não ser que seja eco do altifalante — cortar aí é o que deixava o
+        // Kaze mudo (ver `interrupcaoEhEco`).
         if (content.interrupted) {
-          flushPlayback();
-          callbacks.onInterrupted?.();
+          if (interrupcaoEhEco()) {
+            stats.interrupcoesIgnoradas += 1;
+            console.info('[kazeLiveClient] Interrupção ignorada: eco nos primeiros 400 ms.');
+          } else {
+            stats.interrupcoes += 1;
+            flushPlayback();
+            callbacks.onInterrupted?.();
+          }
         }
 
         // Transcrição do utilizador
@@ -617,6 +779,21 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
 
     getResumptionHandle() {
       return resumptionHandle;
+    },
+
+    getAudioStats(): KazeAudioStats {
+      return {
+        blocosRecebidos: stats.blocosRecebidos,
+        bytesRecebidos: stats.bytesRecebidos,
+        blocosReproduzidos: stats.blocosReproduzidos,
+        // 24 kHz, 16-bit mono = 48 000 bytes por segundo.
+        segundosRecebidos: Number((stats.bytesRecebidos / 48_000).toFixed(2)),
+        interrupcoes: stats.interrupcoes,
+        interrupcoesIgnoradas: stats.interrupcoesIgnoradas,
+        contextoSuspenso: stats.contextoSuspenso,
+        estadoSaida: outputCtx.state,
+        ultimoAviso: stats.ultimoAviso,
+      };
     },
   };
 }

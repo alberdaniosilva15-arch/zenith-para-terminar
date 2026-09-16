@@ -24,7 +24,7 @@ import {
   getAvailableMicrophones,
   AudioInputDevice,
 } from '../lib/kazeAudioRecorder';
-import { startKazeLiveSession, KazeLiveSession } from '../lib/kazeLiveClient';
+import { startKazeLiveSession, KazeLiveSession, KazeAudioStats } from '../lib/kazeLiveClient';
 
 interface KazeMascotProps {
   role:            UserRole;
@@ -151,6 +151,10 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   const [kazeSpeaking, setKazeSpeaking] = useState(false);
   const [liveToolHint, setLiveToolHint] = useState<string | null>(null);
   const [liveMicOn,    setLiveMicOn]    = useState(true);
+  // Contadores da cadeia de áudio da voz (blocos recebidos, segundos, estado
+  // do AudioContext). Sem isto, "o Kaze não fala" era uma caixa negra: não se
+  // sabia se o servidor não mandou áudio ou se o browser o bloqueou.
+  const [liveStats,    setLiveStats]    = useState<KazeAudioStats | null>(null);
 
   const [liveGpsCoords,   setLiveGpsCoords]   = useState<LatLng | null>(userLocation || null);
   const [liveGpsAddress,  setLiveGpsAddress]  = useState<string | null>(null);
@@ -414,6 +418,22 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   // Manter os refs da sessão Live apontados ao render mais recente.
   useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
   useEffect(() => { executeActionRef.current = executeAppAction; }, [executeAppAction]);
+
+  // Diagnóstico da voz: com a sessão Live aberta, ler os contadores de áudio
+  // uma vez por segundo. É o que permite dizer no ecrã de onde vem o silêncio:
+  //   blocosRecebidos = 0                -> o servidor não mandou áudio;
+  //   blocosRecebidos > 0, estado != run -> o browser bloqueou a saída;
+  //   interrupcoes a subir               -> o barge-in está a cortar a fala.
+  useEffect(() => {
+    if (!isLive) {
+      setLiveStats(null);
+      return;
+    }
+    const id = window.setInterval(() => {
+      setLiveStats(kazeLiveRef.current?.getAudioStats() ?? null);
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [isLive]);
 
   // ── Envio de Texto / Comando ───────────────────────────────────────────────
   const handleSendText = async (e?: React.FormEvent, customText?: string) => {
@@ -1312,6 +1332,30 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
 
                 {liveToolHint && (
                   <p className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>{liveToolHint}…</p>
+                )}
+
+                {/* Diagnóstico da cadeia de voz. Diz de onde vem o silêncio:
+                    0 blocos = o servidor não mandou áudio; blocos > 0 com a
+                    saída bloqueada = o browser recusou tocar. */}
+                {isLive && liveStats && (
+                  <p
+                    className="zr-meta"
+                    style={{
+                      margin: 0,
+                      textAlign: 'center',
+                      maxWidth: '320px',
+                      color:
+                        liveStats.blocosRecebidos === 0 || liveStats.estadoSaida !== 'running'
+                          ? 'var(--danger)'
+                          : 'var(--copy-muted)',
+                    }}
+                  >
+                    {liveStats.blocosRecebidos === 0
+                      ? 'Ainda sem áudio do servidor…'
+                      : `🔊 ${liveStats.segundosRecebidos}s de fala recebidos`}
+                    {liveStats.estadoSaida !== 'running' ? ' · ⚠️ saída bloqueada pelo browser' : ''}
+                    {liveStats.interrupcoes > 0 ? ` · ${liveStats.interrupcoes} interrupções` : ''}
+                  </p>
                 )}
 
                 {!isLive && (
