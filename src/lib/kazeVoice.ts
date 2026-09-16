@@ -29,6 +29,22 @@ export interface NativeTTSSpeakResult {
   /** `gemini_tts` = voz do Gemini. `none` = não se falou (falha ou Live activo).
    *  `native_tts` mantém-se no tipo por compatibilidade — já não é produzido. */
   source: 'gemini_tts' | 'native_tts' | 'none';
+  /**
+   * Porque é que não se falou. Só existe quando `source === 'none'`.
+   *
+   * Existe porque o silêncio era indistinguível: "não se ouviu nada" tanto podia
+   * ser o Live a mandar, como o servidor a recusar, como o browser a bloquear o
+   * áudio. Sem isto, um botão que falha fica mudo e ninguém sabe porquê.
+   */
+  motivo?:
+    | 'texto_vazio'
+    | 'live_activo'
+    | 'sem_web_audio'
+    | 'servidor'
+    | 'audio_vazio'
+    | 'substituido';
+  /** Mensagem crua do servidor, quando o motivo é `servidor`. */
+  detalhe?: string;
 }
 
 // ─── Estado do motor de fala ─────────────────────────────────────────────────
@@ -474,14 +490,14 @@ export async function kazeSpeak(
   _elevenLabsApiKey: string | null = null,
 ): Promise<NativeTTSSpeakResult | undefined> {
   const clean = cleanTextForSpeech(text, 600);
-  if (!clean) return { source: 'none' };
+  if (!clean) return { source: 'none', motivo: 'texto_vazio' };
 
   // Uma sessão Live já tem a voz do Kaze a correr. Falar por cima daria duas
   // vozes em simultâneo — e a do Live é a que interessa.
   if (liveVoiceAtivo) {
     kazeDiagContadores.ttsTravadoPorLive += 1;
     kazeDiag('tts:travado_por_live', { origem: 'tts', texto: clean.slice(0, 40) });
-    return { source: 'none' };
+    return { source: 'none', motivo: 'live_activo' };
   }
 
   kazeStop();
@@ -498,15 +514,17 @@ export async function kazeSpeak(
   const ctx = obterContexto();
   if (!ctx) {
     console.warn('[KAZE TTS] Web Audio indisponível neste browser.');
-    return { source: 'none' };
+    return { source: 'none', motivo: 'sem_web_audio' };
   }
 
   let resposta: KazeTtsResposta;
   try {
     resposta = await kazeTts(clean);
   } catch (err) {
+    const detalhe = err instanceof Error ? err.message : String(err);
     console.warn('[KAZE TTS] Voz do Gemini indisponível:', err);
-    return { source: 'none' };
+    kazeDiag('tts:falhou', { origem: 'tts', pedido: meu, detalhe });
+    return { source: 'none', motivo: 'servidor', detalhe };
   }
 
   kazeDiag('tts:audio_recebido', {
@@ -523,18 +541,20 @@ export async function kazeSpeak(
   // resposta a uma pergunta que já passou.
   if (meu !== pedidoAtual) {
     kazeDiag('tts:descartado', { origem: 'tts', pedido: meu, pedidoAtual });
-    return { source: 'none' };
+    return { source: 'none', motivo: 'substituido' };
   }
 
   const amostras = pcmBase64ParaAmostras(resposta.audio);
   if (!amostras.length) {
     console.warn('[KAZE TTS] O servidor devolveu áudio vazio.');
-    return { source: 'none' };
+    return { source: 'none', motivo: 'audio_vazio' };
   }
 
   const taxa = resposta.sample_rate || TTS_SAMPLE_RATE;
   const completa = await reproduzir(ctx, amostras, taxa, meu);
-  return { source: completa ? 'gemini_tts' : 'none' };
+  return completa
+    ? { source: 'gemini_tts' }
+    : { source: 'none', motivo: 'substituido' };
 }
 
 /**

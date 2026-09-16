@@ -58,6 +58,12 @@ export const SettingsTab: React.FC = () => {
   //  ser enganador — o botão "Testar" tocava sempre a voz do Gemini, ignorando
   //  o que estivesse escolhido na lista.
   const [voiceTesting, setVoiceTesting] = useState(false);
+  /**
+   * Resultado do último teste de voz. Sem isto, um botão que falha fica mudo e
+   * a única informação disponível é "não se ouviu nada" — que tanto pode ser o
+   * servidor a recusar, como o Live a mandar, como o browser a bloquear o som.
+   */
+  const [voiceTestMsg, setVoiceTestMsg] = useState<{ ok: boolean; texto: string } | null>(null);
 
   const fetchIaModels = async () => {
     const provider = normalizeProvider(iaProvider);
@@ -118,8 +124,29 @@ export const SettingsTab: React.FC = () => {
    */
   const testVoice = async () => {
     setVoiceTesting(true);
+    setVoiceTestMsg(null);
     try {
-      await kazeSpeak('Kaze operacional. Núcleo sincronizado. Pronto para servir.');
+      const r = await kazeSpeak('Kaze operacional. Núcleo sincronizado. Pronto para servir.');
+
+      if (r?.source === 'gemini_tts') {
+        setVoiceTestMsg({ ok: true, texto: 'Voz do Gemini a tocar. Está operacional.' });
+        return;
+      }
+
+      const razoes: Record<string, string> = {
+        texto_vazio: 'O texto ficou vazio depois da limpeza.',
+        live_activo:
+          'Há uma sessão de Voz Ao Vivo aberta — a voz pertence-lhe. Fecha-a e tenta outra vez.',
+        sem_web_audio: 'Este browser não disponibilizou o Web Audio.',
+        servidor: 'O servidor recusou a síntese.',
+        audio_vazio: 'O servidor respondeu, mas sem áudio.',
+        substituido: 'A fala foi substituída ou cortada antes de tocar.',
+      };
+      const base = razoes[r?.motivo ?? ''] ?? 'Não se ouviu nada e não ficou motivo registado.';
+      setVoiceTestMsg({
+        ok: false,
+        texto: r?.detalhe ? `${base} Resposta do servidor: ${r.detalhe}` : base,
+      });
     } finally {
       setVoiceTesting(false);
     }
@@ -177,6 +204,17 @@ export const SettingsTab: React.FC = () => {
               A configuração da voz é feita no servidor, por variável de ambiente.
             </span>
           </div>
+
+          {voiceTestMsg && (
+            <p
+              className="mt-4 text-xs leading-relaxed"
+              style={{ color: voiceTestMsg.ok ? '#4ade80' : '#f87171' }}
+              role="status"
+            >
+              {voiceTestMsg.ok ? '✓ ' : '✕ '}
+              {voiceTestMsg.texto}
+            </p>
+          )}
         </section>
 
         {/* ========== AI PROVIDER ========== */}

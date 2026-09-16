@@ -61,11 +61,34 @@ export const kazeDiagContadores = {
   ttsTravadoPorLive: 0,
 };
 
+/**
+ * Escrever no console serve durante a verificação e atrapalha depois: o Live
+ * entrega o áudio em blocos e um `console.log` por bloco atrasa a reprodução
+ * — no telemóvel nota-se. O registo em memória mantém-se SEMPRE (é o que
+ * `window.__kazeDiag.recolha()` lê); só a escrita é que se cala.
+ *
+ * Desligar: `localStorage.setItem('kaze_diag_off', '1')` e recarregar.
+ */
+let escreverNoConsole: boolean | null = null;
+
+function deveEscreverNoConsole(): boolean {
+  if (escreverNoConsole === null) {
+    try {
+      escreverNoConsole =
+        typeof localStorage === 'undefined' || localStorage.getItem('kaze_diag_off') !== '1';
+    } catch {
+      escreverNoConsole = true;
+    }
+  }
+  return escreverNoConsole;
+}
+
 /** Escreve um evento. Devolve-o, para quem quiser encadear. */
 export function kazeDiag(ev: string, dados: Record<string, unknown> = {}): KazeDiagEvento {
   const evento: KazeDiagEvento = { n: ++seq, ms: Date.now() - t0, ev, ...dados };
   eventos.push(evento);
   if (eventos.length > LIMITE) eventos.shift();
+  if (!deveEscreverNoConsole()) return evento;
   try {
     console.log('[KAZE DIAG] ' + JSON.stringify(evento));
   } catch {
