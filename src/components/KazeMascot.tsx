@@ -923,6 +923,9 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         motivo: 'ja_existe_sessao_ou_arranque_em_curso',
         isLive,
       });
+      // Antes isto era um `return` seco. Se o arranque anterior tivesse ficado
+      // pendurado, o botão parecia avariado e não havia nada no ecrã a dizê-lo.
+      setVoiceError('A voz ainda está a ligar. Aguarda um instante e tenta outra vez.');
       return;
     }
     arranqueLiveRef.current = true;

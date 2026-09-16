@@ -129,6 +129,18 @@ const INPUT_SAMPLE_RATE = 16_000;  // exigido pela Live API
 const OUTPUT_SAMPLE_RATE = 24_000; // devolvido pela Live API
 const MIC_BUFFER_FRAMES = 2048;    // ~128 ms a 16 kHz — equilíbrio latência/custo
 
+/**
+ * Tecto para o `ai.live.connect`.
+ *
+ * O pedido do token já está limitado a 8 s pelo `callProxy`, mas o handshake do
+ * WebSocket não tinha limite NENHUM. Se ele nunca abrir, esta promessa nunca
+ * resolve — e o `finally` do mascote nunca corre. O cadeado `arranqueLiveRef`
+ * fica então fechado PARA SEMPRE: o botão prende em "A ligar o Kaze…" e todos
+ * os toques seguintes são recusados em silêncio. A voz parece avariada até se
+ * recarregar a página, sem um único erro no ecrã.
+ */
+const CONNECT_TIMEOUT_MS = 20_000;
+
 // ─── API pública ──────────────────────────────────────────────────────────────
 
 export interface KazeLiveToolCall {
@@ -582,7 +594,7 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
 
   const rideHint = hasActiveRide ? '\n[O passageiro tem uma corrida activa neste momento.]' : '';
 
-  const session = await ai.live.connect({
+  const conexao = ai.live.connect({
     model,
     config: {
       responseModalities: [Modality.AUDIO],
@@ -792,6 +804,46 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
       },
     },
   });
+
+  // ── 4b. Esperar pela sessão COM prazo ─────────────────────────────────────
+  //  Sem isto, um handshake que não completa deixava o arranque pendurado para
+  //  sempre (ver `CONNECT_TIMEOUT_MS`). Se o prazo estourar, fechamos os dois
+  //  contextos e lançamos — assim o mascote mostra o erro e abre o cadeado.
+  let expirou = false;
+  const session = await (async () => {
+    let temporizador: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        conexao,
+        new Promise<never>((_, reject) => {
+          temporizador = setTimeout(() => {
+            expirou = true;
+            reject(new Error(
+              'O servidor de voz não respondeu a tempo. Verifica a ligação e tenta outra vez.',
+            ));
+          }, CONNECT_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      void inputCtx.close().catch(() => {});
+      void outputCtx.close().catch(() => {});
+      throw err;
+    } finally {
+      if (temporizador) clearTimeout(temporizador);
+    }
+  })();
+
+  // Uma ligação que chegue DEPOIS de termos desistido não pode ficar viva sem
+  // ninguém a apontar para ela — microfone e contexto próprios, a falar por
+  // cima da tentativa seguinte.
+  void conexao
+    .then((s) => {
+      if (expirou) {
+        kazeDiag('live:conexao_tardia_fechada', { sid, origem: 'live' });
+        try { s.close(); } catch { /* já fechada */ }
+      }
+    })
+    .catch(() => { /* o erro já foi tratado acima */ });
 
   // ── 5. Captura de microfone ───────────────────────────────────────────────
   const startMic = async () => {
