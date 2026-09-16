@@ -8,6 +8,7 @@ import RideChat from './RideChat';
 import type { RideState } from '../types';
 import { RideStatus } from '../types';
 import { useAppStore } from '../store/useAppStore';
+import ErrorBoundary from './ErrorBoundary';
 
 const AgoraCall = React.lazy(() => import('./AgoraCall'));
 
@@ -92,15 +93,25 @@ const DriverActiveCard: React.FC<DriverActiveCardProps> = ({ ride, driverId, onA
           Comunicação Segura & Ferramentas
         </p>
 
-        {/* VoIP Agora */}
-        <Suspense fallback={<div className="h-11 bg-white/5 rounded-2xl animate-pulse" />}>
-          <AgoraCall
-            corridaId={ride.rideId}
-            userId={driverId}
-            peerName={passengerName}
-            onEndCall={() => {}}
-          />
-        </Suspense>
+        {/* VoIP Agora — isolado: falha de WebRTC/microfone não quebra o cockpit */}
+        <ErrorBoundary
+          name="AgoraCall"
+          compact
+          fallback={
+            <p className="text-[10px] text-white/40 font-bold text-center px-2">
+              Chamada de voz indisponível. Usa o chat para contactar o passageiro.
+            </p>
+          }
+        >
+          <Suspense fallback={<div className="h-11 bg-white/5 rounded-2xl animate-pulse" />}>
+            <AgoraCall
+              corridaId={ride.rideId}
+              userId={driverId}
+              peerName={passengerName}
+              onEndCall={() => {}}
+            />
+          </Suspense>
+        </ErrorBoundary>
 
         {/* Barra de 2 colunas: Chat e Live Share */}
         <div className="grid grid-cols-2 gap-2">

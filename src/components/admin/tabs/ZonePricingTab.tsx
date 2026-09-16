@@ -1,24 +1,344 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { supabase } from '../../../lib/supabase';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Ligação ao motor de preço
+//
+// Estas são as colunas REAIS de `public.pricing_config`. A tab deixou de ser um
+// simulador: lê e escreve a linha activa — a mesma que a função
+// `calculate_fare_engine_pro` consulta para cobrar. O app, o bot do WhatsApp e
+// o Kaze apanham a alteração no pedido seguinte, sem deploy.
+//
+// Regra: uma chave por coluna. Não inventar nomes nem duplicar a fórmula aqui.
+// ─────────────────────────────────────────────────────────────────────────────
+const COLUNAS_PRECO = [
+  'base_fare_kz', 'rate_per_km_kz', 'rate_per_min_kz',
+  'surge_alpha', 'surge_max', 'traffic_threshold',
+  'fee_night_kz', 'fee_airport_kz', 'fee_traffic_kz', 'fee_cancel_kz',
+  'platform_commission',
+  'wl_talatona', 'wl_miramar', 'wl_alvalade', 'wl_patriota', 'wl_viana', 'wl_cacuaco',
+  'wl_default', 'wl_standard', 'wl_premium', 'wl_eco',
+  'u_standard', 'u_vip', 'u_problematic', 'u_new',
+] as const;
+
+type ColunaPreco = (typeof COLUNAS_PRECO)[number];
+type Precos = Record<ColunaPreco, number>;
+
+// Iguais aos DEFAULT da tabela — valem só até a linha real chegar.
+const PRECOS_PADRAO: Precos = {
+  base_fare_kz: 300, rate_per_km_kz: 182, rate_per_min_kz: 15,
+  surge_alpha: 0.5, surge_max: 2.5, traffic_threshold: 1.3,
+  fee_night_kz: 200, fee_airport_kz: 500, fee_traffic_kz: 150, fee_cancel_kz: 300,
+  platform_commission: 0.15,
+  wl_talatona: 1.4, wl_miramar: 1.2, wl_alvalade: 1.2, wl_patriota: 1.4,
+  wl_viana: 0.9, wl_cacuaco: 0.9, wl_default: 1.0, wl_standard: 1.0,
+  wl_premium: 1.8, wl_eco: 0.8,
+  u_standard: 1.0, u_vip: 0.85, u_problematic: 1.3, u_new: 1.0,
+};
+
+type EstadoDb = 'a-carregar' | 'pronto' | 'a-guardar' | 'guardado' | 'erro';
+
+interface OptsSlider {
+  min: number;
+  max: number;
+  step: number;
+  escala?: number;   // multiplica o valor da BD para dar a posição do slider
+  exibir?: number;   // multiplica a posição para dar o número mostrado
+  dec?: number;
+  sufixo: string;
+}
+
+const formatarData = (iso: string): string => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString('pt-AO', { dateStyle: 'short', timeStyle: 'short' });
+};
+
+// Linha de `zone_prices` + o preço que o motor calcularia para a mesma viagem
+// (vem da função `zone_price_suggestions`).
+interface LinhaZona {
+  id: string;
+  origin_zone: string;
+  dest_zone: string;
+  price_kz: number;
+  distance_km: number | null;
+  active: boolean;
+  formula_price_kz: number | null;
+  zone_multiplier: number | null;
+  badges: string[] | null;
+}
+
+type CamposZona = Partial<Pick<LinhaZona, 'price_kz' | 'distance_km' | 'active'>>;
+
+// Quanto é que a tarifa fixa está acima (ou abaixo) do preço da fórmula.
+const desvioPct = (fixo: number, formula: number | null): number | null =>
+  formula && formula > 0 ? Math.round(((fixo - formula) / formula) * 100) : null;
 
 export const ZonePricingTab: React.FC = () => {
   const [activeTab, setActiveTab] = useState('calc');
   const [mode, setMode] = useState<'basic' | 'zenith' | 'hybrid'>('basic');
 
-  // Config
-  const [cfg, setCfg] = useState({
-    base: 300,
-    rd: 182,
-    rt: 15,
-    surgeMax: 2.5,
-    alpha: 0.5,
-    wlPremium: 1.4,
-    wlMid: 1.2,
-    wlLow: 0.9,
-    fNight: 200,
-    fAirport: 500,
-    fTraffic: 100,
-    fCancel: 150
-  });
+  // Configuração real de preços — uma chave por coluna de `pricing_config`.
+  const [precos, setPrecos] = useState<Precos>(PRECOS_PADRAO);
+  const [idConfig, setIdConfig] = useState<string | null>(null);
+  const [estadoDb, setEstadoDb] = useState<EstadoDb>('a-carregar');
+  const [msgDb, setMsgDb] = useState('');
+  const [guardadoEm, setGuardadoEm] = useState<string | null>(null);
+  const [porGuardar, setPorGuardar] = useState(false);
+
+  const aplicarLinha = (linha: Record<string, unknown>) => {
+    const lido: Precos = { ...PRECOS_PADRAO };
+    for (const c of COLUNAS_PRECO) {
+      const v = linha[c];
+      if (v !== null && v !== undefined) lido[c] = Number(v);
+    }
+    setIdConfig(String(linha.id));
+    setPrecos(lido);
+    setGuardadoEm((linha.updated_at as string | undefined) ?? null);
+    setEstadoDb('pronto');
+    setPorGuardar(false);
+  };
+
+  // `pricing_config` tem leitura pública ("pricing: leitura publica"), por isso
+  // a leitura funciona sempre. A escrita é que passa pela política
+  // "pricing: admin write", que exige users.role = 'admin'.
+  const lerDoBanco = async () => {
+    const { data, error } = await supabase
+      .from('pricing_config')
+      .select('*')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      setEstadoDb('erro');
+      setMsgDb(error.message);
+      return;
+    }
+    if (!data) {
+      setEstadoDb('erro');
+      setMsgDb('Não há nenhuma linha activa em pricing_config.');
+      return;
+    }
+    aplicarLinha(data as Record<string, unknown>);
+  };
+
+  useEffect(() => {
+    void lerDoBanco();
+    // Só na montagem: `lerDoBanco` é recriada a cada render mas só toca em
+    // setState e nas constantes do módulo.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const alterar = (coluna: ColunaPreco, valor: number) => {
+    setPrecos((prev) => ({ ...prev, [coluna]: valor }));
+    setPorGuardar(true);
+    if (estadoDb === 'guardado') setEstadoDb('pronto');
+  };
+
+  const guardarPrecos = async () => {
+    if (!idConfig) {
+      setEstadoDb('erro');
+      setMsgDb('Ainda não carreguei a configuração. Usa "Recarregar" e tenta de novo.');
+      return;
+    }
+    setEstadoDb('a-guardar');
+    setMsgDb('');
+
+    // `pricing_config` não tem trigger de `updated_at`, por isso escrevemo-lo.
+    const patch: Record<string, number | string> = {
+      updated_at: new Date().toISOString(),
+    };
+    for (const c of COLUNAS_PRECO) patch[c] = precos[c];
+
+    const { data, error } = await supabase
+      .from('pricing_config')
+      .update(patch)
+      .eq('id', idConfig)
+      .select('id, updated_at')
+      .maybeSingle();
+
+    if (error) {
+      setEstadoDb('erro');
+      setMsgDb(error.message);
+      return;
+    }
+
+    // Armadilha: quando o RLS bloqueia, o PostgREST responde 200 sem erro e com
+    // zero linhas. Sem isto o painel dizia "Guardado" sem ter gravado nada.
+    if (!data) {
+      setEstadoDb('erro');
+      setMsgDb(
+        'A base de dados não gravou nada. O mais provável é a tua conta não ter ' +
+          'role = admin — a política RLS "pricing: admin write" exige isso.',
+      );
+      return;
+    }
+
+    setGuardadoEm(
+      (data as { updated_at?: string } | null)?.updated_at ?? new Date().toISOString(),
+    );
+    setEstadoDb('guardado');
+    setPorGuardar(false);
+  };
+
+  const recarregar = async () => {
+    setEstadoDb('a-carregar');
+    setMsgDb('');
+    await lerDoBanco();
+  };
+
+  const textoEstado =
+    estadoDb === 'a-carregar'
+      ? 'A ler pricing_config…'
+      : estadoDb === 'a-guardar'
+        ? 'A gravar…'
+        : estadoDb === 'guardado'
+          ? `Guardado${guardadoEm ? ' · ' + formatarData(guardadoEm) : ''}`
+          : estadoDb === 'erro'
+            ? 'Sem ligação ao motor de preço'
+            : `Ligado ao motor de preço${guardadoEm ? ' · última alteração ' + formatarData(guardadoEm) : ''}${
+                porGuardar ? ' · alterações por guardar' : ''
+              }`;
+
+  // Linha de slider ligada a uma coluna real. É uma FUNÇÃO (não um componente)
+  // para o React não desmontar o <input> a cada render — isso cortava o arrasto.
+  const linhaSlider = (label: string, coluna: ColunaPreco, o: OptsSlider) => {
+    const escala = o.escala ?? 1;
+    const exibir = o.exibir ?? 1;
+    const dec = o.dec ?? 0;
+    // Arredondar a posição: em JS `0.15 * 100` dá 15.000000000000002, e não
+    // queremos mandar lixo para o `value` do <input>.
+    const posicao = Math.round(precos[coluna] * escala * 1000) / 1000;
+    return (
+      <div className="ze-sl-row" key={coluna}>
+        <span className="ze-sl-label">{label}</span>
+        <input
+          type="range"
+          min={o.min}
+          max={o.max}
+          step={o.step}
+          value={posicao}
+          onChange={(e) => alterar(coluna, (+e.target.value) / escala)}
+        />
+        <span className="ze-sl-val">
+          {(posicao * exibir).toFixed(dec)} {o.sufixo}
+        </span>
+      </div>
+    );
+  };
+
+  // ── Zonas fixas (zone_prices) ──────────────────────────────────────────────
+  // Estas tarifas têm PRIORIDADE sobre o motor: se existir um par de zonas, é
+  // este preço que o passageiro paga. Por isso o painel mostra ao lado o preço
+  // que o motor calcularia para a mesma viagem — para se ver se ainda faz sentido.
+  const [linhas, setLinhas] = useState<LinhaZona[]>([]);
+  const [estadoZonas, setEstadoZonas] = useState<EstadoDb>('a-carregar');
+  const [msgZonas, setMsgZonas] = useState('');
+  const [alteradas, setAlteradas] = useState<Record<string, CamposZona>>({});
+
+  const lerZonas = async () => {
+    const { data, error } = await supabase.rpc('zone_price_suggestions');
+    if (error) {
+      setEstadoZonas('erro');
+      setMsgZonas(error.message);
+      return;
+    }
+    setLinhas((data ?? []) as LinhaZona[]);
+    setAlteradas({});
+    setEstadoZonas('pronto');
+  };
+
+  useEffect(() => {
+    void lerZonas();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const editarZona = (id: string, campo: keyof CamposZona, valor: number | boolean) => {
+    setAlteradas((prev) => ({ ...prev, [id]: { ...prev[id], [campo]: valor } }));
+    setEstadoZonas('pronto');
+  };
+
+  const precoDe = (l: LinhaZona) => Number(alteradas[l.id]?.price_kz ?? l.price_kz);
+  const distDe = (l: LinhaZona) => Number(alteradas[l.id]?.distance_km ?? l.distance_km ?? 0);
+  const activaDe = (l: LinhaZona) => Boolean(alteradas[l.id]?.active ?? l.active);
+
+  const usarFormula = (l: LinhaZona) => {
+    if (l.formula_price_kz == null) return;
+    editarZona(l.id, 'price_kz', Number(l.formula_price_kz));
+  };
+
+  const usarFormulaEmTodas = () => {
+    const novas: Record<string, CamposZona> = {};
+    for (const l of linhas) {
+      if (l.formula_price_kz == null) continue;
+      novas[l.id] = { price_kz: Number(l.formula_price_kz) };
+    }
+    setAlteradas((prev) => ({ ...prev, ...novas }));
+    setEstadoZonas('pronto');
+  };
+
+  const guardarZonas = async () => {
+    const ids = Object.keys(alteradas);
+    if (ids.length === 0) {
+      setMsgZonas('Não há alterações para gravar.');
+      return;
+    }
+    setEstadoZonas('a-guardar');
+    setMsgZonas('');
+
+    const falhas: string[] = [];
+    for (const id of ids) {
+      const l = linhas.find((x) => x.id === id);
+      if (!l) continue;
+      const rotulo = `${l.origin_zone} → ${l.dest_zone}`;
+
+      const { data, error } = await supabase
+        .from('zone_prices')
+        .update({
+          price_kz: precoDe(l),
+          distance_km: distDe(l),
+          active: activaDe(l),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('id')
+        .maybeSingle();
+
+      if (error) {
+        falhas.push(`${rotulo}: ${error.message}`);
+      } else if (!data) {
+        // Mesma armadilha do pricing_config: o RLS bloqueia com 200 e zero linhas.
+        falhas.push(`${rotulo}: a base de dados não gravou (sem permissão de admin?)`);
+      }
+    }
+
+    await lerZonas();
+    if (falhas.length > 0) {
+      setEstadoZonas('erro');
+      setMsgZonas(falhas.join(' · '));
+    } else {
+      setEstadoZonas('guardado');
+      setMsgZonas(`${ids.length} tarifa(s) gravada(s).`);
+    }
+  };
+
+  const textoZonas =
+    estadoZonas === 'a-carregar'
+      ? 'A ler zone_prices…'
+      : estadoZonas === 'a-guardar'
+        ? 'A gravar…'
+        : estadoZonas === 'guardado'
+          ? 'Guardado'
+          : estadoZonas === 'erro'
+            ? 'Erro ao gravar'
+            : `${linhas.length} tarifas${Object.keys(alteradas).length > 0 ? ` · ${Object.keys(alteradas).length} por guardar` : ''}`;
+
+  const abaixoDaFormula = linhas.filter((l) => {
+    const d = desvioPct(precoDe(l), l.formula_price_kz);
+    return d != null && d < -5;
+  }).length;
 
   // Features
   const [features, setFeatures] = useState({
@@ -63,7 +383,7 @@ export const ZonePricingTab: React.FC = () => {
   // Computed Values - Calc
   const alphaVal = pAlpha / 10;
   const rawS = 1 + alphaVal * (pDemand / Math.max(pSupply, 1));
-  const S = Math.min(rawS, cfg.surgeMax);
+  const S = Math.min(rawS, precos.surge_max);
 
   let fare = 0;
   let formulaText = '';
@@ -193,6 +513,29 @@ export const ZonePricingTab: React.FC = () => {
         .ze-badge::before { content:''; width:5px; height:5px; border-radius:50%; background:currentColor; flex-shrink:0; }
         
         .ze-divider { border:none; border-top:0.5px solid var(--border); margin:14px 0; }
+        .ze-db-linha { display:flex; align-items:center; gap:8px; }
+        .ze-db-ponto { width:8px; height:8px; border-radius:50%; background:var(--text3); flex-shrink:0; }
+        .ze-db-ponto--pronto, .ze-db-ponto--guardado { background:var(--green); }
+        .ze-db-ponto--a-carregar, .ze-db-ponto--a-guardar { background:var(--amber); }
+        .ze-db-ponto--erro { background:var(--red); }
+        .ze-db-texto { font-size:12px; color:var(--text2); }
+        .ze-db-erro { margin-top:10px; font-size:12px; color:var(--red); line-height:1.6; word-break:break-word; }
+        .ze-db-ok { margin-top:10px; font-size:12px; color:var(--green); line-height:1.6; }
+        .ze-tbl-wrap { overflow-x:auto; }
+        .ze-tbl { width:100%; border-collapse:collapse; font-size:12px; }
+        .ze-tbl th { font-family:'DM Mono',monospace; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--text3); text-align:left; padding:6px 8px; border-bottom:0.5px solid var(--border2); white-space:nowrap; }
+        .ze-tbl td { padding:5px 8px; border-bottom:0.5px solid var(--border); color:var(--text2); white-space:nowrap; }
+        .ze-tbl tr.dirty td { background:rgba(255,170,0,.07); }
+        .ze-tbl tr.off td { opacity:.45; }
+        .ze-num { width:88px; background:var(--bg3); border:0.5px solid var(--border2); border-radius:5px; color:var(--text); font-family:'DM Mono',monospace; font-size:12px; padding:4px 6px; }
+        .ze-num:focus { outline:none; border-color:var(--accent); }
+        .ze-formula { font-family:'DM Mono',monospace; color:var(--text); }
+        .ze-delta-baixo { color:var(--red); }
+        .ze-delta-cima { color:var(--amber); }
+        .ze-delta-ok { color:var(--green); }
+        .ze-mini { font-family:'DM Mono',monospace; font-size:10px; padding:3px 8px; border:0.5px solid var(--border2); border-radius:5px; background:transparent; color:var(--text2); cursor:pointer; }
+        .ze-mini:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+        .ze-mini:disabled { opacity:.4; cursor:default; }
         
         .ze-nego-bar { position:relative; height:28px; background:var(--bg4); border-radius:6px; margin:8px 0; overflow:hidden; display:flex; }
         .ze-nego-zone { display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:500; font-family:'DM Mono',monospace; transition:width .3s; }
@@ -275,6 +618,7 @@ export const ZonePricingTab: React.FC = () => {
           {[
             { id: 'calc', label: 'Calculadora' },
             { id: 'formula', label: 'Fórmulas' },
+            { id: 'zonas', label: 'Zonas fixas' },
             { id: 'revenue', label: 'Receita & Lucro' },
             { id: 'risk', label: 'Riscos' },
             { id: 'audience', label: 'Audiência' },
@@ -705,20 +1049,218 @@ export const ZonePricingTab: React.FC = () => {
             </div>
           )}
 
+          {activeTab === 'zonas' && (
+            <div>
+              <div className="ze-card accent-border">
+                <div className="ze-section-title">tarifas fixas por par de zonas</div>
+                <div className="ze-db-linha">
+                  <span className={`ze-db-ponto ze-db-ponto--${estadoZonas}`}></span>
+                  <span className="ze-db-texto">{textoZonas}</span>
+                </div>
+                <div className="ze-btn-group" style={{ marginTop: '12px', marginBottom: 0 }}>
+                  <button
+                    className={`ze-btn ${Object.keys(alteradas).length > 0 ? 'active' : ''}`}
+                    onClick={guardarZonas}
+                    disabled={estadoZonas === 'a-carregar' || estadoZonas === 'a-guardar'}
+                  >
+                    {estadoZonas === 'a-guardar' ? 'A guardar…' : 'Guardar alterações'}
+                  </button>
+                  <button
+                    className="ze-btn"
+                    onClick={usarFormulaEmTodas}
+                    disabled={estadoZonas === 'a-carregar'}
+                  >
+                    Preencher todas com a fórmula
+                  </button>
+                  <button
+                    className="ze-btn"
+                    onClick={lerZonas}
+                    disabled={estadoZonas === 'a-carregar'}
+                  >
+                    Recarregar
+                  </button>
+                </div>
+                <div className="ze-insight-body" style={{ marginTop: '10px' }}>
+                  Estas tarifas <strong>têm prioridade sobre o motor de preço</strong>: quando existe
+                  um par de zonas, é este valor que o passageiro paga — no app e no bot do WhatsApp.
+                  A coluna "Fórmula" mostra o que o motor cobraria para a mesma viagem.
+                  {abaixoDaFormula > 0 && (
+                    <>
+                      {' '}
+                      <strong className="ze-delta-baixo">
+                        {abaixoDaFormula} tarifas estão mais de 5% abaixo da fórmula.
+                      </strong>
+                    </>
+                  )}
+                </div>
+                {msgZonas && (
+                  <div className={estadoZonas === 'erro' ? 'ze-db-erro' : 'ze-db-ok'}>{msgZonas}</div>
+                )}
+              </div>
+
+              <div className="ze-card">
+                <div className="ze-tbl-wrap">
+                  <table className="ze-tbl">
+                    <thead>
+                      <tr>
+                        <th>Origem</th>
+                        <th>Destino</th>
+                        <th>Dist. km</th>
+                        <th>Preço fixo</th>
+                        <th>Fórmula</th>
+                        <th>Zona</th>
+                        <th>Activa</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {linhas.map((l) => {
+                        const fixo = precoDe(l);
+                        const d = desvioPct(fixo, l.formula_price_kz);
+                        const sujo = Boolean(alteradas[l.id]);
+                        const classeDelta =
+                          d == null ? '' : d < -5 ? 'ze-delta-baixo' : d > 5 ? 'ze-delta-cima' : 'ze-delta-ok';
+                        return (
+                          <tr
+                            key={l.id}
+                            className={`${sujo ? 'dirty' : ''} ${activaDe(l) ? '' : 'off'}`}
+                          >
+                            <td>{l.origin_zone}</td>
+                            <td>{l.dest_zone}</td>
+                            <td>
+                              <input
+                                className="ze-num"
+                                type="number"
+                                min="0"
+                                step="0.5"
+                                value={distDe(l)}
+                                onChange={(e) => editarZona(l.id, 'distance_km', +e.target.value)}
+                              />
+                            </td>
+                            <td>
+                              <input
+                                className="ze-num"
+                                type="number"
+                                min="0"
+                                step="50"
+                                value={fixo}
+                                onChange={(e) => editarZona(l.id, 'price_kz', +e.target.value)}
+                              />
+                            </td>
+                            <td className="ze-formula">
+                              {l.formula_price_kz == null ? '—' : fmt(l.formula_price_kz)}
+                              {d != null && (
+                                <span className={classeDelta}>
+                                  {' '}
+                                  {d > 0 ? '+' : ''}
+                                  {d}%
+                                </span>
+                              )}
+                            </td>
+                            <td>{l.zone_multiplier != null ? `${l.zone_multiplier}×` : '—'}</td>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={activaDe(l)}
+                                onChange={(e) => editarZona(l.id, 'active', e.target.checked)}
+                              />
+                            </td>
+                            <td>
+                              <button
+                                className="ze-mini"
+                                onClick={() => usarFormula(l)}
+                                disabled={l.formula_price_kz == null}
+                              >
+                                usar fórmula
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {estadoZonas === 'a-carregar' && (
+                  <div className="ze-db-texto" style={{ marginTop: '10px' }}>
+                    A carregar…
+                  </div>
+                )}
+                {estadoZonas !== 'a-carregar' && linhas.length === 0 && (
+                  <div className="ze-db-texto" style={{ marginTop: '10px' }}>
+                    Não há tarifas fixas. O motor de preço trata de todas as viagens.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {activeTab === 'settings' && (
             <div>
+              <div className="ze-card accent-border">
+                <div className="ze-section-title">ligação ao motor de preço</div>
+                <div className="ze-db-linha">
+                  <span className={`ze-db-ponto ze-db-ponto--${estadoDb}`}></span>
+                  <span className="ze-db-texto">{textoEstado}</span>
+                </div>
+                <div className="ze-btn-group" style={{ marginTop: '12px', marginBottom: 0 }}>
+                  <button
+                    className={`ze-btn ${porGuardar ? 'active' : ''}`}
+                    onClick={guardarPrecos}
+                    disabled={estadoDb === 'a-carregar' || estadoDb === 'a-guardar'}
+                  >
+                    {estadoDb === 'a-guardar' ? 'A guardar…' : porGuardar ? 'Guardar preços •' : 'Guardar preços'}
+                  </button>
+                  <button
+                    className="ze-btn"
+                    onClick={recarregar}
+                    disabled={estadoDb === 'a-carregar' || estadoDb === 'a-guardar'}
+                  >
+                    Recarregar
+                  </button>
+                </div>
+                <div className="ze-insight-body" style={{ marginTop: '10px' }}>
+                  Estes valores são a linha activa de <strong>pricing_config</strong> — a mesma que a
+                  função <strong>calculate_fare_engine_pro</strong> usa para cobrar. O app, o bot do
+                  WhatsApp e o Kaze apanham a alteração no pedido seguinte, sem deploy.
+                </div>
+                {msgDb && <div className="ze-db-erro">{msgDb}</div>}
+              </div>
+
               <div className="ze-card">
-                <div className="ze-section-title">parâmetros de mercado personalizados</div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Tarifa base B</span><input type="range" min="100" max="1000" value={cfg.base} step="50" onChange={e => setCfg({ ...cfg, base: +e.target.value })} /><span className="ze-sl-val">{cfg.base} Kz</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Preço/km r_d</span><input type="range" min="50" max="500" value={cfg.rd} step="10" onChange={e => setCfg({ ...cfg, rd: +e.target.value })} /><span className="ze-sl-val">{cfg.rd} Kz</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Preço/min r_t</span><input type="range" min="5" max="80" value={cfg.rt} step="1" onChange={e => setCfg({ ...cfg, rt: +e.target.value })} /><span className="ze-sl-val">{cfg.rt} Kz</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Surge máximo</span><input type="range" min="15" max="50" value={cfg.surgeMax * 10} step="1" onChange={e => setCfg({ ...cfg, surgeMax: (+e.target.value) / 10 })} /><span className="ze-sl-val">{cfg.surgeMax.toFixed(1)}×</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Alpha (α) padrão</span><input type="range" min="1" max="15" value={cfg.alpha * 10} step="1" onChange={e => setCfg({ ...cfg, alpha: (+e.target.value) / 10 })} /><span className="ze-sl-val">{cfg.alpha.toFixed(1)}</span></div>
+                <div className="ze-section-title">tarifa base</div>
+                {linhaSlider('Tarifa base B', 'base_fare_kz', { min: 100, max: 1000, step: 50, sufixo: 'Kz' })}
+                {linhaSlider('Preço/km r_d', 'rate_per_km_kz', { min: 50, max: 500, step: 10, sufixo: 'Kz' })}
+                {linhaSlider('Preço/min r_t', 'rate_per_min_kz', { min: 5, max: 80, step: 1, sufixo: 'Kz' })}
+                {linhaSlider('Surge máximo', 'surge_max', { min: 15, max: 50, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Alpha (α) do surge', 'surge_alpha', { min: 1, max: 15, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '' })}
                 <div className="ze-divider"></div>
-                <div className="ze-section-title">presets de zonas (W_l)</div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Talatona</span><input type="range" min="10" max="25" value={cfg.wlPremium * 10} step="1" onChange={e => setCfg({ ...cfg, wlPremium: (+e.target.value) / 10 })} /><span className="ze-sl-val">{cfg.wlPremium.toFixed(1)}×</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Miramar / Centro</span><input type="range" min="10" max="20" value={cfg.wlMid * 10} step="1" onChange={e => setCfg({ ...cfg, wlMid: (+e.target.value) / 10 })} /><span className="ze-sl-val">{cfg.wlMid.toFixed(1)}×</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Periferia / Viana</span><input type="range" min="7" max="12" value={cfg.wlLow * 10} step="1" onChange={e => setCfg({ ...cfg, wlLow: (+e.target.value) / 10 })} /><span className="ze-sl-val">{cfg.wlLow.toFixed(1)}×</span></div>
+                <div className="ze-section-title">trânsito e comissão</div>
+                {linhaSlider('Limiar de trânsito', 'traffic_threshold', { min: 10, max: 30, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Comissão da plataforma', 'platform_commission', { min: 0, max: 30, step: 1, escala: 100, exibir: 1, dec: 0, sufixo: '%' })}
+              </div>
+
+              <div className="ze-card">
+                <div className="ze-section-title">pesos de zona (W_l)</div>
+                {linhaSlider('Talatona', 'wl_talatona', { min: 10, max: 25, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Miramar', 'wl_miramar', { min: 10, max: 20, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Alvalade', 'wl_alvalade', { min: 10, max: 20, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Patriota', 'wl_patriota', { min: 10, max: 25, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Viana', 'wl_viana', { min: 7, max: 12, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Cacuaco', 'wl_cacuaco', { min: 7, max: 12, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Outras zonas', 'wl_default', { min: 7, max: 20, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+              </div>
+
+              <div className="ze-card">
+                <div className="ze-section-title">escalões de serviço (C)</div>
+                {linhaSlider('Padrão', 'wl_standard', { min: 7, max: 20, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Premium', 'wl_premium', { min: 10, max: 30, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                {linhaSlider('Económico', 'wl_eco', { min: 5, max: 15, step: 1, escala: 10, exibir: 0.1, dec: 1, sufixo: '×' })}
+                <div className="ze-divider"></div>
+                <div className="ze-section-title">escalões de utilizador (U)</div>
+                {linhaSlider('Normal', 'u_standard', { min: 50, max: 150, step: 1, escala: 100, exibir: 0.01, dec: 2, sufixo: '×' })}
+                {linhaSlider('Novo', 'u_new', { min: 50, max: 150, step: 1, escala: 100, exibir: 0.01, dec: 2, sufixo: '×' })}
+                {linhaSlider('VIP', 'u_vip', { min: 50, max: 120, step: 1, escala: 100, exibir: 0.01, dec: 2, sufixo: '×' })}
+                {linhaSlider('Problemático', 'u_problematic', { min: 100, max: 200, step: 1, escala: 100, exibir: 0.01, dec: 2, sufixo: '×' })}
               </div>
 
               <div className="ze-card">
@@ -736,7 +1278,7 @@ export const ZonePricingTab: React.FC = () => {
                   <label className="ze-toggle"><input type="checkbox" checked={features.rec} onChange={e => setFeatures({ ...features, rec: e.target.checked })} /><div className="ze-toggle-track"></div><div className="ze-toggle-thumb"></div></label>
                 </div>
                 <div className="ze-toggle-wrap">
-                  <span className="ze-toggle-label">Surge cap (máximo {cfg.surgeMax.toFixed(1)}×)</span>
+                  <span className="ze-toggle-label">Surge cap (máximo {precos.surge_max.toFixed(1)}×)</span>
                   <label className="ze-toggle"><input type="checkbox" checked={features.cap} onChange={e => setFeatures({ ...features, cap: e.target.checked })} /><div className="ze-toggle-track"></div><div className="ze-toggle-thumb"></div></label>
                 </div>
                 <div className="ze-toggle-wrap">
@@ -755,15 +1297,25 @@ export const ZonePricingTab: React.FC = () => {
 
               <div className="ze-card">
                 <div className="ze-section-title">taxas extras configuráveis (F)</div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Taxa nocturna</span><input type="range" min="0" max="500" value={cfg.fNight} step="50" onChange={e => setCfg({ ...cfg, fNight: +e.target.value })} /><span className="ze-sl-val">{cfg.fNight} Kz</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Taxa aeroporto</span><input type="range" min="0" max="1000" value={cfg.fAirport} step="50" onChange={e => setCfg({ ...cfg, fAirport: +e.target.value })} /><span className="ze-sl-val">{cfg.fAirport} Kz</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Taxa tráfego intenso</span><input type="range" min="0" max="300" value={cfg.fTraffic} step="50" onChange={e => setCfg({ ...cfg, fTraffic: +e.target.value })} /><span className="ze-sl-val">{cfg.fTraffic} Kz</span></div>
-                <div className="ze-sl-row"><span className="ze-sl-label">Taxa cancellamento</span><input type="range" min="0" max="500" value={cfg.fCancel} step="50" onChange={e => setCfg({ ...cfg, fCancel: +e.target.value })} /><span className="ze-sl-val">{cfg.fCancel} Kz</span></div>
+                {linhaSlider('Taxa nocturna', 'fee_night_kz', { min: 0, max: 500, step: 50, sufixo: 'Kz' })}
+                {linhaSlider('Taxa aeroporto', 'fee_airport_kz', { min: 0, max: 1000, step: 50, sufixo: 'Kz' })}
+                {linhaSlider('Taxa tráfego intenso', 'fee_traffic_kz', { min: 0, max: 300, step: 50, sufixo: 'Kz' })}
+                {linhaSlider('Taxa de cancelamento', 'fee_cancel_kz', { min: 0, max: 500, step: 50, sufixo: 'Kz' })}
               </div>
 
               <div className="ze-insight">
-                <div className="ze-insight-title">Todos os parâmetros afectam a calculadora principal</div>
-                <div className="ze-insight-body">As configurações aqui definidas tornam-se os defaults da tab Calculadora. Ajusta conforme o mercado evolui.</div>
+                <div className="ze-insight-title">O que grava e o que não grava</div>
+                <div className="ze-insight-body">
+                  <strong>Grava:</strong> todos os sliders desta página vão para a tabela
+                  <strong> pricing_config</strong> quando carregas em "Guardar preços". É de lá que o
+                  motor de preço lê, por isso a alteração chega ao app, ao bot do WhatsApp e ao Kaze
+                  no pedido seguinte.
+                  <br /><br />
+                  <strong>Não grava:</strong> os interruptores de "Funcionalidades activas" são
+                  apenas desta calculadora — não têm coluna na base de dados. As tarifas fixas por
+                  par de zonas vivem noutra tabela (<strong>zone_prices</strong>), que esta página
+                  ainda não edita.
+                </div>
               </div>
             </div>
           )}

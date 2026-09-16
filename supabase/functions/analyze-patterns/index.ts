@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { timingSafeEqual } from 'node:crypto';
 import {
   applyCors,
   corsForbidden,
@@ -12,6 +13,33 @@ const CORS_OPTIONS = {
   methods: 'POST, OPTIONS',
   headers: 'authorization, content-type, x-cron-secret',
 };
+
+/**
+ * Comparação em tempo constante.
+ *
+ * Uma comparação normal (`a === b`) sai no primeiro byte diferente, o que
+ * permite a um atacante descobrir o segredo byte a byte medindo o tempo de
+ * resposta. Aqui comparamos sempre o mesmo número de bytes.
+ *
+ * As strings são preenchidas até ao mesmo comprimento antes de comparar, e o
+ * comprimento é verificado à parte, para que nem o tamanho do segredo vaze.
+ */
+function timingSafeSecretCompare(provided: string, expected: string): boolean {
+  const encoder = new TextEncoder();
+  const providedBytes = encoder.encode(provided);
+  const expectedBytes = encoder.encode(expected);
+  const length = Math.max(providedBytes.length, expectedBytes.length, 1);
+
+  const providedPadded = new Uint8Array(length);
+  const expectedPadded = new Uint8Array(length);
+  providedPadded.set(providedBytes);
+  expectedPadded.set(expectedBytes);
+
+  return (
+    timingSafeEqual(providedPadded, expectedPadded) &&
+    providedBytes.length === expectedBytes.length
+  );
+}
 
 interface CompletedRideRow {
   passenger_id: string | null;
@@ -214,11 +242,19 @@ Deno.serve(async (req: Request) => {
   }
   if (req.method !== 'POST') return json({ error: 'Metodo nao suportado.' }, 405, corsHeaders);
 
-  if (CRON_SECRET) {
-    const incomingSecret = req.headers.get('x-cron-secret');
-    if (incomingSecret !== CRON_SECRET) {
-      return json({ error: 'Nao autorizado.' }, 401, corsHeaders);
-    }
+  // ── Autenticação ─────────────────────────────────────────────────────────
+  // FAIL-CLOSED. Antes era `if (CRON_SECRET) { ...verificar... }`: quando a
+  // variável não estava definida, a verificação era simplesmente SALTADA e a
+  // função ficava aberta a qualquer pedido — com service_role lá dentro.
+  // Agora, sem segredo configurado, recusa-se tudo.
+  if (!CRON_SECRET) {
+    console.error('[analyze-patterns] CRON_SECRET nao definida — a recusar pedidos.');
+    return json({ error: 'Servico mal configurado.' }, 503, corsHeaders);
+  }
+
+  const incomingSecret = req.headers.get('x-cron-secret') ?? '';
+  if (!timingSafeSecretCompare(incomingSecret, CRON_SECRET)) {
+    return json({ error: 'Nao autorizado.' }, 401, corsHeaders);
   }
 
   try {

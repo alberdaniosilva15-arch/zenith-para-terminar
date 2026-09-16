@@ -220,8 +220,11 @@ async function transcribeWithGroq(
 // Usa prompt fortemente condicionado com contexto angolano para minimizar alucinações
 
 function getGeminiApiKeys(): string[] {
+  // A chave antiga do Gemini (VITE_GEMINI_API_KEY) foi revogada e removida do
+  // bundle — o caminho Google directo passou para o servidor. Este filtro só
+  // aceita chaves com prefixo `AIza` (Google), por isso a chave OpenRouter que
+  // resta aqui nunca é usada; a transcrição funciona pelo Groq/Whisper acima.
   const envKeys: (string | undefined)[] = [
-    import.meta.env.VITE_GEMINI_API_KEY,
     import.meta.env.VITE_IA_API_KEY,
   ];
   // Filtrar chaves válidas de ambiente

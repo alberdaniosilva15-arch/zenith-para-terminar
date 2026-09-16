@@ -1,21 +1,28 @@
 // =============================================================================
-// ZENITH RIDE v3.2 — PassengerHome.tsx
+// ZENITH RIDE v3.3 — PassengerHome.tsx
 // REFACTOR v3.2:
 //   1. GPS automático ao montar — mapa centra no utilizador sem clicar nada
 //   2. Rota REAL via Mapbox Directions API (distância por estrada, não Haversine)
 //   3. Rota DESENHADA no mapa com animação (usa mapRoutingLayer existente)
 //   4. Pesquisa de locais agora passa posição actual para resultados relevantes
 //   5. RoutePreview mostra dados REAIS (km por estrada, minutos com trânsito)
+//
+// REFACTOR v3.3 (SRP): UI extraída para componentes focados, mantendo este
+// ficheiro apenas como orquestrador de estado/efeitos do passageiro:
+//   • passenger/PassengerQuickAccess.tsx — carrossel de acesso rápido
+//   • passenger/PassengerMapSection.tsx  — mapa + controles + ErrorBoundary granular
+//   • passenger/PassengerModals.tsx      — modais secundários
+//
+// A interface pública <PassengerHome /> (PassengerHomeProps) permanece idêntica
+// à consumida por AuthenticatedApp.tsx.
 // =============================================================================
 
-import React, { useState, useCallback, useRef, useEffect, Suspense } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAutoScroll } from '../hooks/useAutoScroll';
 import { useAuth } from '../contexts/AuthContext';
 
 import LocationSearch from './passenger/LocationSearch';
 import RoutePreview from './passenger/RoutePreview';
-import { haversineMeters } from '../lib/geo';
 
 import RideRequestForm from './passenger/RideRequestForm';
 import ActiveRideCard from './passenger/ActiveRideCard';
@@ -23,16 +30,18 @@ import KazePreditivo  from './KazePreditivo';
 import FreePerkBanner from './FreePerkBanner';
 import NightSafetyBanner from './NightSafetyBanner';
 import MultiStopInput from './passenger/MultiStopInput';
-import PrivateDriverModal from './passenger/PrivateDriverModal';
-import CharterModal from './passenger/CharterModal';
-import CargoModal from './passenger/CargoModal';
-import { ReferralModal } from './ReferralModal';
+import PassengerQuickAccess from './passenger/PassengerQuickAccess';
+import PassengerMapSection from './passenger/PassengerMapSection';
+import PassengerModals from './passenger/PassengerModals';
+import type { PremiumServiceType } from './passenger/PassengerQuickAccess';
 import { usePassengerGPS } from '../hooks/usePassengerGPS';
 import { useNearbyDrivers } from '../hooks/useNearbyDrivers';
+import { usePassengerLiveRoute } from '../hooks/usePassengerLiveRoute';
+import { usePassengerSearch } from '../hooks/usePassengerSearch';
 import AuctionScreen from './passenger/AuctionScreen';
 
 import PanicButton from './PanicButton';
-import { mapService, LUANDA_STATIC_LOCATIONS } from '../services/mapService';
+import { mapService } from '../services/mapService';
 import { applyScoreDiscount, zonePriceService } from '../services/zonePrice';
 import { rideService } from '../services/rideService';
 import { routeService } from '../services/routeService';
@@ -42,8 +51,7 @@ import { useIdleMount } from '../hooks/useIdleMount';
 import { useAppStore } from '../store/useAppStore';
 import { useSilentTripleTap } from '../hooks/useSilentTripleTap';
 import { MapSingleton } from '../lib/mapInstance';
-import mapboxgl from 'mapbox-gl';
-import { createDriverMarkerElement } from '../lib/driverMarker';
+import type mapboxgl from 'mapbox-gl';
 import { drawRoute, clearRoute } from '../map/mapRoutingLayer';
 import type {
   RideState,
@@ -57,9 +65,6 @@ import type {
   ServiceType,
 } from '../types';
 import { RideStatus } from '../types';
-
-const ScheduleRide = React.lazy(() => import('./passenger/ScheduleRide'));
-const Map3D = React.lazy(() => import('./Map3D'));
 
 
 interface PassengerHomeProps {
@@ -92,7 +97,6 @@ interface RouteInfo {
 }
 
 type StandardVehicleType = Extract<ServiceType, 'standard' | 'moto' | 'comfort' | 'xl'>;
-type PremiumServiceType = Extract<ServiceType, 'private_driver' | 'charter' | 'cargo'>;
 
 const PassengerHome: React.FC<PassengerHomeProps> = ({
   ride, auction, userId,
@@ -102,10 +106,6 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
 }) => {
   const navigate = useNavigate();
   const showToast = useAppStore((s) => s.showToast);
-  const [selecting,    setSelecting]    = useState<'pickup' | 'dest' | null>(null);
-  const [searchQuery,  setSearchQuery]  = useState('');
-  const [results,      setResults]      = useState<LocationResult[]>([]);
-  const [searching,    setSearching]    = useState(false);
   const [pickupName,   setPickupName]   = useState(ride.pickup ?? '');
   const [pickupCoords, setPickupCoords] = useState<LatLng | null>(ride.pickupCoords ?? null);
   const [destName,     setDestName]     = useState(ride.destination ?? '');
@@ -129,9 +129,11 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [silentPanicSignal, setSilentPanicSignal] = useState(0);
   const [extraDropAddress, setExtraDropAddress] = useState<string | null>(null);
   const [extraDropCoords, setExtraDropCoords] = useState<LatLng | null>(null);
-  
-  const scrollRef = useRef<HTMLDivElement>(null);
-  useAutoScroll(scrollRef, 0.5);
+
+  // Extra-drops são enviados para o servidor no momento do pedido; mantidos aqui
+  // para o MultiStopInput poder limpá-los e para telemetria de UI.
+  void extraDropAddress; void extraDropCoords; void setExtraDropAddress; void setExtraDropCoords;
+  void dataSaver;
 
   const shouldMountMap = useIdleMount(isVisible);
   const hasActiveRideSafety =
@@ -147,7 +149,6 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     return false;
   }, [emergencyPhone, navigate, showToast]);
 
-  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const routeDrawnRef     = useRef(false); // evita redesenhar a mesma rota
 
   // ── GPS AUTOMÁTICO (hook extraído) ──
@@ -248,8 +249,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
         });
     }, 800);
 
-    return () => { 
-      cancelled = true; 
+    return () => {
+      cancelled = true;
       clearTimeout(timerId);
     };
   }, [pickupCoords, destCoords, isVisible]);
@@ -259,119 +260,8 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     routeDrawnRef.current = false;
   }, [pickupCoords?.lat, pickupCoords?.lng, destCoords?.lat, destCoords?.lng]);
 
-  // ── Rota activa e marcador do carro em tempo real com recálculo dinâmico ───
-  const driverMarkerRef = useRef<mapboxgl.Marker | null>(null);
-  const currentRouteCoordsRef = useRef<[number, number][]>([]);
-  const lastRecalcTimeRef = useRef<number>(0);
-  const [approachEtaMin, setApproachEtaMin] = useState<number | null>(null);
-
-  useEffect(() => {
-    const isActiveRide =
-      ride.status === RideStatus.ACCEPTED ||
-      ride.status === RideStatus.PICKING_UP ||
-      ride.status === RideStatus.IN_PROGRESS;
-
-    const map = MapSingleton.get();
-
-    if (!isActiveRide) {
-      if (driverMarkerRef.current) {
-        driverMarkerRef.current.remove();
-        driverMarkerRef.current = null;
-      }
-      currentRouteCoordsRef.current = [];
-      setApproachEtaMin(null);
-      return;
-    }
-
-    // Alvo da rota: se em viagem (in_progress) vai até ao destino; se a recolher vai até ao passageiro
-    const targetCoords =
-      ride.status === RideStatus.IN_PROGRESS
-        ? ride.destCoords
-        : ride.pickupCoords;
-
-    const startCoords = ride.carLocation ?? ride.pickupCoords;
-
-    if (!targetCoords || !map) return;
-
-    // 1. Atualizar ou posicionar o marcador do motorista no mapa com rotação real
-    if (ride.carLocation && Number.isFinite(ride.carLocation.lng) && Number.isFinite(ride.carLocation.lat)) {
-      const [lng, lat] = [ride.carLocation.lng, ride.carLocation.lat];
-      const heading = (ride.carLocation as any).heading ?? 0;
-
-      if (!driverMarkerRef.current) {
-        const markerEl = createDriverMarkerElement(heading);
-        driverMarkerRef.current = new mapboxgl.Marker({ element: markerEl, rotationAlignment: 'map' })
-          .setLngLat([lng, lat])
-          .addTo(map);
-      } else {
-        driverMarkerRef.current.setLngLat([lng, lat]);
-        const el = driverMarkerRef.current.getElement();
-        if (el && typeof heading === 'number') {
-          el.style.transform = `rotate(${heading}deg)`;
-        }
-      }
-    }
-
-    // 2. Traçar ou recalcular rota se desvio detectado (> 45m) ou se ainda não temos rota traçada
-    if (!startCoords) return;
-
-    const now = Date.now();
-    const hasRoute = currentRouteCoordsRef.current.length > 0;
-    let shouldRecalculate = !hasRoute;
-
-    if (hasRoute && ride.carLocation && now - lastRecalcTimeRef.current > 5000) {
-      // Calcular distância mínima aos pontos da rota traçada
-      let minDistance = Infinity;
-      for (const [rLng, rLat] of currentRouteCoordsRef.current) {
-        const d = haversineMeters(ride.carLocation.lat, ride.carLocation.lng, rLat, rLng);
-        if (d < minDistance) minDistance = d;
-      }
-      // Se o motorista passou uma curva ou entrou noutra via (> 45m fora da linha)
-      if (minDistance > 45) {
-        shouldRecalculate = true;
-      }
-    }
-
-    if (!shouldRecalculate) return;
-
-    let cancelled = false;
-    lastRecalcTimeRef.current = now;
-
-    mapService.getRouteDistance(startCoords, targetCoords)
-      .then((routeResult) => {
-        if (cancelled) return;
-        if (routeResult.durationMin) setApproachEtaMin(routeResult.durationMin);
-        if (routeResult.geometry?.coordinates) {
-          currentRouteCoordsRef.current = routeResult.geometry.coordinates as [number, number][];
-          clearRoute(map);
-          drawRoute(map, {
-            distanceKm: routeResult.distanceKm,
-            durationMinutes: routeResult.durationMin,
-            durationText: `${routeResult.durationMin} min`,
-            geojson: {
-              type: 'Feature',
-              geometry: routeResult.geometry,
-              properties: {},
-            },
-            bbox: calculateBBox(routeResult.geometry.coordinates as [number, number][]),
-          });
-        }
-      })
-      .catch((err) => console.warn('[PassengerHome] Falha ao traçar/recalcular rota da corrida:', err));
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    ride.status,
-    ride.carLocation?.lat,
-    ride.carLocation?.lng,
-    (ride.carLocation as any)?.heading,
-    ride.pickupCoords?.lat,
-    ride.pickupCoords?.lng,
-    ride.destCoords?.lat,
-    ride.destCoords?.lng,
-  ]);
+  // ── Rota activa e marcador do carro em tempo real (hook extraído) ───────────
+  const { approachEtaMin } = usePassengerLiveRoute({ ride, isVisible });
 
   // ── Motoristas próximos (hook extraído) ──
   const { nearbyCount } = useNearbyDrivers(pickupCoords, isVisible ?? true);
@@ -400,32 +290,36 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     return () => { cancelled = true; clearTimeout(timer); };
   }, [userId]);
 
-  // ── Pesquisa com debounce — agora passa posição do utilizador ────────────────
-  const handleSearch = useCallback((query: string) => {
-    setSearchQuery(query);
-    if (searchDebounceRef.current) {
-      clearTimeout(searchDebounceRef.current);
-      searchDebounceRef.current = null;
-    }
-    if (query.length < 2) {
-      setResults(LUANDA_STATIC_LOCATIONS.filter((l: LocationResult) => l.isPopular));
-      return;
-    }
-    searchDebounceRef.current = setTimeout(async () => {
-      setSearching(true);
-      try {
-        // v3.2: passa posição do utilizador para resultados mais relevantes
-        const res = await mapService.searchPlaces(query, userLocation ?? undefined);
-        setResults(res);
-      } finally {
-        setSearching(false);
-      }
-    }, 350);
-  }, [userLocation]);
-
-  useEffect(() => {
-    return () => { if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current); };
-  }, []);
+  // ── Pesquisa com debounce, sugestões e geocoding (hook extraído) ────────────
+  const {
+    selecting,
+    setSelecting,
+    searchQuery,
+    setSearchQuery,
+    results,
+    setResults,
+    searching,
+    setSearching,
+    handleSearch,
+    selectLocation,
+    useGPS,
+  } = usePassengerSearch({
+    userLocation,
+    pickupName,
+    onSelectPickup: (name, coords) => {
+      setPickupName(name);
+      setPickupCoords(coords);
+      setUserLocation(coords);
+    },
+    onSelectDest: (name, coords) => {
+      setDestName(name);
+      setDestCoords(coords);
+    },
+    onZonePriceUpdate: (zpPrice, zpNames) => {
+      setZonePrice(zpPrice);
+      setZoneNames(zpNames);
+    },
+  });
 
   useSilentTripleTap({
     enabled: isVisible && !!ride.rideId && (
@@ -434,47 +328,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
     onTrigger: () => setSilentPanicSignal((value) => value + 1),
   });
 
-  const selectLocation = async (loc: LocationResult) => {
-    if (selecting === 'pickup') {
-      setPickupName(loc.name);
-      setPickupCoords(loc.coords);
-    } else {
-      setDestName(loc.name);
-      setDestCoords(loc.coords);
-      const currentPickup = pickupName || '';
-      if (currentPickup && loc.name) {
-        const zp = await zonePriceService.getZonePrice(currentPickup, loc.name);
-        if (zp) {
-          setZonePrice(zp.price_kz);
-          setZoneNames({ origin: zp.origin_zone, dest: zp.dest_zone });
-        } else {
-          setZonePrice(null);
-          setZoneNames(null);
-        }
-      }
-    }
-    setSelecting(null);
-    setSearchQuery('');
-    setResults([]);
-  };
 
-  // ── GPS com nome de bairro ───────────────────────────────────────────────────
-  const useGPS = async () => {
-    setSearching(true);
-    try {
-      const coords  = await mapService.getCurrentPosition();
-      const address = await mapService.reverseGeocode(coords);
-      setPickupName(address);
-      setPickupCoords(coords);
-      setUserLocation(coords);
-      setSelecting(null);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Não foi possível obter a localização.';
-      showToast(`${msg}`, 'error');
-    } finally {
-      setSearching(false);
-    }
-  };
 
   // ── Calcular rota real (Mapbox Directions API) + preço Engine Pro ───────────
   const handleConfirmRoute = async () => {
@@ -555,7 +409,7 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
       } finally {
         setSearching(false);
       }
-      
+
       if (success) {
         setSelecting('dest');
         handleSearch('');
@@ -702,6 +556,13 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
   const isReady     = !!pickupName && !!destName;
   const showAuction = ride.status === RideStatus.BROWSING;
 
+  // Handler do atalho "Agendar" do carrossel de acesso rápido.
+  const handleOpenSchedule = useCallback(() => {
+    if (!ensureEmergencyContact('Define um contacto de emergência antes de agendar corridas.')) return;
+    setScheduleDefaults(null);
+    setShowSchedule(true);
+  }, [ensureEmergencyContact]);
+
   if (showAuction) {
     return (
       <>
@@ -742,75 +603,12 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
         </div>
       </header>
 
-      <section className="zr-map relative">
-        {!shouldMountMap && <div className="zr-curve" />}
-        {shouldMountMap ? (
-          <Suspense fallback={<div className="zr-empty">A carregar mapa...</div>}>
-            <Map3D
-              mode="passenger"
-              center={userLocation ? [userLocation.lng, userLocation.lat] : undefined}
-            />
-            {/* Chip de ETA do Motorista a Caminho */}
-            {approachEtaMin !== null && (
-              <div className="absolute top-3 left-3 z-10 pointer-events-none animate-in fade-in slide-in-from-top-3 duration-300">
-                <div className="liquid-glass-subcard px-3 py-1.5 rounded-full text-[11px] text-amber-300 font-black border border-amber-400/50 flex items-center gap-1.5 shadow-xl">
-                  <span className="material-symbols-outlined text-[15px]">directions_car</span>
-                  <span>Motorista a caminho • Chegada em ~{approachEtaMin} min</span>
-                </div>
-              </div>
-            )}
-            {/* Controlos Flutuantes de Zoom e Centralização (Liquid Glass) */}
-            <div className="absolute bottom-3 right-3 z-10 flex flex-col gap-1.5 pointer-events-auto">
-              <button
-                type="button"
-                onClick={() => {
-                  const map = MapSingleton.get();
-                  if (map) map.zoomIn({ duration: 300 });
-                }}
-                className="w-8 h-8 rounded-xl bg-black/70 backdrop-blur-md border border-white/20 text-white flex items-center justify-center hover:bg-black/90 active:scale-95 transition shadow-lg cursor-pointer"
-                title="Aumentar Zoom"
-                aria-label="Aumentar Zoom"
-              >
-                <span className="material-symbols-outlined text-[18px]">add</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const map = MapSingleton.get();
-                  if (map) map.zoomOut({ duration: 300 });
-                }}
-                className="w-8 h-8 rounded-xl bg-black/70 backdrop-blur-md border border-white/20 text-white flex items-center justify-center hover:bg-black/90 active:scale-95 transition shadow-lg cursor-pointer"
-                title="Diminuir Zoom"
-                aria-label="Diminuir Zoom"
-              >
-                <span className="material-symbols-outlined text-[18px]">remove</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (userLocation) {
-                    const map = MapSingleton.get();
-                    if (map) map.flyTo({ center: [userLocation.lng, userLocation.lat], zoom: 15, duration: 600 });
-                  } else {
-                    mapService.getCurrentPosition().then((coords) => {
-                      setUserLocation(coords);
-                      const map = MapSingleton.get();
-                      if (map) map.flyTo({ center: [coords.lng, coords.lat], zoom: 15, duration: 600 });
-                    }).catch(() => {});
-                  }
-                }}
-                className="w-8 h-8 rounded-xl bg-black/70 backdrop-blur-md border border-[#DCB354]/50 text-[#DCB354] flex items-center justify-center hover:bg-black/90 active:scale-95 transition shadow-lg cursor-pointer"
-                title="A minha localização"
-                aria-label="A minha localização"
-              >
-                <span className="material-symbols-outlined text-[18px]">my_location</span>
-              </button>
-            </div>
-          </Suspense>
-        ) : (
-          <div className="zr-empty">A preparar mapa...</div>
-        )}
-      </section>
+      <PassengerMapSection
+        shouldMountMap={shouldMountMap}
+        userLocation={userLocation}
+        onUserLocationChange={setUserLocation}
+        approachEtaMin={approachEtaMin}
+      />
 
       <div className="zr-stack" style={{ marginTop: '16px', padding: '0 14px' }}>
 
@@ -904,131 +702,11 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                 />
                 <FreePerkBanner userId={userId} />
 
-                {/* ── ZONA DE CONTRATOS E SERVIÇOS ── */}
-                <section className="liquid-glass-card rounded-[28px] p-5 relative overflow-hidden" data-purpose="quick-access">
-                  <span className="text-[9px] font-bold tracking-[0.26em] uppercase gold-gradient-text block">
-                    ACESSO RÁPIDO
-                  </span>
-                  <h2 className="font-serif text-[19px] text-white font-normal mt-0.5 mb-3.5">
-                    Tudo que precisas, rápido e fácil
-                  </h2>
-                  <div className="zr-scroll-hint">
-                    <div
-                      ref={scrollRef}
-                      className="zr-scroll-x flex items-center space-x-2.5 overflow-x-auto pb-2 scrollbar-none"
-                      style={{ scrollBehavior: 'smooth', WebkitOverflowScrolling: 'touch' }}
-                    >
-                      {/* Contratos */}
-                      <button
-                        type="button"
-                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
-                        onClick={() => navigate('/contrato')}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
-                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>description</span>
-                        </div>
-                        <div className="mt-1.5">
-                          <p className="text-[11.5px] font-semibold text-white leading-tight">Contratos</p>
-                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Escolar e Empresas</p>
-                        </div>
-                      </button>
-
-                      {/* Traz o Mano */}
-                      <button
-                        type="button"
-                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
-                        onClick={() => setShowReferral(true)}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
-                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>redeem</span>
-                        </div>
-                        <div className="mt-1.5">
-                          <p className="text-[11.5px] font-semibold text-white leading-tight">Traz o Mano</p>
-                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Ganha 500 Kz</p>
-                        </div>
-                      </button>
-
-                      {/* Agendamentos */}
-                      <button
-                        type="button"
-                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
-                        onClick={() => {
-                          if (!ensureEmergencyContact('Define um contacto de emergência antes de agendar corridas.')) return;
-                          setScheduleDefaults(null);
-                          setShowSchedule(true);
-                        }}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
-                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>calendar_month</span>
-                        </div>
-                        <div className="mt-1.5">
-                          <p className="text-[11.5px] font-semibold text-white leading-tight">Agendar</p>
-                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Data e hora</p>
-                        </div>
-                      </button>
-
-                      {/* Pós-viagem */}
-                      <button
-                        type="button"
-                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
-                        onClick={() => navigate('/pos_viagem_review')}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
-                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>rate_review</span>
-                        </div>
-                        <div className="mt-1.5">
-                          <p className="text-[11.5px] font-semibold text-white leading-tight">Pós-viagem</p>
-                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Avaliação e recibo</p>
-                        </div>
-                      </button>
-
-                      {/* Privado 24h */}
-                      <button
-                        type="button"
-                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
-                        onClick={() => setOpenPremiumService('private_driver')}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
-                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>shield_person</span>
-                        </div>
-                        <div className="mt-1.5">
-                          <p className="text-[11.5px] font-semibold text-white leading-tight">Privado 24h</p>
-                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Motorista dedicado</p>
-                        </div>
-                      </button>
-
-                      {/* Fretamento */}
-                      <button
-                        type="button"
-                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
-                        onClick={() => setOpenPremiumService('charter')}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
-                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>directions_bus</span>
-                        </div>
-                        <div className="mt-1.5">
-                          <p className="text-[11.5px] font-semibold text-white leading-tight">Fretamento</p>
-                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Viagens e vans</p>
-                        </div>
-                      </button>
-
-                      {/* Mercadorias */}
-                      <button
-                        type="button"
-                        className="liquid-glass-subcard rounded-2xl p-2.5 flex flex-col items-center text-center justify-between min-w-[110px] min-h-[114px] flex-shrink-0 transition duration-200 hover:border-[#DDB658]/50 active:scale-95 group cursor-pointer"
-                        onClick={() => setOpenPremiumService('cargo')}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-b from-[#2E2514] to-[#12110E] border-t border-[rgba(255,245,210,0.5)] border-[#DCB354]/40 flex items-center justify-center mt-0.5 shadow-md shadow-black">
-                          <span className="material-symbols-outlined text-[#F2D38A] text-[20px] group-hover:scale-110 transition" style={{ filter: 'drop-shadow(0 1px 3px rgba(210,165,50,0.5))' }}>inventory_2</span>
-                        </div>
-                        <div className="mt-1.5">
-                          <p className="text-[11.5px] font-semibold text-white leading-tight">Mercadorias</p>
-                          <p className="text-[8px] text-neutral-400 leading-snug mt-0.5">Cargas e entregas</p>
-                        </div>
-                      </button>
-                    </div>
-                  </div>
-                </section>
+                <PassengerQuickAccess
+                  onOpenReferral={() => setShowReferral(true)}
+                  onOpenSchedule={handleOpenSchedule}
+                  onOpenPremiumService={handleOpenService}
+                />
               </>
             )}
 
@@ -1074,73 +752,31 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
           </div>
         )}
 
-        {/* Modal de agendamento */}
-        {showSchedule && (
-          <Suspense fallback={null}>
-            <ScheduleRide
-              userId={userId}
-              pickupName={pickupName}
-              destName={destName}
-              pickupCoords={pickupCoords}
-              destCoords={destCoords}
-              defaultDate={scheduleDefaults?.date}
-              defaultTime={scheduleDefaults?.time}
-              onClose={() => {
-                setScheduleDefaults(null);
-                setShowSchedule(false);
-              }}
-              onScheduled={() => {
-                setScheduleDefaults(null);
-                setShowSchedule(false);
-              }}
-              onDestinationSelected={(name, coords) => {
-                setDestName(name);
-                setDestCoords(coords);
-              }}
-            />
-          </Suspense>
-        )}
-
-        {/* Modal Traz o Mano */}
-        {showReferral && (
-          <ReferralModal 
-            userId={userId} 
-            onClose={() => setShowReferral(false)} 
-          />
-        )}
-
-        {openPremiumService === 'private_driver' && (
-          <PrivateDriverModal
-            userId={userId}
-            pickupName={pickupName}
-            destName={destName}
-            pickupCoords={pickupCoords}
-            destCoords={destCoords}
-            onClose={() => setOpenPremiumService(null)}
-          />
-        )}
-
-        {openPremiumService === 'charter' && (
-          <CharterModal
-            userId={userId}
-            pickupName={pickupName}
-            destName={destName}
-            pickupCoords={pickupCoords}
-            destCoords={destCoords}
-            onClose={() => setOpenPremiumService(null)}
-          />
-        )}
-
-        {openPremiumService === 'cargo' && (
-          <CargoModal
-            userId={userId}
-            pickupName={pickupName}
-            destName={destName}
-            pickupCoords={pickupCoords}
-            destCoords={destCoords}
-            onClose={() => setOpenPremiumService(null)}
-          />
-        )}
+        <PassengerModals
+          userId={userId}
+          pickupName={pickupName}
+          destName={destName}
+          pickupCoords={pickupCoords}
+          destCoords={destCoords}
+          showSchedule={showSchedule}
+          scheduleDefaults={scheduleDefaults}
+          onCloseSchedule={() => {
+            setScheduleDefaults(null);
+            setShowSchedule(false);
+          }}
+          onScheduled={() => {
+            setScheduleDefaults(null);
+            setShowSchedule(false);
+          }}
+          onDestinationSelected={(name, coords) => {
+            setDestName(name);
+            setDestCoords(coords);
+          }}
+          showReferral={showReferral}
+          onCloseReferral={() => setShowReferral(false)}
+          openPremiumService={openPremiumService}
+          onClosePremiumService={() => setOpenPremiumService(null)}
+        />
 
         {/* Kaze substituiu o FAB anterior e é injectado pelo App no topo */}
       </div>

@@ -1,26 +1,51 @@
 // =============================================================================
-// ZENITH RIDE v3.2 — mapService.ts
-// REFACTOR v3.2:
-//   1. searchPlaces: Mapbox Geocoding é FONTE PRIMÁRIA (API real primeiro)
-//      Lista estática é apenas fallback offline / sugestões populares
-//   2. geocodeAddress: Mapbox primeiro, lista estática como fallback
-//   3. getRouteDistance: USA Mapbox Directions API para distância REAL por estrada
-//   4. calculateRouteInfo: agora tem versão assíncrona com dados reais
+// ZENITH RIDE v3.3 — mapService.ts
+// REFACTOR v3.3:
+//   1. Search Box API (/suggest + /retrieve com session_token) como fonte Mapbox
+//   2. Base local de Angola carregada via import() dinâmico sob demanda
+//   3. Deduplicação no suggest por nome/tipo (sem dependência de coords prematuras)
+//   4. Resiliência a AbortError sem apagar resultados
 // =============================================================================
 
 import type { LatLng, LocationResult } from '../types';
 import { haversineKm as _haversineKm, haversineMeters as _haversineMeters } from '../lib/geo';
-import { ANGOLA_LOCATIONS, searchAngolaLocations } from '../data/angolaLocations';
+import { searchAngolaLocationsLazy } from './angolaLocationsService';
+import { POPULAR_LOCATIONS } from '../data/popularLocations';
 
-const MAPBOX_TOKEN   = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAPBOX_TOKEN) as string | undefined;
+const MAPBOX_TOKEN = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAPBOX_TOKEN) as string | undefined;
 const LOCATION_NAME_SEPARATOR = '—';
 
-// Base hiper-detalhada de Angola (Kilamba com quarteirões A-X, Golf 2 com zonas A-D, Talatona, Viana, Cazenga, e 18 províncias)
-export const LUANDA_STATIC_LOCATIONS: LocationResult[] = ANGOLA_LOCATIONS;
-export const ALL_ANGOLA_LOCATIONS: LocationResult[] = ANGOLA_LOCATIONS;
+export const LUANDA_STATIC_LOCATIONS: LocationResult[] = POPULAR_LOCATIONS;
+export const ALL_ANGOLA_LOCATIONS: LocationResult[] = POPULAR_LOCATIONS;
 
-// Cache de geocoding (evitar chamadas repetidas)
+// Cache de geocoding de endereços permanentes
 const geocodeCache = new Map<string, LatLng>();
+
+// ─── Gestão de session_token do Mapbox Search Box API ────────────────────────
+let currentSessionToken: string = generateSessionToken();
+
+function generateSessionToken(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export function getOrCreateSessionToken(): string {
+  if (!currentSessionToken) {
+    currentSessionToken = generateSessionToken();
+  }
+  return currentSessionToken;
+}
+
+export function resetSessionToken(): string {
+  currentSessionToken = generateSessionToken();
+  return currentSessionToken;
+}
 
 // ─── Helper: distância Haversine (delega para geo.ts centralizado) ───────────
 function haversineKm(a: LatLng, b: LatLng): number {
@@ -31,11 +56,20 @@ function getPrimaryLocationName(name: string): string {
   return name.split(LOCATION_NAME_SEPARATOR)[0]?.trim() || name.trim();
 }
 
+function normalizeLocationText(str: string): string {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
 // ─── Encontrar bairro mais próximo das coordenadas ────────────────────────────
 function nearestNeighbourhood(coords: LatLng): string {
   let best: LocationResult | null = null;
   let bestDist = Infinity;
-  for (const loc of LUANDA_STATIC_LOCATIONS) {
+  for (const loc of POPULAR_LOCATIONS) {
     const d = haversineKm(coords, loc.coords);
     if (d < bestDist) { bestDist = d; best = loc; }
   }
@@ -46,44 +80,33 @@ function nearestNeighbourhood(coords: LatLng): string {
   return bestName;
 }
 
-// ─── Mapbox Geocoding: pesquisa de texto → lista de locais ───────────────────
-// Bbox expandido para cobrir Luanda + Bengo + Ícolo e Bengo
-async function mapboxForwardGeocode(query: string, proximity?: LatLng): Promise<LocationResult[]> {
+// ─── Mapbox Search Box API: /suggest com limit=10 e session_token ─────────────
+async function mapboxSearchBoxSuggest(
+  query: string,
+  userPos?: LatLng,
+  signal?: AbortSignal
+): Promise<LocationResult[]> {
   if (!MAPBOX_TOKEN) return [];
 
-  const encoded = encodeURIComponent(query);
-  const proxStr = proximity
-    ? `${proximity.lng},${proximity.lat}`
-    : '13.2343,-8.8368';
-
-  // Bounds abrangentes de Angola (cobre todas as 18 províncias)
+  const token = getOrCreateSessionToken();
+  const encoded = encodeURIComponent(query.trim());
+  const proxStr = userPos
+    ? `${userPos.lng},${userPos.lat}`
+    : '13.2343,-8.8390';
   const bbox = '11.5,-18.0,24.1,-4.5';
-  const types = 'poi,address,neighborhood,locality,place';
-  const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encoded}.json?country=AO&language=pt&proximity=${proxStr}&bbox=${bbox}&types=${types}&limit=15&access_token=${MAPBOX_TOKEN}`;
-  const results = await _mapboxGeocodeFetch(url);
+  const types = 'poi,address,neighborhood,locality,street';
 
-  return results;
-}
+  const url = `https://api.mapbox.com/search/searchbox/v1/suggest?q=${encoded}&session_token=${token}&access_token=${MAPBOX_TOKEN}&language=pt&country=AO&proximity=${proxStr}&bbox=${bbox}&types=${types}&limit=10`;
 
-// Helper interno — executa fetch e mapeia resposta
-async function _mapboxGeocodeFetch(url: string): Promise<LocationResult[]> {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal });
     if (!res.ok) return [];
     const data = await res.json();
+    const suggestions = data.suggestions || [];
 
-    return (data.features ?? []).map((f: any): LocationResult => {
-      // Compatibilidade cruzada com Geocoding v5 e Search Box API v1
-      const [lng, lat] = f.geometry?.coordinates ?? f.center ?? [0,0];
-      const name = f.properties?.name ?? f.text ?? f.place_name?.split(',')[0] ?? 'Local';
-      const fullPlace = f.properties?.full_address ?? f.properties?.place_formatted ?? f.place_name ?? f.text ?? 'Angola';
-      
-      let typeArr = f.place_type ?? [];
-      if (typeof typeArr === 'string') typeArr = [typeArr];
-      if (f.properties?.feature_type) typeArr.push(f.properties.feature_type);
-
-      // Limpar descrição
-      let description = fullPlace;
+    return suggestions.map((s: any): LocationResult => {
+      const name = s.name || s.place_formatted?.split(',')[0] || 'Local';
+      let description = s.place_formatted || s.full_address || 'Angola';
       if (description.startsWith(name + ', ')) {
         description = description.slice(name.length + 2);
       }
@@ -92,15 +115,43 @@ async function _mapboxGeocodeFetch(url: string): Promise<LocationResult[]> {
 
       return {
         name,
-        type: mapboxTypeToLocal(typeArr),
+        type: mapboxTypeToLocal([s.feature_type || 'poi']),
         description,
-        coords: { lat, lng },
+        coords: userPos ?? { lat: -8.8390, lng: 13.2343 },
+        mapboxId: s.mapbox_id,
         isPopular: false,
       };
     });
-  } catch (err) {
-    console.warn('[mapService._mapboxGeocodeFetch]', err);
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw err;
+    }
+    console.warn('[mapService.mapboxSearchBoxSuggest]', err);
     return [];
+  }
+}
+
+// ─── Mapbox Search Box API: /retrieve para obter coordenadas exatas ──────────
+async function mapboxSearchBoxRetrieve(mapboxId: string): Promise<LatLng | null> {
+  if (!MAPBOX_TOKEN || !mapboxId) return null;
+  const token = getOrCreateSessionToken();
+  const url = `https://api.mapbox.com/search/searchbox/v1/retrieve/${encodeURIComponent(mapboxId)}?session_token=${token}&access_token=${MAPBOX_TOKEN}`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const feature = data.features?.[0];
+    const coords = feature?.geometry?.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) {
+      const [lng, lat] = coords;
+      resetSessionToken();
+      return { lat, lng };
+    }
+    return null;
+  } catch (err) {
+    console.warn('[mapService.mapboxSearchBoxRetrieve]', err);
+    return null;
   }
 }
 
@@ -168,34 +219,41 @@ export const mapService = {
     const cacheKey = address.toLowerCase().trim();
     if (geocodeCache.has(cacheKey)) return geocodeCache.get(cacheKey)!;
 
-    // 1. Procurar primeiro na base hiper-detalhada de Angola (Quarteirões, Zonas e Bairros com GPS exato)
-    const localMatches = searchAngolaLocations(address, 5);
-    const exactMatch = localMatches.find(l => 
-      l.name.toLowerCase() === cacheKey || 
-      cacheKey.includes(l.name.toLowerCase()) ||
-      l.name.toLowerCase().includes(cacheKey)
-    );
-    if (exactMatch) {
-      geocodeCache.set(cacheKey, exactMatch.coords);
-      return exactMatch.coords;
+    // 1. Procurar primeiro na base de Angola sob demanda
+    try {
+      const localMatches = await searchAngolaLocationsLazy(address, 5);
+      const exactMatch = localMatches.find(l => 
+        l.name.toLowerCase() === cacheKey || 
+        cacheKey.includes(l.name.toLowerCase()) ||
+        l.name.toLowerCase().includes(cacheKey)
+      );
+      if (exactMatch) {
+        geocodeCache.set(cacheKey, exactMatch.coords);
+        return exactMatch.coords;
+      }
+      if (localMatches.length > 0 && localMatches[0]?.coords) {
+        geocodeCache.set(cacheKey, localMatches[0].coords);
+        return localMatches[0].coords;
+      }
+    } catch (err) {
+      console.warn('[mapService.geocodeAddress] busca local falhou:', err);
     }
 
-    // 2. MAPBOX PRIMEIRO para ruas e endereços específicos
+    // 2. Mapbox Search Box como fallback
     if (MAPBOX_TOKEN) {
       try {
-        const results = await mapboxForwardGeocode(address);
-        const firstResult = results[0];
-        if (firstResult) {
-          geocodeCache.set(cacheKey, firstResult.coords);
-          return firstResult.coords;
+        const results = await mapboxSearchBoxSuggest(address);
+        const first = results[0];
+        if (first?.mapboxId) {
+          const coords = await mapboxSearchBoxRetrieve(first.mapboxId);
+          if (coords) {
+            geocodeCache.set(cacheKey, coords);
+            return coords;
+          }
         }
-      } catch (err) { console.warn('[mapService] mapbox geocode fallback:', err); }
-    }
-
-    // 3. Fallback do primeiro resultado local se houver
-    if (localMatches.length > 0 && localMatches[0]?.coords) {
-      geocodeCache.set(cacheKey, localMatches[0].coords);
-      return localMatches[0].coords;
+      } catch (err) {
+        console.warn('[mapService.geocodeAddress] Search Box fallback falhou:', err);
+      }
     }
 
     return null;
@@ -262,53 +320,78 @@ export const mapService = {
     }
   },
 
-  // ── searchPlaces — REFACTOR v3.2 ──────────────────────────────────────────
-  // MAPBOX API é a FONTE PRIMÁRIA. Lista estática é fallback offline.
-  async searchPlaces(query: string, userPos?: LatLng): Promise<LocationResult[]> {
+  // ── searchPlaces — REFACTOR v3.3 (Search Box API + Base Local Lazy) ────────
+  async searchPlaces(query: string, userPos?: LatLng, signal?: AbortSignal): Promise<LocationResult[]> {
     const q = query.toLowerCase().trim();
 
-    // Sem query → sugestões populares locais (rápido, sem API)
-    if (q.length < 2) return ANGOLA_LOCATIONS.filter((l) => l.isPopular);
-
-    // 1. Busca na base estruturada de Angola (Quarteirões, Zonas, Bairros e Províncias)
-    // Se o utilizador pesquisar "Kilamba", traz TODOS os quarteirões A a X e KK5000 no topo!
-    // Se pesquisar "Golf 2", traz TODAS as zonas internas A a D, mercados e paragens!
-    const localResults = searchAngolaLocations(query, 35);
-
-    // 2. Mapbox Geocoding para endereços específicos, ruas e POIs em Angola
-    let mapboxResults: LocationResult[] = [];
-    if (MAPBOX_TOKEN) {
-      try {
-        mapboxResults = await mapboxForwardGeocode(query, userPos);
-      } catch (err) {
-        console.warn('[mapService.searchPlaces] Mapbox Geocoding falhou:', err);
-      }
+    // Sem query -> sugestões populares locais instantâneas (sem rede)
+    if (q.length < 2) {
+      return POPULAR_LOCATIONS.slice(0, 10);
     }
 
-    // 3. Combinar resultados:
-    // Resultados locais de alta granularidade (quarteirões/sub-zonas) vêm PRIMEIRO.
-    // 3. Combinar e Deduplicar resultados:
-    // Resultados locais de alta granularidade (quarteirões/sub-zonas) vêm PRIMEIRO.
-    // Evita duplicados visuais como "Universidade Jean Piaget de Angola" e "Universidade Jean Piaget"
-    const combined: LocationResult[] = [...localResults];
+    // 1. Busca local lazy e Search Box API concorrentemente
+    const localPromise = searchAngolaLocationsLazy(query, 35).catch((err) => {
+      console.warn('[mapService.searchPlaces] busca local falhou:', err);
+      return [];
+    });
+
+    const mapboxPromise = mapboxSearchBoxSuggest(query, userPos, signal).catch((err: any) => {
+      if (err.name === 'AbortError') throw err;
+      return [];
+    });
+
+    const [localResults, mapboxResults] = await Promise.all([localPromise, mapboxPromise]);
+
+    if (signal?.aborted) {
+      const abortErr = new Error('Busca cancelada');
+      abortErr.name = 'AbortError';
+      throw abortErr;
+    }
+
+    // 2. Separar bairros/quarteirões locais (boost) vs POIs locais (fallback)
+    const localBairros = localResults.filter(
+      (l) => l.type === 'bairro' || l.name.toLowerCase().includes('quarteir') || l.name.toLowerCase().includes('bloco')
+    );
+    const localPOIs = localResults.filter(
+      (l) => l.type !== 'bairro' && !l.name.toLowerCase().includes('quarteir') && !l.name.toLowerCase().includes('bloco')
+    );
+
+    // 3. Deduplicar por nome normalizado e tipo (sugestões Search Box não têm coords)
+    const combined: LocationResult[] = [...localBairros];
+    const seenNames = new Set<string>();
+
+    for (const c of combined) {
+      seenNames.add(normalizeLocationText(c.name));
+    }
+
     for (const mb of mapboxResults) {
-      const mbNorm = mb.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-      const isDup = combined.some(c => {
-        const cNorm = c.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        if (cNorm === mbNorm) return true;
-        const dLat = Math.abs(c.coords.lat - mb.coords.lat);
-        const dLng = Math.abs(c.coords.lng - mb.coords.lng);
-        if (dLat < 0.015 && dLng < 0.015) {
-          if (cNorm.includes(mbNorm) || mbNorm.includes(cNorm)) return true;
-        }
-        return false;
-      });
-      if (!isDup) {
+      const mbNorm = normalizeLocationText(mb.name);
+      if (mbNorm && !seenNames.has(mbNorm)) {
+        seenNames.add(mbNorm);
         combined.push(mb);
       }
     }
 
-    return combined.slice(0, 40);
+    // 4. POIs locais entram como complemento essencial (garantia de 100% de cobertura de POIs angolanos)
+    for (const loc of localPOIs) {
+      const locNorm = normalizeLocationText(loc.name);
+      if (locNorm && !seenNames.has(locNorm)) {
+        seenNames.add(locNorm);
+        combined.push(loc);
+      }
+    }
+
+    return combined.slice(0, 35);
+  },
+
+  // ── retrievePlace — Mapbox Search Box /retrieve ─────────────────────────────
+  async retrievePlace(mapboxId: string): Promise<LatLng | null> {
+    return mapboxSearchBoxRetrieve(mapboxId);
+  },
+
+  // ── resetSession — Gera novo session_token para próxima busca ──────────────
+  resetSession(): void {
+    resetSessionToken();
   },
 
   // ── getCurrentPosition ───────────────────────────────────────────────────

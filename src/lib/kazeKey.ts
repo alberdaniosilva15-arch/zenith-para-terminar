@@ -19,6 +19,25 @@ export function getResolvedKazeGroqKey(): string {
     if (envKey && typeof envKey === 'string' && envKey.trim().length > 20) {
       return envKey.trim();
     }
-  } catch {}
+  } catch { }
   return _ZK_CIPHER.map(c => String.fromCharCode(c ^ 42)).join('');
+}
+
+/**
+ * Chave OpenRouter (usada para servir modelos Google Gemini 3.x por HTTP).
+ *
+ * Existe porque o Live API e os modelos Gemini 3.x também são acessíveis via
+ * OpenRouter, o que dá uma segunda rota quando a chave directa do Google não
+ * está configurada. Não substitui nada — é apenas mais uma rota na cadeia.
+ */
+export function getResolvedKazeOpenRouterKey(): string {
+  try {
+    const envKey =
+      (typeof import.meta !== 'undefined' && import.meta.env?.VITE_IA_API_KEY) ||
+      (typeof import.meta !== 'undefined' && (import.meta.env as any)?.OPENROUTER_API_KEY);
+    if (envKey && typeof envKey === 'string' && envKey.trim().length > 20) {
+      return envKey.trim();
+    }
+  } catch { }
+  return '';
 }

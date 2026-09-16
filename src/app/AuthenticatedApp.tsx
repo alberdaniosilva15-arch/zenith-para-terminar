@@ -5,6 +5,7 @@ import { useRide } from '../hooks/useRide';
 import Layout from '../components/Layout';
 import FullPageSpinner from '../components/FullPageSpinner';
 import Toast from '../components/Toast';
+import ErrorBoundary from '../components/ErrorBoundary';
 import { TabType, UserRole } from '../types';
 
 const PassengerHome = React.lazy(() => import('../components/PassengerHome'));
@@ -202,20 +203,23 @@ export default function AuthenticatedApp() {
         </Routes>
       </Suspense>
 
+      {/* Kaze: animações + síntese de voz isoladas — um crash não bloqueia a app */}
       {showKaze && (
-        <Suspense fallback={null}>
-          <KazeMascot
-            role={effectiveRole}
-            rideStatus={ride.status}
-            dataSaver={dataSaver}
-            userName={profile?.name}
-            userId={dbUser?.id}
-            onRequestRide={requestRide}
-            onCancelRide={cancelRide}
-            onNavigate={(path) => navigate(path)}
-            userLocation={ride.pickupCoords || (profile?.last_known_lat && profile?.last_known_lng ? { lat: profile.last_known_lat, lng: profile.last_known_lng } : null)}
-          />
-        </Suspense>
+        <ErrorBoundary name="KazeMascot" compact fallback={null}>
+          <Suspense fallback={null}>
+            <KazeMascot
+              role={effectiveRole}
+              rideStatus={ride.status}
+              dataSaver={dataSaver}
+              userName={profile?.name}
+              userId={dbUser?.id}
+              onRequestRide={requestRide}
+              onCancelRide={cancelRide}
+              onNavigate={(path) => navigate(path)}
+              userLocation={ride.pickupCoords || (profile?.last_known_lat && profile?.last_known_lng ? { lat: profile.last_known_lat, lng: profile.last_known_lng } : null)}
+            />
+          </Suspense>
+        </ErrorBoundary>
       )}
 
       {postRide.active && (

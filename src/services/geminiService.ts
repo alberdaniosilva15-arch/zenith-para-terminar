@@ -114,9 +114,9 @@ const KAZE_LOCAL_RESPONSES: Array<{ patterns: RegExp[]; responses: string[] }> =
     ],
   },
   {
-    patterns: [/moto/i, /motogo/i, /mota/i, /capacete/i],
+    patterns: [/moto/i, /zenithmoto/i, /mota/i, /capacete/i],
     responses: [
-      '🏍️ O MotoGo é a opção mais rápida!\n\n• Preço: -40% do standard\n• Seguro opcional: +50 Kz por viagem\n• Capacete OBRIGATÓRIO por lei\n• Ideal para fugir ao trânsito de Luanda\n\nPede a tua moto na tab principal!',
+      '🏍️ A Zenith Moto é a opção mais rápida!\n\n• Preço: -40% do standard\n• Seguro opcional: +50 Kz por viagem\n• Capacete OBRIGATÓRIO por lei\n• Ideal para fugir ao trânsito de Luanda\n\nPede a tua moto na tab principal!',
     ],
   },
 ];
@@ -399,7 +399,7 @@ O fundador é o Dánio Silva, jovem empreendedor visionário de Luanda. Ele crio
 
 ═══ TIPOS DE VEÍCULO ═══
 • 🚗 Táxi (Standard) — preço normal
-• 🏍️ Moto (MotoGo) — -40% do preço normal (rápido, ideal para trânsito)
+• 🏍️ Moto (Zenith Moto) — -40% do preço normal (rápido, ideal para trânsito)
 • 🚙 Comfort — +40% (veículo premium, ar condicionado)
 • 🚐 XL — +80% (veículo grande, para grupos)
 
@@ -429,16 +429,21 @@ import { getResolvedKazeGroqKey } from '../lib/kazeKey';
 
 const FRONTEND_GROQ_KEY = getResolvedKazeGroqKey();
 
-const FRONTEND_GEMINI_KEY = (
-  import.meta.env.VITE_GEMINI_API_KEY ||
-  (import.meta.env as any).GEMINI_API_KEY ||
-  (import.meta.env as any).VITE_IA_API_KEY ||
-  ''
-).trim();
+// Chave do Gemini no frontend: DELIBERADAMENTE VAZIA.
+//
+// O envPrefix do vite.config.ts inlina no bundle tudo o que comece por
+// VITE_/GEMINI_/GROQ_/OPENAI_/OPENROUTER_/RESEND_. Uma chave aqui ficaria
+// visível no JavaScript público — foi assim que a chave anterior foi revogada.
+//
+// O caminho Google directo passou para o servidor (Edge Function `gemini-proxy`).
+// Com esta constante vazia, os blocos `if (FRONTEND_GEMINI_KEY)` são saltados e
+// a cadeia usa as rotas que continuam vivas (proxy → Groq → OpenRouter → local).
+//
+// ⚠️ NÃO repor uma chave aqui.
+const FRONTEND_GEMINI_KEY = '';
 
 const FRONTEND_IA_KEY = (
   import.meta.env.VITE_IA_API_KEY ||
-  (import.meta.env as any).OPENROUTER_API_KEY ||
   ''
 ).trim();
 
@@ -576,7 +581,7 @@ const JARVIS_SECRETARY_SYSTEM_PROMPT = `Tu és o KAZE — a Inteligência Artifi
 
 ═══ CONTEXTO DA PLATAFORMA & LUANDA ═══
 • Cidade: Luanda (Mutamba, Talatona, Kilamba, Viana, Cacuaco, Cazenga, Maianga, Ilha do Cabo, Benfica, Belas).
-• Serviços: Táxis Standard, MotoGo (-40%), Comfort (+40%), XL (+80%), Motorista Privado, Fretes e Charter.
+• Serviços: Táxis Standard, Zenith Moto (-40%), Comfort (+40%), XL (+80%), Motorista Privado, Fretes e Charter.
 • Tarifas: Base 500 Kz + 150 Kz/km (com multiplicador de surge dinâmico).
 • Frotas: Planos Básico (Grátis), Pro (5.000 Kz/carro) e Elite (12.000 Kz/carro).
 • Segurança: Rastreamento em tempo real, Sentinel Vigilante e despacho de emergência SOS 113.

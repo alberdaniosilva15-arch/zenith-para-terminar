@@ -24,6 +24,7 @@ import {
   getAvailableMicrophones,
   AudioInputDevice,
 } from '../lib/kazeAudioRecorder';
+import { startKazeLiveSession, KazeLiveSession } from '../lib/kazeLiveClient';
 
 interface KazeMascotProps {
   role:            UserRole;
@@ -52,6 +53,28 @@ interface ChatMessage {
   sources?: any[];
   action?: KazeProposedAction;
 }
+
+/**
+ * Motor de voz do Kaze.
+ *   • 'gemini' — Gemini Live API (áudio-para-áudio, voz natural). Novo; é o
+ *                motor por defeito, mas nada do motor antigo foi removido.
+ *   • 'native' — Web Speech API + TTS do browser. Motor antigo, mantido
+ *                intacto para quem preferir ou se o Live não estiver disponível.
+ */
+type KazeVoiceEngine = 'gemini' | 'native';
+
+/**
+ * Rótulos humanos das ferramentas que o Kaze pode executar durante uma
+ * conversa por voz — usados no HUD "Kaze a executar: …".
+ */
+const KAZE_LIVE_TOOL_LABELS: Record<string, string> = {
+  request_ride:        'pedido de corrida',
+  schedule_ride:       'agendamento de viagem',
+  create_contract:     'criação de contrato',
+  check_balance:       'consulta de saldo',
+  navigate_app:        'navegação no app',
+  cancel_current_ride: 'cancelamento de corrida',
+};
 
 type SupportedKazeGreetingRole = UserRole.PASSENGER | UserRole.DRIVER;
 
@@ -118,10 +141,39 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   const [actionExecuting, setActionExecuting] = useState(false);
   const [pendingAction,   setPendingAction]   = useState<KazeProposedAction | null>(null);
 
+  // ── Estado do Gemini Live (voz natural) ────────────────────────────────────
+  //  Totalmente aditivo: nenhum destes estados interfere com o chat ou com o
+  //  motor de voz antigo. Só são usados quando o modo 'voice' está activo.
+  const [voiceEngine,  setVoiceEngine]  = useState<KazeVoiceEngine>('gemini');
+  const [liveEngine,   setLiveEngine]   = useState<KazeVoiceEngine | null>(null);
+  const [liveUserText, setLiveUserText] = useState('');
+  const [liveKazeText, setLiveKazeText] = useState('');
+  const [kazeSpeaking, setKazeSpeaking] = useState(false);
+  const [liveToolHint, setLiveToolHint] = useState<string | null>(null);
+  const [liveMicOn,    setLiveMicOn]    = useState(true);
+
   const [liveGpsCoords,   setLiveGpsCoords]   = useState<LatLng | null>(userLocation || null);
   const [liveGpsAddress,  setLiveGpsAddress]  = useState<string | null>(null);
 
   const liveSessionRef   = useRef<{ close: () => void } | null>(null);
+  const kazeLiveRef      = useRef<KazeLiveSession | null>(null);
+
+  // Espelhos das transcrições da voz. Existem para que os callbacks da sessão
+  // Live (criados uma única vez) leiam sempre o valor mais recente — sem eles
+  // haveria closures obsoletas a enviar turnos antigos para o histórico.
+  const liveUserTextRef  = useRef('');
+  const liveKazeTextRef  = useRef('');
+
+  // Arranque da sessão: o Gemini Live não fala primeiro, por isso enviamos um
+  // cumprimento curto. Este ref permite filtrar esse eco da transcrição para
+  // não aparecer como se o utilizador o tivesse dito.
+  const greetingEchoRef  = useRef<string | null>(null);
+
+  // Callbacks da sessão Live são criados uma só vez. Estes dois refs dão-lhes
+  // acesso ao estado mais recente (acção pendente + executor) sem obrigar a
+  // recriar a sessão a cada render — que cortaria o áudio a meio da conversa.
+  const pendingActionRef = useRef<KazeProposedAction | null>(null);
+  const executeActionRef = useRef<((action: KazeProposedAction) => Promise<void>) | null>(null);
   const scrollRef        = useRef<HTMLDivElement>(null);
   const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audioCaptureRef  = useRef<KazeAudioCapture | null>(null);
@@ -154,6 +206,8 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   }, [messages, isThinking, pendingAction, isListeningMic, micDiagnostics]);
 
   useEffect(() => () => {
+    kazeLiveRef.current?.close();
+    kazeLiveRef.current = null;
     liveSessionRef.current?.close();
     liveSessionRef.current = null;
     if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
@@ -356,6 +410,10 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
       setActionExecuting(false);
     }
   }, [onRequestRide, onCancelRide, onNavigate, userId, voiceEnabled, showToast]);
+
+  // Manter os refs da sessão Live apontados ao render mais recente.
+  useEffect(() => { pendingActionRef.current = pendingAction; }, [pendingAction]);
+  useEffect(() => { executeActionRef.current = executeAppAction; }, [executeAppAction]);
 
   // ── Envio de Texto / Comando ───────────────────────────────────────────────
   const handleSendText = async (e?: React.FormEvent, customText?: string) => {
@@ -745,6 +803,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
       if (session) {
         liveSessionRef.current = session;
         setIsLive(true);
+        setLiveEngine('native');
         setVoiceError(null);
       } else {
         setIsLive(false);
@@ -756,6 +815,225 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
       setVoiceError(err instanceof Error ? err.message : 'Falha ao iniciar o modo de voz.');
     }
   };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  GEMINI LIVE — voz bidirecional natural (áudio-para-áudio)
+  //
+  //  Aditivo: o motor 'native' acima continua exactamente como estava. Se o
+  //  Live falhar, mostramos o erro e o Kaze responde só por escrito — não há
+  //  salto automático para outra voz (decisão explícita do Dánio).
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /** Encerra a sessão Live (ou a clássica) e limpa o estado do modo de voz. */
+  const stopVoiceSession = useCallback(() => {
+    try { kazeLiveRef.current?.close(); } catch { /* já fechada */ }
+    kazeLiveRef.current = null;
+    try { liveSessionRef.current?.close(); } catch { /* já fechada */ }
+    liveSessionRef.current = null;
+    liveUserTextRef.current = '';
+    liveKazeTextRef.current = '';
+    greetingEchoRef.current = null;
+    setLiveEngine(null);
+    setIsLive(false);
+    setKazeSpeaking(false);
+    setLiveMicOn(true);
+    setLiveToolHint(null);
+    setLiveUserText('');
+    setLiveKazeText('');
+  }, []);
+
+  /** Abre a sessão Gemini Live e liga as ferramentas do agente à voz. */
+  const startGeminiLiveSession = useCallback(async () => {
+    setMode('voice');
+    setVoiceError(null);
+    setLiveToolHint(null);
+    setLiveUserText('');
+    setLiveKazeText('');
+    setKazeSpeaking(false);
+    setLiveMicOn(true);
+    setIsLive(false);
+    liveUserTextRef.current = '';
+    liveKazeTextRef.current = '';
+    try { kazeLiveRef.current?.close(); } catch { /* já fechada */ }
+    kazeLiveRef.current = null;
+
+    const effectiveCoords = liveGpsCoords || userLocation || null;
+    const toolContext = {
+      userId,
+      userRole: role,
+      userLocation: effectiveCoords,
+      userAddress: liveGpsAddress,
+      hasActiveRide: rideStatus !== RideStatus.IDLE,
+    };
+
+    try {
+      const session = await startKazeLiveSession({
+        userId: userId || 'anonimo',
+        userAddress: liveGpsAddress,
+        userLocation: effectiveCoords,
+        hasActiveRide: rideStatus !== RideStatus.IDLE,
+        voiceName: 'Aoede',
+        languageCode: 'pt-PT',
+        callbacks: {
+          onReady: () => {
+            setIsLive(true);
+            setLiveEngine('gemini');
+            setVoiceError(null);
+          },
+
+          onUserTranscript: (text) => {
+            const clean = text.trim();
+            if (!clean) return;
+            // Filtrar o eco do cumprimento de arranque.
+            const echo = greetingEchoRef.current;
+            if (echo && (echo.startsWith(clean) || clean.startsWith(echo))) {
+              if (clean.length >= echo.length) greetingEchoRef.current = null;
+              return;
+            }
+            liveUserTextRef.current = clean;
+            setLiveUserText(clean);
+          },
+
+          onKazeTranscript: (text) => {
+            const clean = text.trim();
+            if (!clean) return;
+            liveKazeTextRef.current = clean;
+            setLiveKazeText(clean);
+          },
+
+          onSpeakingChange: (speaking) => setKazeSpeaking(speaking),
+          onInterrupted: () => setKazeSpeaking(false),
+
+          // Fim de turno → arquivar a troca no histórico do chat, para o
+          // utilizador poder reler a conversa de voz ao voltar ao chat.
+          onTurnComplete: () => {
+            const user = liveUserTextRef.current.trim();
+            const kaze = liveKazeTextRef.current.trim();
+            liveUserTextRef.current = '';
+            liveKazeTextRef.current = '';
+            greetingEchoRef.current = null;
+            setLiveUserText('');
+            setLiveKazeText('');
+            if (!user && !kaze) return;
+            setMessages((prev) => {
+              const next = [...prev];
+              if (user) next.push({ role: 'user', text: user });
+              if (kaze) next.push({ role: 'model', text: kaze });
+              return next;
+            });
+          },
+
+          // Ponte de ferramentas: a voz executa acções reais no app através da
+          // MESMA camada de resolução que o chat usa (sem duplicar lógica).
+          onToolCall: async (call) => {
+            const name = call.name ?? '';
+            const args = (call.args ?? {}) as Record<string, unknown>;
+            setLiveToolHint(`Kaze a executar: ${KAZE_LIVE_TOOL_LABELS[name] ?? name}`);
+            try {
+              const result = await kazeAppAgent.resolveToolCall(name, args, toolContext);
+              const action = result?.action as KazeProposedAction | undefined;
+
+              if (action && action.status === 'pending') {
+                const alreadyPending = pendingActionRef.current;
+                const isSameType = alreadyPending?.type === action.type;
+
+                if (isSameType) {
+                  // O modelo repetiu a chamada depois de o utilizador dizer
+                  // "sim" → é uma confirmação explícita. Executar.
+                  await executeActionRef.current?.({ ...action, status: 'confirmed' });
+                  return {
+                    ok: true,
+                    actionStatus: 'confirmed',
+                    summary: 'Acção confirmada e executada com sucesso.',
+                    sayToUser: 'Confirmado! Já está feito.',
+                  };
+                }
+
+                // Primeira proposta: guardar e pedir confirmação por voz.
+                setPendingAction(action);
+                setMessages((prev) => [
+                  ...prev,
+                  { role: 'model', text: result.text, action },
+                ]);
+                return {
+                  ok: true,
+                  actionStatus: 'pending',
+                  summary: action.summary,
+                  sayToUser: result.speakText ?? result.text,
+                  instruction:
+                    'Pede confirmação ao utilizador em voz alta. Se ele confirmar, chama exactamente a mesma ferramenta outra vez com os mesmos argumentos.',
+                };
+              }
+
+              if (action && action.status === 'cancelled') {
+                setPendingAction(null);
+              }
+
+              return {
+                ok: true,
+                actionStatus: action?.status ?? 'none',
+                summary: result?.text ?? '',
+                sayToUser: result?.speakText ?? result?.text ?? '',
+              };
+            } catch (err) {
+              console.warn('[KazeMascot] Ferramenta de voz falhou:', name, err);
+              return { ok: false, error: 'Não consegui completar essa acção agora.' };
+            } finally {
+              setLiveToolHint(null);
+            }
+          },
+
+          onError: (message) => setVoiceError(message),
+
+          onClose: () => {
+            kazeLiveRef.current = null;
+            setLiveEngine(null);
+            setIsLive(false);
+            setKazeSpeaking(false);
+            setLiveToolHint(null);
+          },
+        },
+      });
+
+      kazeLiveRef.current = session;
+
+      // O Live não toma a iniciativa de falar — sem um arranque, o Kaze ficava
+      // calado à espera que o utilizador falasse primeiro. Enviado AQUI (e não
+      // em `onReady`) porque só neste ponto o microfone já está ligado e a
+      // referência existe; em `onReady` havia uma corrida com a captura de áudio.
+      const opener = 'Olá Kaze!';
+      greetingEchoRef.current = opener;
+      try { session.sendText(opener); } catch { /* sessão pode já ter caído */ }
+    } catch (err) {
+      console.warn('[KazeMascot] Gemini Live indisponível:', err);
+      kazeLiveRef.current = null;
+      setLiveEngine(null);
+      setIsLive(false);
+      setVoiceError(
+        err instanceof Error
+          ? err.message
+          : 'A voz do Kaze está indisponível. Podes continuar a escrever no chat.',
+      );
+    }
+  }, [userId, role, liveGpsAddress, liveGpsCoords, userLocation, rideStatus]);
+
+  /** Sintoniza o motor de voz escolhido. */
+  const startVoiceSession = async () => {
+    if (voiceEngine === 'gemini') {
+      await startGeminiLiveSession();
+      return;
+    }
+    await startVoiceMode();
+  };
+
+  /** Silenciar/activar o microfone durante uma sessão Live (sem a fechar). */
+  const toggleLiveMic = useCallback(() => {
+    const session = kazeLiveRef.current;
+    if (!session) return;
+    const next = !session.isMicEnabled();
+    session.setMicEnabled(next);
+    setLiveMicOn(next);
+  }, []);
 
   const isDriver = role === UserRole.DRIVER;
 
@@ -813,7 +1091,15 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                 >
                   <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>{voiceEnabled ? 'volume_up' : 'volume_off'}</span>
                 </button>
-                <button onClick={() => setIsOpen(false)} className="zr-icon-button" style={{ width: '36px', height: '36px' }}>✕</button>
+                <button
+                  onClick={() => {
+                    // Fechar o painel não pode deixar o microfone aberto.
+                    if (mode === 'voice') stopVoiceSession();
+                    setIsOpen(false);
+                  }}
+                  className="zr-icon-button"
+                  style={{ width: '36px', height: '36px' }}
+                >✕</button>
               </div>
             </div>
           </div>
@@ -824,7 +1110,11 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
               {(['chat', 'explore', 'voice'] as const).map(m => (
                 <button
                   key={m}
-                  onClick={() => m === 'voice' ? startVoiceMode() : setMode(m)}
+                  onClick={() => {
+                    if (m !== 'voice') { setMode(m); return; }
+                    // Não reiniciar a sessão se já estamos em voz.
+                    if (mode !== 'voice') void startVoiceSession();
+                  }}
                   className={`zr-tab ${mode === m ? 'is-active' : ''}`}
                   style={{ flex: 1, padding: '6px', fontSize: '10px' }}
                 >
@@ -949,24 +1239,112 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                 )}
               </>
             ) : (
-              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '28px' }}>
+              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '20px', padding: '8px 0' }}>
                 <div style={{ position: 'relative' }}>
-                  <div style={{ position: 'absolute', inset: '-20px', background: 'var(--gold)', borderRadius: '50%', filter: 'blur(30px)', opacity: isLive ? 0.35 : 0.1 }} />
+                  <div
+                    style={{
+                      position: 'absolute', inset: '-20px', background: 'var(--gold)', borderRadius: '50%',
+                      filter: 'blur(30px)',
+                      opacity: isLive ? (kazeSpeaking ? 0.55 : 0.32) : 0.1,
+                      transition: 'opacity 0.25s ease',
+                    }}
+                  />
                   <div style={{ width: '110px', height: '110px', borderRadius: '50%', background: 'var(--surface-3)', border: isLive ? '2px solid var(--gold)' : '2px solid transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '50px', color: 'var(--gold)', transform: isLive ? 'scale(1.1)' : 'scale(0.9)', transition: 'transform 0.5s', opacity: isLive ? 1 : 0.6 }}>graphic_eq</span>
+                    <span
+                      className="material-symbols-outlined"
+                      style={{
+                        fontSize: '50px', color: 'var(--gold)',
+                        transform: isLive ? (kazeSpeaking ? 'scale(1.18)' : 'scale(1.05)') : 'scale(0.9)',
+                        transition: 'transform 0.4s',
+                        opacity: isLive ? 1 : 0.6,
+                      }}
+                    >
+                      {isLive ? (kazeSpeaking ? 'graphic_eq' : 'mic') : 'graphic_eq'}
+                    </span>
                   </div>
                 </div>
+
                 <div style={{ textAlign: 'center' }}>
                   <p className="zr-section-title" style={{ fontSize: '13px', marginBottom: '6px' }}>SISTEMA VOZ KAZE</p>
-                  <p className="zr-meta">{isLive ? 'Fale agora com o Kaze' : 'Pronto para sincronizar'}</p>
+                  <p className="zr-meta" style={{ margin: 0 }}>
+                    {isLive
+                      ? (liveEngine === 'gemini'
+                          ? (kazeSpeaking ? 'Kaze a falar…' : 'Fala agora — estou a ouvir')
+                          : 'Fale agora com o Kaze')
+                      : 'Pronto para sintonizar'}
+                  </p>
                 </div>
+
+                {/* Seletor de motor — só antes de ligar */}
                 {!isLive && (
-                  <button onClick={startVoiceMode} className="zr-button zr-button--block">
-                    Sintonizar Kaze
+                  <div style={{ display: 'flex', gap: '4px', background: 'var(--surface-3)', borderRadius: '10px', padding: '4px' }}>
+                    {([
+                      { id: 'gemini' as KazeVoiceEngine, label: 'Gemini Live' },
+                      { id: 'native' as KazeVoiceEngine, label: 'Clássico' },
+                    ]).map(opt => (
+                      <button
+                        key={opt.id}
+                        onClick={() => setVoiceEngine(opt.id)}
+                        className={`zr-tab ${voiceEngine === opt.id ? 'is-active' : ''}`}
+                        style={{ padding: '5px 12px', fontSize: '10px' }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Transcrições ao vivo dos dois lados */}
+                {isLive && (liveUserText || liveKazeText) && (
+                  <div style={{ width: '100%', maxWidth: '320px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {liveUserText && (
+                      <p className="zr-meta" style={{ margin: 0, textAlign: 'right', color: 'var(--copy-muted)' }}>
+                        🗣️ {liveUserText}
+                      </p>
+                    )}
+                    {liveKazeText && (
+                      <p className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>
+                        🤖 {liveKazeText}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {liveToolHint && (
+                  <p className="zr-meta" style={{ margin: 0, color: 'var(--gold)' }}>{liveToolHint}…</p>
+                )}
+
+                {!isLive && (
+                  <button onClick={startVoiceSession} className="zr-button zr-button--block">
+                    {voiceEngine === 'gemini' ? 'Sintonizar Kaze · Gemini Live' : 'Sintonizar Kaze'}
                   </button>
                 )}
+
+                {isLive && (
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    {liveEngine === 'gemini' && (
+                      <button
+                        onClick={toggleLiveMic}
+                        className="zr-button zr-button--secondary"
+                        style={{ fontSize: '11px', padding: '8px 14px' }}
+                      >
+                        {liveMicOn ? '🎙️ Silenciar' : '🔇 Activar mic'}
+                      </button>
+                    )}
+                    <button
+                      onClick={stopVoiceSession}
+                      className="zr-button zr-button--block"
+                      style={{ fontSize: '11px', width: 'auto', padding: '8px 18px' }}
+                    >
+                      Terminar
+                    </button>
+                  </div>
+                )}
+
                 {voiceError && (
-                  <p className="zr-meta" style={{ color: 'var(--danger)', textAlign: 'center' }}>{voiceError}</p>
+                  <p className="zr-meta" style={{ color: 'var(--danger)', textAlign: 'center', maxWidth: '300px', margin: 0 }}>
+                    {voiceError}
+                  </p>
                 )}
               </div>
             )}
