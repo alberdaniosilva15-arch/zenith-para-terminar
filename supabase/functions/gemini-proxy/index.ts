@@ -42,18 +42,38 @@ const CORS_OPTIONS = {
 // ser alterados pelo cliente.
 //
 // ⚠️ O nome tem de existir mesmo na conta, senão o Kaze fica MUDO.
-// Verificado a 15/09 contra `GET /v1beta/models` com a chave em produção:
-//   • `gemini-3.1-flash-live-preview` (valor anterior) NÃO EXISTE — não há
-//     nenhum `3.1-flash-live` nos 50 modelos da conta.
-//   • Os únicos que suportam `bidiGenerateContent` (a Live API) são
-//     `gemini-2.5-flash-native-audio-latest` e `gemini-3.5-transcribe-live`.
 //
-// O erro era difícil de ver porque `authTokens.create` NÃO valida o modelo:
-// devolve um token na mesma. O modelo só é validado quando o WebSocket da
-// sessão abre — ou seja, o cliente recebia token, tentava ligar, e não vinha
-// som nenhum. Sintoma: "o Kaze não fala nada", sem erro visível.
+// Verificado a 16/09 contra `GET /v1beta/models` com a chave em produção —
+// 58 modelos, 9 com `bidiGenerateContent`:
+//   gemini-3.5-transcribe-live, gemini-2.5-flash-native-audio-latest,
+//   gemini-2.5-flash-native-audio-preview-09-2025,
+//   gemini-2.5-flash-native-audio-preview-12-2025,
+//   gemini-3.1-flash-live-preview, gemini-3.8-live,
+//   gemini-3.8-live-extended-thinking, gemini-robotics-er-2-streaming-preview,
+//   gemini-3.5-live-translate-preview
+//
+// ⚠️ `authTokens.create` NÃO valida o modelo: devolve token na mesma. O modelo
+// só é validado quando o WebSocket abre — o cliente recebia token, tentava
+// ligar, e não vinha som. Sintoma: "o Kaze não fala", sem erro visível.
+//
+// Teste real em Node com os três candidatos (mesmo SDK, mesmo fluxo do
+// gemini-proxy), a pedir uma frase e a contar os bytes de PCM devolvidos:
+//
+//   gemini-2.5-flash-native-audio-latest   49 920 B (~1,04 s)
+//     transcrição de saída VAZIA; veio texto de raciocínio em inglês
+//     ("**Offering a Simple Greeting**...") em vez da fala.
+//   gemini-3.8-live                       180 480 B (~3,76 s)
+//     transcrição correcta: "Olá! Tenha um dia maravilhoso e cheio de energia!"
+//   gemini-3.1-flash-live-preview          47 522 B (~0,99 s)
+//     transcrição correcta: "Bom dia!"
+//
+// Os três devolvem áudio — portanto a cadeia de voz nunca esteve partida no
+// servidor. O 3.8-live ganha por larga margem: 3,6× mais fala por turno e a
+// transcrição que alimenta o histórico do chat.
+//
+// Afinável sem mexer no código: `supabase secrets set GEMINI_LIVE_MODEL=...`
 // ─────────────────────────────────────────────────────────────────────────────
-const LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest';
+const LIVE_MODEL = Deno.env.get('GEMINI_LIVE_MODEL') ?? 'gemini-3.8-live';
 /** Janela para iniciar a sessão (o cliente tem de ligar dentro deste prazo). */
 const LIVE_SESSION_WINDOW_MS = 5 * 60 * 1000;
 /** Tempo total durante o qual a sessão pode trocar mensagens. */
