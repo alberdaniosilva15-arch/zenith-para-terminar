@@ -51,6 +51,7 @@ import type { FunctionDeclaration, ToolListUnion, Type as GeminiSchemaType } fro
 import { geminiService } from '../services/geminiService';
 import { KAZE_APP_TOOLS, KAZE_AGENT_SYSTEM_PROMPT } from '../services/kazeAppAgent';
 import type { LatLng } from '../types';
+import { kazeDiag, kazeDiagContadores, kazeDiagFontes, kazeDiagNovoSessionId } from './kazeVoiceDiag';
 
 // ─── Adaptador de ferramentas ─────────────────────────────────────────────────
 //
@@ -296,8 +297,25 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     callbacks,
   } = options;
 
+  // ── Identidade da sessão (diagnóstico) ────────────────────────────────────
+  //  Cada arranque recebe um `sid`. Se em qualquer momento existirem dois `sid`
+  //  vivos, há duas sessões Live a falar ao mesmo tempo — é essa a assinatura
+  //  da duplicação. Os contadores dizem-no sem ser preciso ler mais nada.
+  const sid = kazeDiagNovoSessionId();
+  kazeDiagContadores.liveArranques += 1;
+  kazeDiagContadores.liveVivas += 1;
+  kazeDiag('live:arranque', {
+    sid,
+    origem: 'live',
+    arranques: kazeDiagContadores.liveArranques,
+    vivas: kazeDiagContadores.liveVivas,
+    voz: voiceName,
+  });
+
   // ── 0. Pré-condições do browser ───────────────────────────────────────────
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+    kazeDiagContadores.liveVivas -= 1;
+    kazeDiag('live:arranque_falhou', { sid, origem: 'live', motivo: 'sem getUserMedia' });
     throw new Error('Este dispositivo não suporta captura de microfone.');
   }
 
@@ -322,6 +340,15 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
 
   const inputCtx = new AudioContextClass({ sampleRate: INPUT_SAMPLE_RATE });
   const outputCtx = new AudioContextClass({ sampleRate: OUTPUT_SAMPLE_RATE });
+  kazeDiagContadores.audioCtxCriados += 2;
+  kazeDiag('live:audioctx_criados', {
+    sid,
+    origem: 'live',
+    quantos: 2,
+    total_acumulado: kazeDiagContadores.audioCtxCriados,
+    entrada: inputCtx.state,
+    saida: outputCtx.state,
+  });
 
   const actualInputRate = inputCtx.sampleRate;
 
@@ -389,6 +416,13 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
   let nextPlayTime = 0;
   const activeSources = new Set<AudioBufferSourceNode>();
   let speaking = false;
+
+  // ── Identificadores para o diagnóstico ────────────────────────────────────
+  //  `turn` conta os turnos de conversa desta sessão; `resp` conta os blocos de
+  //  áudio. Se um turno trouxer blocos com `resp` a recomeçar do 1, é sinal de
+  //  que o mesmo turno foi processado duas vezes.
+  let turn = 0;
+  let resp = 0;
 
   // ── Diagnóstico ───────────────────────────────────────────────────────────
   //  Sem isto, "não se ouve nada" é indistinguível entre: o servidor não mandou
@@ -478,6 +512,13 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
           setSpeaking(false);
           inicioFalaAtual = 0;
         }
+        kazeDiag('live:fonte_terminada', {
+          sid,
+          origem: 'live',
+          turn,
+          resp,
+          fontes: kazeDiagFontes(0, activeSources.size).live,
+        });
       };
 
       // Agenda em sequência para não haver sobreposição nem buracos.
@@ -488,6 +529,21 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
       stats.blocosReproduzidos += 1;
       registarInicioFala();
       setSpeaking(true);
+
+      resp += 1;
+      kazeDiagContadores.liveBlocos += 1;
+      kazeDiag('live:audio_bloco', {
+        sid,
+        origem: 'live',
+        turn,
+        resp,
+        bytes: bytes.byteLength,
+        duracao_s: Number(buffer.duration.toFixed(2)),
+        fontes_live: activeSources.size,
+        // Se o TTS do chat estiver a tocar ao mesmo tempo que isto, é aqui que
+        // se vê: `sobrepostas` só é verdadeiro quando os dois grafos tocam juntos.
+        ...kazeDiagFontes(0, activeSources.size),
+      });
 
       // Aviso único: chegou áudio mas o browser não o vai tocar. É a única
       // falha desta cadeia que é silenciosa por natureza — por isso é a única
@@ -547,6 +603,13 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     callbacks: {
       onopen: () => {
         if (closed) return;
+        kazeDiagContadores.liveAbertas += 1;
+        kazeDiag('live:ws_aberto', {
+          sid,
+          origem: 'live',
+          abertas: kazeDiagContadores.liveAbertas,
+          vivas: kazeDiagContadores.liveVivas,
+        });
         // O socket abriu — vale a pena voltar a confirmar que a SAÍDA está
         // viva. Se o browser a tiver suspenso entretanto, é aqui que se
         // recupera, antes de chegar o primeiro bloco de áudio.
@@ -572,6 +635,16 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
         // ── Pedido de execução de ferramenta ──────────────────────────────
         const toolCalls = message.toolCall?.functionCalls;
         if (toolCalls?.length) {
+          kazeDiagContadores.toolCalls += toolCalls.length;
+          kazeDiag('live:toolcalls_recebidas', {
+            sid,
+            origem: 'live',
+            turn,
+            quantas: toolCalls.length,
+            nomes: toolCalls.map((c) => c.name).join(','),
+            ids: toolCalls.map((c) => c.id).join(','),
+            total: kazeDiagContadores.toolCalls,
+          });
           void (async () => {
             const responses = [];
             for (const call of toolCalls) {
@@ -597,6 +670,15 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
             // rapidamente é o que mantém a conversa fluida.
             try {
               session.sendToolResponse({ functionResponses: responses });
+              kazeDiagContadores.toolResponses += responses.length;
+              kazeDiag('live:toolresponses_enviadas', {
+                sid,
+                origem: 'live',
+                turn,
+                quantas: responses.length,
+                ids: responses.map((r) => r.id).join(','),
+                total: kazeDiagContadores.toolResponses,
+              });
             } catch (err) {
               console.warn('[kazeLiveClient] Falha ao devolver tool response:', err);
             }
@@ -648,6 +730,15 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
         }
 
         if (content.turnComplete) {
+          turn += 1;
+          kazeDiag('live:turno_completo', {
+            sid,
+            origem: 'live',
+            turn,
+            blocos_no_turno: resp,
+            fontes_live: activeSources.size,
+          });
+          resp = 0;
           callbacks.onTurnComplete?.();
         }
       },
@@ -655,6 +746,7 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
       onerror: (e) => {
         if (closed) return;
         console.warn('[kazeLiveClient] Erro no WebSocket:', e);
+        kazeDiag('live:ws_erro', { sid, origem: 'live', erro: String(e).slice(0, 160) });
         callbacks.onError?.('A ligação de voz teve um problema.');
       },
 
@@ -664,7 +756,37 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
         if (e?.code && e.code !== 1000) {
           console.warn('[kazeLiveClient] Sessão fechada pelo servidor:', e.code, e.reason);
         }
+        kazeDiag('live:ws_fechado', {
+          sid,
+          origem: 'live',
+          codigo: e?.code ?? null,
+          ctxEntrada: inputCtx.state,
+          ctxSaida: outputCtx.state,
+          fontes_por_tocar: activeSources.size,
+          vivas: kazeDiagContadores.liveVivas,
+        });
         flushPlayback();
+        // ── Limpeza que faltava ─────────────────────────────────────────────
+        //  Quando é o SERVIDOR a fechar (fim do tempo de vida da sessão, rede a
+        //  cair, erro), este caminho corria sem fechar os AudioContext — só o
+        //  `close()` do handle o fazia, e ninguém o chama porque a sessão
+        //  deixou de estar na ref. Cada fecho destes deixava 2 contextos
+        //  abertos. Os browsers limitam o número de AudioContexts por página
+        //  (~6 no Chrome): ao fim de poucas sessões o áudio deixa de funcionar
+        //  por completo, sem erro que o explique.
+        //
+        //  ⚠️ Não chamar `stopMic()` aqui: está declarado DEPOIS do
+        //  `await ai.live.connect(...)`, por isso um fecho que chegue durante
+        //  esse `await` encontrá-lo-ia ainda por inicializar e rebentava com
+        //  um ReferenceError. `micStream` é declarado antes, e é o que basta.
+        try { micStream?.getTracks().forEach((t) => t.stop()); } catch { /* já parado */ }
+        micStream = null;
+        micProcessor = null;
+        micSource = null;
+        micMute = null;
+        void inputCtx.close().catch(() => {});
+        void outputCtx.close().catch(() => {});
+        kazeDiagContadores.liveVivas -= 1;
         closed = true;
         callbacks.onClose?.();
       },
@@ -746,8 +868,21 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
   // ── 6. Controlo exposto ao chamador ───────────────────────────────────────
   return {
     close() {
-      if (closed) return;
+      if (closed) {
+        kazeDiag('live:close_repetido', { sid, origem: 'live' });
+        return;
+      }
       closed = true;
+      kazeDiagContadores.liveFechadas += 1;
+      kazeDiagContadores.liveVivas -= 1;
+      kazeDiag('live:close', {
+        sid,
+        origem: 'live',
+        turn,
+        fontes_por_tocar: activeSources.size,
+        fechadas: kazeDiagContadores.liveFechadas,
+        vivas: kazeDiagContadores.liveVivas,
+      });
       stopMic();
       flushPlayback();
       try { session.close(); } catch { /* já fechada */ }

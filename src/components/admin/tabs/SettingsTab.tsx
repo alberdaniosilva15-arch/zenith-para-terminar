@@ -16,19 +16,7 @@ import {
   type AiModelOption,
   type AiProvider,
 } from '../../../lib/aiModelSettings';
-import {
-  getAvailablePortugueseVoices,
-  setNativeVoice,
-  kazeSpeak,
-  isVoiceReady,
-} from '../../../lib/kazeVoice';
-
-interface NativeVoiceOption {
-  name: string;
-  lang: string;
-  voiceURI: string;
-  isDefault: boolean;
-}
+import { kazeSpeak } from '../../../lib/kazeVoice';
 
 function readCachedModels(provider: AiProvider): AiModelOption[] {
   try {
@@ -63,40 +51,13 @@ export const SettingsTab: React.FC = () => {
   const [iaError, setIaError] = useState('');
   const [iaSaved, setIaSaved] = useState(false);
 
-  // --- Voz Nativa do Dispositivo ---
-  const [nativeVoices, setNativeVoices] = useState<NativeVoiceOption[]>([]);
-  const [selectedVoiceURI, setSelectedVoiceURI] = useState<string>('');
-  const [voiceSaved, setVoiceSaved] = useState(false);
-  const [voiceReady] = useState(() => isVoiceReady());
-  const [voicesLoading, setVoicesLoading] = useState(true);
-
-  // Carregar vozes portuguesas do dispositivo
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const voices = await getAvailablePortugueseVoices();
-        if (cancelled) return;
-        setNativeVoices(
-          voices.map((v) => ({
-            name: v.name,
-            lang: v.lang,
-            voiceURI: v.voiceURI,
-            isDefault: v.default,
-          }))
-        );
-        // Pre-seleccionar a voz guardada no cache
-        const cached = localStorage.getItem('kaze_native_voice_uri');
-        if (cached && voices.some((v) => v.voiceURI === cached)) {
-          setSelectedVoiceURI(cached);
-        } else if (voices.length > 0 && voices[0]) {
-          setSelectedVoiceURI(voices[0].voiceURI);
-        }
-      } catch { /* sem vozes */ }
-      if (!cancelled) setVoicesLoading(false);
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  // --- Voz do Kaze ---
+  //  A voz vem do Gemini (acção `kaze_tts` no `gemini-proxy`, voz Aoede), igual
+  //  à da sessão Live. Não há nada para escolher aqui: a voz é a mesma em todos
+  //  os aparelhos. O antigo selector de vozes do dispositivo foi removido por
+  //  ser enganador — o botão "Testar" tocava sempre a voz do Gemini, ignorando
+  //  o que estivesse escolhido na lista.
+  const [voiceTesting, setVoiceTesting] = useState(false);
 
   const fetchIaModels = async () => {
     const provider = normalizeProvider(iaProvider);
@@ -148,18 +109,20 @@ export const SettingsTab: React.FC = () => {
     setTimeout(() => setIaSaved(false), 2000);
   };
 
-  const saveVoiceSettings = () => {
-    if (!selectedVoiceURI) return;
-    setNativeVoice(selectedVoiceURI);
-    setVoiceSaved(true);
-    setTimeout(() => setVoiceSaved(false), 2000);
-  };
-
-  const testVoice = () => {
-    if (!selectedVoiceURI) return;
-    // Guardar temporariamente para teste
-    setNativeVoice(selectedVoiceURI);
-    void kazeSpeak('Kaze operacional. Núcleo sincronizado. Pronto para servir.');
+  /**
+   * Toca a voz REAL do Kaze — a mesma que o utilizador ouve.
+   *
+   * Antes isto guardava a voz escolhida numa lista do dispositivo e só depois
+   * falava; como a fala já vinha do Gemini, a escolha não tinha efeito nenhum.
+   * Agora só há uma voz, e este botão serve para confirmar que ela está viva.
+   */
+  const testVoice = async () => {
+    setVoiceTesting(true);
+    try {
+      await kazeSpeak('Kaze operacional. Núcleo sincronizado. Pronto para servir.');
+    } finally {
+      setVoiceTesting(false);
+    }
   };
 
   const availableModels = iaModels.length > 0 ? iaModels : (DEFAULT_MODELS_BY_PROVIDER[iaProvider] ?? []);
@@ -173,58 +136,45 @@ export const SettingsTab: React.FC = () => {
 
       <div className="space-y-8">
 
-        {/* ========== VOZ NATIVA DO DISPOSITIVO ========== */}
+        {/* ========== VOZ DO KAZE ========== */}
+        {/*  A voz do Kaze vem do Gemini, não do aparelho. Esta secção dizia o
+             contrário ("usa a voz instalada no teu telemóvel, sem APIs
+             externas") e oferecia um selector de vozes do sistema que o botão
+             "Testar" ignorava por completo — tocava sempre a voz do Gemini.
+             Não há nada para escolher: a voz é a mesma em todos os aparelhos. */}
         <section className="rounded-xl border border-primary/15 bg-[#050505]/85 p-6">
           <div className="flex items-center gap-3 mb-5">
             <span className="material-symbols-outlined text-primary">spatial_audio</span>
-            <h3 className="font-headline-lg text-on-surface tracking-tight">Voz do Kaze (Nativa do Dispositivo)</h3>
+            <h3 className="font-headline-lg text-on-surface tracking-tight">Voz do Kaze</h3>
           </div>
 
           <p className="text-xs text-on-surface-variant mb-4">
-            O Kaze usa a voz instalada no teu telemóvel. Sem APIs externas, sem custos. A voz é selecionada automaticamente
-            {voiceReady ? ' — ✓ já configurada.' : ' na primeira utilização.'}
+            A voz do Kaze é gerada pelo <strong className="text-on-surface">Gemini</strong> — voz{' '}
+            <code className="text-primary">Aoede</code>, a mesma da sessão de Voz Ao Vivo. É
+            igual em todos os aparelhos, porque não depende da voz instalada no telemóvel.
           </p>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="flex flex-col gap-2">
-              <span className="text-xs uppercase tracking-widest text-on-surface-variant">Voz Portuguesa</span>
-              <select
-                value={selectedVoiceURI}
-                onChange={(e) => setSelectedVoiceURI(e.target.value)}
-                disabled={voicesLoading}
-                className="bg-[#0A0A0A] border border-primary/20 rounded px-3 py-2 text-sm text-on-surface focus:border-primary focus:outline-none disabled:opacity-40"
-              >
-                {voicesLoading && <option value="">A carregar vozes...</option>}
-                {!voicesLoading && nativeVoices.length === 0 && <option value="">Nenhuma voz portuguesa encontrada</option>}
-                {nativeVoices.map((v) => (
-                  <option key={v.voiceURI} value={v.voiceURI}>
-                    {v.name} ({v.lang}){v.isDefault ? ' ★' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div className="flex flex-col gap-2 justify-end">
-              <button
-                onClick={testVoice}
-                disabled={!selectedVoiceURI}
-                className="px-4 py-2 border border-primary/20 rounded text-on-surface-variant hover:border-primary/50 hover:text-primary transition-colors text-xs uppercase tracking-widest disabled:opacity-40"
-              >
-                🔊 Testar Voz
-              </button>
+          <div className="grid gap-4 md:grid-cols-2 mb-5">
+            <div className="flex flex-col gap-1">
+              <span className="text-xs uppercase tracking-widest text-on-surface-variant">Modelo</span>
+              <span className="text-sm text-on-surface">Gemini TTS</span>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-xs uppercase tracking-widest text-on-surface-variant">Voz</span>
+              <span className="text-sm text-on-surface">Aoede (pt-PT)</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-4 mt-5">
+          <div className="flex items-center gap-4">
             <button
-              onClick={saveVoiceSettings}
-              disabled={!selectedVoiceURI}
-              className="px-5 py-2 bg-primary text-[#000000] rounded font-bold text-xs uppercase tracking-widest hover:bg-primary-fixed transition-colors disabled:opacity-50"
+              onClick={() => { void testVoice(); }}
+              disabled={voiceTesting}
+              className="px-4 py-2 border border-primary/20 rounded text-on-surface-variant hover:border-primary/50 hover:text-primary transition-colors text-xs uppercase tracking-widest disabled:opacity-40"
             >
-              {voiceSaved ? '✓ Guardado' : 'Guardar Voz'}
+              {voiceTesting ? 'A falar...' : '🔊 Ouvir voz do Kaze'}
             </button>
             <span className="text-xs text-on-surface-variant">
-              {voicesLoading ? 'A detectar...' : `${nativeVoices.length} vozes portuguesas disponíveis`}
+              A configuração da voz é feita no servidor, por variável de ambiente.
             </span>
           </div>
         </section>
