@@ -12,7 +12,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { geminiService, getLocalKazeResponse } from '../services/geminiService';
 import { kazeAppAgent, KazeProposedAction } from '../services/kazeAppAgent';
-import { kazeSpeak, unlockNativeTTS } from '../lib/kazeVoice';
+import { kazeSpeak, unlockNativeTTS, setKazeLiveVoiceActive } from '../lib/kazeVoice';
 import { UserRole, RideStatus, LatLng } from '../types';
 import { supabase } from '../lib/supabase';
 import { useAppStore } from '../store/useAppStore';
@@ -860,6 +860,10 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     setLiveToolHint(null);
     setLiveUserText('');
     setLiveKazeText('');
+    // `close()` acima já devia ter disparado o onClose, mas a voz é uma regra
+    // demasiado fácil de deixar presa: repor aqui garante que o chat volta a
+    // poder falar mesmo que o fecho falhe.
+    setKazeLiveVoiceActive(false);
   }, []);
 
   /** Abre a sessão Gemini Live e liga as ferramentas do agente à voz. */
@@ -899,6 +903,9 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
             setIsLive(true);
             setLiveEngine('gemini');
             setVoiceError(null);
+            // O Live traz a voz do Kaze. Enquanto estiver activo, o TTS do
+            // chat fica calado — senão ouvir-se-iam duas vozes em simultâneo.
+            setKazeLiveVoiceActive(true);
           },
 
           onUserTranscript: (text) => {
@@ -1011,6 +1018,8 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
             setIsLive(false);
             setKazeSpeaking(false);
             setLiveToolHint(null);
+            // A voz volta a pertencer ao TTS do chat.
+            setKazeLiveVoiceActive(false);
           },
         },
       });
@@ -1029,6 +1038,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
       kazeLiveRef.current = null;
       setLiveEngine(null);
       setIsLive(false);
+      setKazeLiveVoiceActive(false);
       setVoiceError(
         err instanceof Error
           ? err.message
