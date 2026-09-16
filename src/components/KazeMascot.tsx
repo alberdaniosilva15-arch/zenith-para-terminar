@@ -13,6 +13,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { geminiService, getLocalKazeResponse } from '../services/geminiService';
 import { kazeAppAgent, KazeProposedAction } from '../services/kazeAppAgent';
 import { kazeSpeak, unlockNativeTTS, setKazeLiveVoiceActive } from '../lib/kazeVoice';
+import { kazeDiag } from '../lib/kazeVoiceDiag';
 import { UserRole, RideStatus, LatLng } from '../types';
 import { supabase } from '../lib/supabase';
 import { useAppStore } from '../store/useAppStore';
@@ -100,6 +101,13 @@ function pickGreeting(greetings: readonly string[]): string {
   return randomGreeting ?? greetings[0] ?? 'Estou aqui para ajudar.';
 }
 
+// ─── Contadores de diagnóstico (só leitura, não influenciam nada) ────────────
+//  `montagens` > 1 significaria o componente montado duas vezes — e, com ele,
+//  duas instâncias de estado a pedir voz ao mesmo tempo. `arranques` conta as
+//  chamadas a `startGeminiLiveSession`, que é o que abre um WebSocket.
+let kazeMontagens = 0;
+let kazeArranquesLive = 0;
+
 const KazeMascot: React.FC<KazeMascotProps> = ({
   role,
   rideStatus,
@@ -119,6 +127,11 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   const [isThinking,      setIsThinking]      = useState(false);
   const [thought,         setThought]         = useState<string | null>(null);
   const [isLive,          setIsLive]          = useState(false);
+  //  Verdadeiro entre o toque em "Voz Ao Vivo" e a sessão estar pronta. Serve
+  //  para o botão de arranque dizer "A ligar…" em vez de parecer parado — era
+  //  esse silêncio visual que levava o utilizador a tocar outra vez e a abrir
+  //  uma SEGUNDA sessão Live em paralelo com a primeira.
+  const [liveConnecting,  setLiveConnecting]  = useState(false);
   const [voiceError,      setVoiceError]      = useState<string | null>(null);
   const [kazeOnline,      setKazeOnline]      = useState<boolean | null>(true);
   const [voiceEnabled,    setVoiceEnabled]    = useState(true);
@@ -161,6 +174,15 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
 
   const liveSessionRef   = useRef<{ close: () => void } | null>(null);
   const kazeLiveRef      = useRef<KazeLiveSession | null>(null);
+  //  Cadeado do arranque da Voz Ao Vivo. `kazeLiveRef` só recebe a sessão no
+  //  FIM do arranque, por isso não serve de guarda durante ele: um segundo
+  //  toque não encontrava nada para fechar e abria uma sessão a mais. Este
+  //  cadeado fecha essa janela — enquanto for `true`, não se arranca outra.
+  const arranqueLiveRef  = useRef(false);
+  //  Geração do arranque. Sobe sempre que se fecha a sessão. Um arranque que
+  //  resolva depois disso sabe que já não interessa e fecha o que criou, em vez
+  //  de ficar vivo sem ninguém a apontar para ele.
+  const arranqueGeracaoRef = useRef(0);
 
   // Espelhos das transcrições da voz. Existem para que os callbacks da sessão
   // Live (criados uma única vez) leiam sempre o valor mais recente — sem eles
@@ -225,6 +247,17 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
       try { speechRecognitionRef.current.stop(); } catch {}
       speechRecognitionRef.current = null;
     }
+  }, []);
+
+  // Contagem de montagens — diagnóstico. Duas montagens dariam dois painéis,
+  // cada um com o seu estado e a sua sessão de voz.
+  useEffect(() => {
+    kazeMontagens += 1;
+    kazeDiag('mascote:montado', { origem: 'mascote', montagens: kazeMontagens });
+    return () => {
+      kazeMontagens -= 1;
+      kazeDiag('mascote:desmontado', { origem: 'mascote', montagens: kazeMontagens });
+    };
   }, []);
 
   // Mensagem de boas-vindas
@@ -846,6 +879,11 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
 
   /** Encerra a sessão Live (ou a clássica) e limpa o estado do modo de voz. */
   const stopVoiceSession = useCallback(() => {
+    // Subir a geração ANTES de fechar: se houver um arranque a meio (o
+    // utilizador fechou o painel enquanto ligava), ele vai resolver depois
+    // desta linha, ver que a geração mudou e fechar-se a si próprio. Sem isto,
+    // essa sessão nasceria já sem ninguém a apontar para ela.
+    arranqueGeracaoRef.current += 1;
     try { kazeLiveRef.current?.close(); } catch { /* já fechada */ }
     kazeLiveRef.current = null;
     try { liveSessionRef.current?.close(); } catch { /* já fechada */ }
@@ -855,6 +893,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     greetingEchoRef.current = null;
     setLiveEngine(null);
     setIsLive(false);
+    setLiveConnecting(false);
     setKazeSpeaking(false);
     setLiveMicOn(true);
     setLiveToolHint(null);
@@ -868,6 +907,38 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
 
   /** Abre a sessão Gemini Live e liga as ferramentas do agente à voz. */
   const startGeminiLiveSession = useCallback(async () => {
+    kazeArranquesLive += 1;
+
+    // ── Cadeado: nunca duas sessões Live ao mesmo tempo ───────────────────────
+    //  O `kazeLiveRef` só recebe a sessão no fim do arranque (token + SDK +
+    //  handshake, segundos), por isso durante esse tempo ele está `null` e não
+    //  serve de guarda. Sem este cadeado, tocar outra vez no botão — que fica
+    //  visível e clicável precisamente nessa janela — abre uma segunda sessão
+    //  que ninguém fecha: WebSocket próprio, microfone próprio e um segundo
+    //  AudioContext de saída. O resultado ouve-se como a mesma resposta dita
+    //  duas vezes. Reproduzido e medido em `.tmp-kaze-duas-sessoes.mjs`.
+    if (arranqueLiveRef.current) {
+      kazeDiag('mascote:arranque_recusado', {
+        origem: 'mascote',
+        motivo: 'ja_existe_sessao_ou_arranque_em_curso',
+        isLive,
+      });
+      return;
+    }
+    arranqueLiveRef.current = true;
+    setLiveConnecting(true);
+    const minhaGeracao = ++arranqueGeracaoRef.current;
+
+    // O estado da referência AQUI mostra se havia algo para fechar. Com o
+    // cadeado acima, um `false` já não significa "há uma sessão órfã".
+    kazeDiag('mascote:arranque_live', {
+      origem: 'mascote',
+      arranque: kazeArranquesLive,
+      refPreenchida: kazeLiveRef.current !== null,
+      modoAtual: mode,
+      isLive,
+    });
+
     setMode('voice');
     setVoiceError(null);
     setLiveToolHint(null);
@@ -901,6 +972,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         callbacks: {
           onReady: () => {
             setIsLive(true);
+            setLiveConnecting(false);
             setLiveEngine('gemini');
             setVoiceError(null);
             // O Live traz a voz do Kaze. Enquanto estiver activo, o TTS do
@@ -1016,15 +1088,42 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
             kazeLiveRef.current = null;
             setLiveEngine(null);
             setIsLive(false);
+            setLiveConnecting(false);
             setKazeSpeaking(false);
             setLiveToolHint(null);
             // A voz volta a pertencer ao TTS do chat.
             setKazeLiveVoiceActive(false);
+            // Libertar o cadeado: só a partir daqui é que se pode arrancar
+            // outra sessão. Enquanto a sessão esteve viva, o cadeado esteve
+            // fechado — é isso que impede uma segunda.
+            arranqueLiveRef.current = false;
+            kazeDiag('mascote:cadeado_aberto', { origem: 'mascote', motivo: 'sessao_fechada' });
           },
         },
       });
 
+      // ── O arranque ainda interessa? ───────────────────────────────────────
+      //  Entre o toque e este ponto passaram segundos. Se nesse tempo o painel
+      //  foi fechado (`stopVoiceSession` sobe a geração), esta sessão já não
+      //  serve ninguém: fechá-la AQUI é o que impede que fique viva sem
+      //  ninguém a apontar para ela — com WebSocket, microfone e contexto de
+      //  saída próprios, a falar por cima da sessão seguinte.
+      if (minhaGeracao !== arranqueGeracaoRef.current) {
+        kazeDiag('mascote:sessao_orfa_fechada', {
+          origem: 'mascote',
+          minhaGeracao,
+          geracaoAtual: arranqueGeracaoRef.current,
+        });
+        try { session.close(); } catch { /* já fechada */ }
+        return;
+      }
+
       kazeLiveRef.current = session;
+      kazeDiag('mascote:sessao_guardada', {
+        origem: 'mascote',
+        arranque: kazeArranquesLive,
+        refPreenchida: true,
+      });
 
       // O Live não toma a iniciativa de falar — sem um arranque, o Kaze ficava
       // calado à espera que o utilizador falasse primeiro. Enviado AQUI (e não
@@ -1044,6 +1143,12 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           ? err.message
           : 'A voz do Kaze está indisponível. Podes continuar a escrever no chat.',
       );
+    } finally {
+      // O arranque terminou (com sessão, com erro, ou cancelado). Abrir o
+      // cadeado aqui — e não em `onClose` — garante que ele nunca fica preso,
+      // que era o risco de o pôr só no caminho feliz.
+      setLiveConnecting(false);
+      arranqueLiveRef.current = false;
     }
   }, [userId, role, liveGpsAddress, liveGpsCoords, userLocation, rideStatus]);
 
@@ -1310,8 +1415,10 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                   </p>
                 </div>
 
-                {/* Seletor de motor — só antes de ligar */}
-                {!isLive && (
+                {/* Seletor de motor — só antes de ligar, e nunca a meio de um
+                    arranque: trocar de motor enquanto uma sessão Live liga
+                    deixaria a sessão antiga viva sem ninguém a fechar. */}
+                {!isLive && !liveConnecting && (
                   <div style={{ display: 'flex', gap: '4px', background: 'var(--surface-3)', borderRadius: '10px', padding: '4px' }}>
                     {([
                       { id: 'gemini' as KazeVoiceEngine, label: 'Gemini Live' },
@@ -1374,8 +1481,17 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                 )}
 
                 {!isLive && (
-                  <button onClick={startVoiceSession} className="zr-button zr-button--block">
-                    {voiceEngine === 'gemini' ? 'Sintonizar Kaze · Gemini Live' : 'Sintonizar Kaze'}
+                  <button
+                    onClick={() => { void startVoiceSession(); }}
+                    disabled={liveConnecting}
+                    className="zr-button zr-button--block"
+                    style={liveConnecting ? { opacity: 0.6, cursor: 'default' } : undefined}
+                  >
+                    {liveConnecting
+                      ? 'A ligar o Kaze…'
+                      : voiceEngine === 'gemini'
+                        ? 'Sintonizar Kaze · Gemini Live'
+                        : 'Sintonizar Kaze'}
                   </button>
                 )}
 

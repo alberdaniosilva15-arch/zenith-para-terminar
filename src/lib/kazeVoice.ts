@@ -17,6 +17,7 @@
 // ──────────────────────────────────────────────────────────────────────────────
 
 import { kazeTts, type KazeTtsResposta } from './kazeGeminiTts';
+import { kazeDiag, kazeDiagContadores, kazeDiagFontes } from './kazeVoiceDiag';
 
 const VOICE_CACHE_KEY = 'kaze_native_voice_uri';
 const VOICE_READY_KEY = 'kaze_voice_ready';
@@ -87,8 +88,15 @@ function obterContexto(): AudioContext | null {
     ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
   if (!audioCtx || audioCtx.state === 'closed') {
-    try { audioCtx = new Ctor({ sampleRate: TTS_SAMPLE_RATE }); }
-    catch { audioCtx = null; }
+    try {
+      audioCtx = new Ctor({ sampleRate: TTS_SAMPLE_RATE });
+      kazeDiagContadores.audioCtxCriados += 1;
+      kazeDiag('tts:audioctx_criado', {
+        origem: 'tts',
+        total: kazeDiagContadores.audioCtxCriados,
+        estado: audioCtx.state,
+      });
+    } catch { audioCtx = null; }
   }
   return audioCtx;
 }
@@ -272,12 +280,19 @@ function cleanTextForSpeech(raw: string, maxLen = 600): string {
  * Não toca na sessão Live: essa tem o seu próprio ciclo de vida.
  */
 export function kazeStop(): void {
+  const paradas = fontesActivas.size;
   pedidoAtual += 1;
   for (const fonte of fontesActivas) {
     try { fonte.stop(); } catch { /* já terminou */ }
   }
   fontesActivas.clear();
   aFalar = false;
+  kazeDiag('tts:stop', {
+    origem: 'tts',
+    pedidoAtual,
+    fontes_paradas: paradas,
+    fontes: kazeDiagFontes(fontesActivas.size, 0).tts,
+  });
 }
 
 /**
@@ -295,6 +310,12 @@ export function kazeIsSpeaking(): boolean {
  * num só sítio, para nenhum ponto de chamada a poder esquecer.
  */
 export function setKazeLiveVoiceActive(ativo: boolean): void {
+  kazeDiag('live:flag', {
+    origem: 'live',
+    ativo,
+    pedidoAtual,
+    fontes_tts: fontesActivas.size,
+  });
   liveVoiceAtivo = ativo;
   if (ativo) kazeStop();
 }
@@ -344,9 +365,48 @@ async function reproduzir(
   taxa: number,
   meuPedido: number,
 ): Promise<boolean> {
+  kazeDiag('tts:reproduzir_entrada', {
+    origem: 'tts',
+    pedido: meuPedido,
+    pedidoAtual,
+    ctxEstado: ctx.state,
+    fontes_tts: fontesActivas.size,
+    amostras: amostras.length,
+  });
+
   if (ctx.state === 'suspended') {
     await ctx.resume().catch(() => { /* segue: o start pode ainda assim funcionar */ });
   }
+
+  // ── A verificação que faltava ─────────────────────────────────────────────
+  //  O `await` acima é uma janela real: enquanto ele corre, o `kazeStop` pode
+  //  ter subido o `pedidoAtual` (por um pedido novo, ou porque o Live arrancou
+  //  e passou a ser dono da voz). Nesse caso o `fontesActivas.clear()` já
+  //  passou — a fonte ainda não existia — e criar e arrancar aqui punha uma
+  //  segunda voz a tocar por cima do Live.
+  //
+  //  Verificar o `pedidoAtual` ANTES do `await` (como estava) não bastava:
+  //  entre a verificação e o arranque da fonte tem de haver uma segunda.
+  //  Reproduzido e medido em `.tmp-kaze-race.mjs`.
+  if (meuPedido !== pedidoAtual || liveVoiceAtivo) {
+    kazeDiag('tts:fonte_abortada', {
+      origem: 'tts',
+      pedido: meuPedido,
+      pedidoAtual,
+      liveVoiceAtivo,
+      motivo: liveVoiceAtivo ? 'live_assumiu' : 'pedido_substituido',
+    });
+    return false;
+  }
+
+  kazeDiag('tts:reproduzir_pos_await', {
+    origem: 'tts',
+    pedido: meuPedido,
+    pedidoAtual,
+    ctxEstado: ctx.state,
+    fontes_tts: fontesActivas.size,
+    desactualizado: false,
+  });
 
   const buffer = ctx.createBuffer(1, amostras.length, taxa);
   // `getChannelData().set()` em vez de `copyToChannel()`: é equivalente e evita
@@ -359,6 +419,15 @@ async function reproduzir(
   fonte.connect(ctx.destination);
   fontesActivas.add(fonte);
   aFalar = true;
+  kazeDiagContadores.ttsReproducoes += 1;
+
+  kazeDiag('tts:fonte_iniciada', {
+    origem: 'tts',
+    pedido: meuPedido,
+    pedidoAtual,
+    fontes_tts: fontesActivas.size,
+    duracao_s: Number(buffer.duration.toFixed(2)),
+  });
 
   return new Promise<boolean>((resolve) => {
     let concluida = false;
@@ -367,6 +436,13 @@ async function reproduzir(
       concluida = true;
       fontesActivas.delete(fonte);
       if (fontesActivas.size === 0) aFalar = false;
+      kazeDiag('tts:fonte_terminada', {
+        origem: 'tts',
+        pedido: meuPedido,
+        pedidoAtual,
+        completa,
+        fontes_tts: fontesActivas.size,
+      });
       resolve(completa);
     };
 
@@ -402,10 +478,22 @@ export async function kazeSpeak(
 
   // Uma sessão Live já tem a voz do Kaze a correr. Falar por cima daria duas
   // vozes em simultâneo — e a do Live é a que interessa.
-  if (liveVoiceAtivo) return { source: 'none' };
+  if (liveVoiceAtivo) {
+    kazeDiagContadores.ttsTravadoPorLive += 1;
+    kazeDiag('tts:travado_por_live', { origem: 'tts', texto: clean.slice(0, 40) });
+    return { source: 'none' };
+  }
 
   kazeStop();
   const meu = ++pedidoAtual;
+
+  kazeDiag('tts:pedido', {
+    origem: 'tts',
+    pedido: meu,
+    pedidoAtual,
+    texto: clean.slice(0, 40),
+    liveVoiceAtivo,
+  });
 
   const ctx = obterContexto();
   if (!ctx) {
@@ -421,10 +509,22 @@ export async function kazeSpeak(
     return { source: 'none' };
   }
 
+  kazeDiag('tts:audio_recebido', {
+    origem: 'tts',
+    pedido: meu,
+    pedidoAtual,
+    liveVoiceAtivo,
+    bytes: resposta.audio?.length ?? 0,
+    taxa: resposta.sample_rate,
+  });
+
   // Entretanto o utilizador pediu silêncio, ou começou outra fala. Sintetizar
   // não se desperdiça (o custo já foi pago), mas tocar sim: seria ouvir uma
   // resposta a uma pergunta que já passou.
-  if (meu !== pedidoAtual) return { source: 'none' };
+  if (meu !== pedidoAtual) {
+    kazeDiag('tts:descartado', { origem: 'tts', pedido: meu, pedidoAtual });
+    return { source: 'none' };
+  }
 
   const amostras = pcmBase64ParaAmostras(resposta.audio);
   if (!amostras.length) {
