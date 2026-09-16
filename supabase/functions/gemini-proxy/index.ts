@@ -79,6 +79,34 @@ const LIVE_SESSION_WINDOW_MS = 5 * 60 * 1000;
 /** Tempo total durante o qual a sessão pode trocar mensagens. */
 const LIVE_TOKEN_TTL_MS = 30 * 60 * 1000;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// VOZ DO KAZE EM TEXTO (acção `kaze_tts`)
+//
+// O chat, os cumprimentos e as confirmações de acção não têm sessão Live aberta,
+// por isso precisam de sintetizar fala à parte. Até aqui isso era feito com a
+// `speechSynthesis` do browser — ou seja, com o sintetizador DO SISTEMA (SAPI no
+// Windows, TTS do Android, AVSpeech no iOS). Essa voz não é a do Kaze: é a do
+// telemóvel, soa a robot e muda de aparelho para aparelho.
+//
+// Aqui a voz vem do Gemini, a MESMA do Live (Aoede). O Kaze passa a soar igual
+// quer fale por voz, quer responda por escrito.
+//
+// Medido contra a API real (texto de 85 caracteres):
+//   gemini-3.1-flash-tts-preview   5,5 s   ~317 kB  6,6 s de fala   ← escolhido
+//   gemini-2.5-flash-preview-tts   5,6 s   ~313 kB  6,5 s de fala
+//   gemini-2.5-pro-preview-tts     —       429 quota excedida na conta
+//
+// Devolve PCM cru (16 bits, 24 kHz, mono) em base64: o cliente descodifica e
+// reproduz com a Web Audio API, sem MP3 nem ficheiros temporários.
+//
+// Afinável sem mexer no código:
+//   supabase secrets set GEMINI_TTS_MODEL=... GEMINI_TTS_VOICE=...
+// ─────────────────────────────────────────────────────────────────────────────
+const TTS_MODEL = Deno.env.get('GEMINI_TTS_MODEL') ?? 'gemini-3.1-flash-tts-preview';
+const TTS_VOICE = Deno.env.get('GEMINI_TTS_VOICE') ?? 'Aoede';
+/** Fala mais longa do que isto é sintoma de resposta mal montada. */
+const TTS_MAX_CHARS = 700;
+
 // Rate limits por acção (requests por hora)
 const RATE_LIMITS: Record<string, number> = {
   kaze_chat:            20,
@@ -89,6 +117,8 @@ const RATE_LIMITS: Record<string, number> = {
   autonomous_decisions:  5,
   post_ride_review:     20,
   get_live_token:        5,
+  // Uma fala por resposta do chat: o limite acompanha o do kaze_chat.
+  kaze_tts:             40,
   _default:             30,
 };
 
@@ -824,6 +854,86 @@ JSON: { text: string }`,
               : 'Não foi possível iniciar a voz do Kaze. Tenta novamente.',
             isKeyProblem ? 503 : 502,
           );
+        }
+      }
+
+      // ----------------------------------------------------------------
+      case 'kaze_tts': {
+        // ----------------------------------------------------------------
+        // Voz do Kaze para texto (ver o bloco de constantes TTS_* no topo).
+        //
+        // Chamada REST directa em vez do SDK: esta função importa
+        // `@google/genai@1`, e a configuração de fala (`responseModalities` +
+        // `speechConfig`) não tem tipos estáveis nessa versão. O pedido abaixo
+        // é o mesmo que já foi medido contra a API real — sem surpresas.
+        // ----------------------------------------------------------------
+        if (!GEMINI_API_KEY) {
+          return err('Voz do Kaze indisponível: chave do Gemini não configurada no servidor.', 503);
+        }
+
+        const textoBruto = String((payload as { text?: unknown })?.text ?? '').trim();
+        if (!textoBruto) return err('Texto em falta para sintetizar.', 400);
+
+        const texto = textoBruto.length > TTS_MAX_CHARS
+          ? `${textoBruto.slice(0, TTS_MAX_CHARS)}…`
+          : textoBruto;
+
+        const vozPedida = (payload as { voice?: unknown })?.voice;
+        const voz = typeof vozPedida === 'string' && vozPedida.trim() ? vozPedida.trim() : TTS_VOICE;
+
+        try {
+          const resposta = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${TTS_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: texto }] }],
+                generationConfig: {
+                  responseModalities: ['AUDIO'],
+                  speechConfig: {
+                    languageCode: 'pt-PT',
+                    voiceConfig: { prebuiltVoiceConfig: { voiceName: voz } },
+                  },
+                },
+              }),
+            },
+          );
+
+          if (!resposta.ok) {
+            const detalhe = (await resposta.text()).slice(0, 300);
+            console.error('[gemini-proxy] kaze_tts HTTP', resposta.status, detalhe);
+            logAiUsage({
+              userId: user.id,
+              action: 'kaze_tts',
+              errorReturned: `HTTP ${resposta.status}: ${detalhe}`.slice(0, 200),
+            });
+            return err('Não foi possível gerar a voz do Kaze.', 502);
+          }
+
+          const dados = await resposta.json();
+          const parte = dados?.candidates?.[0]?.content?.parts?.[0];
+          const base64 = parte?.inlineData?.data ?? '';
+
+          if (!base64) {
+            logAiUsage({ userId: user.id, action: 'kaze_tts', errorReturned: 'sem áudio na resposta' });
+            return err('O servidor não devolveu áudio para este texto.', 502);
+          }
+
+          logAiUsage({ userId: user.id, action: 'kaze_tts' });
+
+          return ok({
+            audio: base64,
+            mime: parte?.inlineData?.mimeType ?? 'audio/l16; rate=24000; channels=1',
+            sample_rate: 24000,
+            voice: voz,
+            model: TTS_MODEL,
+          });
+        } catch (ttsErr) {
+          const detalhe = ttsErr instanceof Error ? ttsErr.message : String(ttsErr);
+          console.error('[gemini-proxy] kaze_tts falhou:', detalhe);
+          logAiUsage({ userId: user.id, action: 'kaze_tts', errorReturned: detalhe.slice(0, 200) });
+          return err('Não foi possível gerar a voz do Kaze.', 502);
         }
       }
 
