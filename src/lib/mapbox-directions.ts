@@ -41,10 +41,13 @@ export async function getRoute(
   };
 }
 
-// Preço estimado em KZS baseado na distância
-export function estimatePrice(distanceKm: number, surgeMultiplier = 1.0): number {
-  const BASE_KZS     = 500;   // taxa de partida
-  const PER_KM_KZS   = 150;   // por km
-  const raw = BASE_KZS + (distanceKm * PER_KM_KZS * surgeMultiplier);
-  return Math.round(raw / 50) * 50; // arredondar para múltiplo de 50 KZS
-}
+// ⚠️ Aqui vivia um `estimatePrice(distanceKm, surge)` com uma tarifa escrita à
+// mão — `BASE_KZS = 500` e `PER_KM_KZS = 150`. Foi REMOVIDO em 16/09/2026.
+//
+// A razão: não existe fórmula de preço em TypeScript nenhum. A fonte de verdade
+// é a função Postgres `calculate_fare_engine_pro`, que lê `pricing_config`.
+// Duplicá-la aqui fazia com que o valor mostrado divergisse do cobrado — e a
+// função nunca chegou a ser usada por ninguém (estava exportada e morta), o que
+// só servia para alguém a voltar a ligar por engano.
+//
+// Quem precisa de um preço usa `src/services/fareQuote.ts`.

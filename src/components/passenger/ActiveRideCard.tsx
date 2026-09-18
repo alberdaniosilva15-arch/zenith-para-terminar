@@ -12,6 +12,7 @@ import React, { Suspense } from 'react';
 import { RideState, RideStatus } from '../../types';
 import RideChat from '../RideChat';
 import { LiveShareButton } from './LiveShareButton';
+import { SafetyCheckPrompt } from './SafetyCheckPrompt';
 import ErrorBoundary from '../ErrorBoundary';
 
 const AgoraCall = React.lazy(() => import('../AgoraCall'));
@@ -251,6 +252,16 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
               )}
             </div>
           </div>
+
+          {/* 🛡️ AVISO DE SEGURANÇA — "Está tudo bem?" durante a corrida.
+              Aparece sozinho quando o motor da escada abre a pergunta
+              (corrida longa) e desaparece quando o passageiro responde.
+              Isolado num ErrorBoundary: se falhar, a corrida continua. */}
+          {resolvedRideId && (
+            <ErrorBoundary name="SafetyCheckPrompt" compact fallback={null}>
+              <SafetyCheckPrompt rideId={resolvedRideId} />
+            </ErrorBoundary>
+          )}
 
           {/* 🛡️ SAFETY SHIELD — partilha + SOS */}
           {resolvedRideId && (

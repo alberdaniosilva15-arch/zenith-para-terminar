@@ -84,11 +84,24 @@ export function startScreamDetection(onScream: ScreamCallback): ScreamDetectorHa
     recognition = new SpeechRec();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'pt-BR';
+    // Português de PORTUGAL, não do Brasil. Angola fala português europeu
+    // (vocabulário, pronúncia e ortografia). O Chrome não tem `pt-AO`; `pt-PT`
+    // é o mais próximo e reconhece muito melhor "socorro" dito por um angolano
+    // do que `pt-BR`. Antes estava `pt-BR`.
+    recognition.lang = 'pt-PT';
 
     recognition.onresult = (event: any) => {
       for (let i = event.resultIndex; i < event.results.length; ++i) {
-        const transcript = event.results[i][0].transcript.trim().toLowerCase();
+        const resultado = event.results[i];
+
+        // ⚠️ Só resultados FINAIS. Com `interimResults = true` o reconhecedor
+        // emite transcrições provisórias que muda a seguir — "obrigado pela
+        // ajuda" aparece primeiro como "ajuda" e só depois ganha contexto.
+        // Agir sobre o provisório dava alarmes falsos a partir de conversa
+        // normal dentro do carro. O resultado final já é a frase fechada.
+        if (!resultado.isFinal) continue;
+
+        const transcript = String(resultado[0]?.transcript ?? '').trim().toLowerCase();
         if (
           transcript.includes('socorro') ||
           transcript.includes('ajuda') ||

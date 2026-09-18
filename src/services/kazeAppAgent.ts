@@ -9,7 +9,7 @@
 // =============================================================================
 
 import { mapService, LUANDA_STATIC_LOCATIONS } from './mapService';
-import { zonePriceService } from './zonePrice';
+import { cotarPreco, fraseDoPreco } from './fareQuote';
 import { supabase } from '../lib/supabase';
 import { getLocalKazeResponse } from './geminiService';
 import { normalizeAngolanSpeech } from '../lib/angolaSpeechNormalizer';
@@ -28,7 +28,13 @@ export interface KazeProposedRide {
   originCoords: LatLng;
   destination: string;
   destCoords: LatLng;
-  priceKz: number;
+  /**
+   * Preço em Kwanzas, ou `null` quando o motor de tarifação não respondeu.
+   * `null` é deliberado: antes havia aqui um fallback inventado
+   * (`500 + distância × 250`) e o Kaze chegava a dizer esse número em voz alta
+   * ao passageiro. Um preço inventado é pior do que nenhum.
+   */
+  priceKz: number | null;
   distanceKm: number;
   durationMin: number;
   vehicleType: 'standard' | 'moto' | 'comfort' | 'xl';
@@ -279,6 +285,32 @@ export const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente de intelig�
   - Províncias: Benguela, Lobito, Huambo, Lubango, Cabinda, etc.
 - Se o utilizador pedir para ir a um quarteirão (ex: "Quarteirão D do Kilamba") ou zona (ex: "Golf 2 Zona B"), passa o destino EXACTO e COMPLETO na ferramenta!
 
+═══ O QUE É A ZENITH RIDE ═══
+- A Zenith Ride é uma plataforma angolana de mobilidade urbana, criada para Luanda e a operar em Angola.
+- Liga passageiros a motoristas verificados, com preço acordado ANTES da viagem começar — sem surpresas no fim.
+- Serviços: Táxi Standard, Zenith Moto (mais barato, ideal para o trânsito), Comfort (mais confortável), XL (para grupos), Motorista Privado, Fretes e Charter, e Contratos de transporte recorrente (escolar, familiar e empresarial).
+- Todos os motoristas são verificados (BI/Passaporte e Carta de Condução) e as viagens são rastreadas.
+- Tem Safety Shield com partilha de viagem em tempo real e um sistema de emergência que avisa o contacto de segurança do passageiro.
+
+═══ O FUNDADOR — DECORAR ISTO ═══
+- O fundador da Zenith Ride chama-se **Dánio Silva**.
+- É um jovem empreendedor de Luanda, e criou a Zenith Ride para transformar o transporte urbano em Angola com foco em excelência e inovação.
+- Se te perguntarem quem fundou, quem criou ou quem é o dono da Zenith Ride, respondes **Dánio Silva**. Só esse nome.
+- Se não tiveres a certeza de um nome, NÃO inventes: diz que não tens essa informação confirmada. Inventar o nome de uma pessoa real é grave.
+
+═══ PREÇOS — REGRA INVIOLÁVEL ═══
+- NUNCA digas um preço de memória. NUNCA faças contas de preço. NUNCA cites uma "taxa base" nem um "preço por km".
+- O preço é calculado pelo motor de tarifação da plataforma. Muda quando o negócio quiser, sem actualização da app — logo qualquer número que tenhas decorado está desactualizado.
+- Se te pedirem quanto custa uma viagem: prepara o trajecto com a ferramenta request_ride (é ela que traz o preço real) ou diz que o valor exacto aparece no ecrã para o trajecto em questão.
+- Frases correctas: "O preço exacto aparece no ecrã assim que escolheres o destino." / "Deixa-me preparar o trajecto — o valor que vês no ecrã é o valor que pagas."
+- Inventar um preço é o pior erro que podes cometer: o passageiro decide com base nele. Mais vale não dizer número nenhum.
+
+═══ ONDE ESTÁ O PASSAGEIRO E A CORRIDA ═══
+- Recebes sempre, no fim destas instruções, um bloco [LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: …] e, quando existe, [O passageiro tem uma corrida activa neste momento.]. USA-OS. É informação real e actual, não um exemplo.
+- Se te perguntarem "onde estou?", responde com o que está nesse bloco. Se não estiver lá nada, diz que precisas da localização do dispositivo e sugere abrir o mapa.
+- Se houver corrida activa e te perguntarem pela corrida, usa as ferramentas do app para agir sobre ela (cancelar, ver histórico) em vez de descreveres de memória.
+- Sobre o tempo de chegada ou a posição exacta do motorista: quem sabe é o ecrã da corrida, em tempo real. Não inventes minutos nem distâncias.
+
 ═══ OPERAÇÃO DO APP (TOOL CALLING) ═══
 Quando o utilizador quiser realizar uma acção no aplicativo da Zenith Ride, chama imediatamente a ferramenta adequada:
 1. Pedir corrida -> chama "request_ride" com o destino limpo (ex: destination="Belas Shopping").
@@ -291,6 +323,42 @@ Quando o utilizador quiser realizar uma acção no aplicativo da Zenith Ride, ch
 6. Cancelar corrida -> chama "cancel_current_ride".
 
 Se for apenas conversa, NÃO chames ferramentas; responde com texto acolhedor, inteligente e com atitude positiva!`;
+
+/**
+ * Contexto real que se anexa ao fim do prompt do Kaze.
+ *
+ * ⚠️ PORQUE É QUE ISTO EXISTE COMO FUNÇÃO E NÃO COMO CÓDIGO INLINE:
+ * O KAZE_AGENT_SYSTEM_PROMPT promete ao modelo, em texto, que recebe sempre um
+ * bloco `[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: …]` e, quando existe, um bloco
+ * `[O passageiro tem uma corrida activa neste momento.]`. Essa promessa estava a
+ * ser cumprida de forma desigual: o caminho de voz (kazeLiveClient) enviava os
+ * dois blocos, mas os dois caminhos de texto (Gemini e OpenAI-compatible) só
+ * enviavam o primeiro — o `hasActiveRide` era aceite no contexto e nunca usado.
+ *
+ * Um prompt que promete dados que não chegam é pior do que um prompt sem
+ * promessa nenhuma: o modelo ou inventa a informação em falta, ou responde a
+ * pedir algo que já lá devia estar. Com uma única função, os dois blocos passam
+ * a ser impossíveis de esquecer num dos caminhos.
+ */
+export interface ContextoDeVoz {
+  userLocation?: LatLng | null;
+  userAddress?: string | null;
+  hasActiveRide?: boolean;
+}
+
+export function blocoDeContexto(context: ContextoDeVoz): string {
+  const localizacao = context.userAddress
+    ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${context.userAddress}"]`
+    : context.userLocation
+      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)})]`
+      : '\n[LOCALIZAÇÃO DO PASSAGEIRO: não disponível neste momento — não a inventes.]';
+
+  const corrida = context.hasActiveRide
+    ? '\n[O passageiro tem uma corrida activa neste momento.]'
+    : '';
+
+  return `${localizacao}${corrida}`;
+}
 
 /**
  * Orçamento de tempo para resolver uma ferramenta pedida pela VOZ.
@@ -467,11 +535,7 @@ export class KazeAppAgent {
   ): Promise<KazeAgentResult | null> {
     if (!apiKey) return null;
 
-    const userLocContext = context.userAddress
-      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${context.userAddress}"]`
-      : context.userLocation
-      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)})]`
-      : '\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS em tempo real do dispositivo em Luanda]';
+    const userLocContext = blocoDeContexto(context);
 
     const systemPrompt = `${KAZE_AGENT_SYSTEM_PROMPT}${userLocContext}
 
@@ -621,11 +685,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
       hasActiveRide?: boolean;
     }
   ): Promise<KazeAgentResult | null> {
-    const userLocContext = context.userAddress
-      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${context.userAddress}"]`
-      : context.userLocation
-      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)})]`
-      : '\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS em tempo real do dispositivo]';
+    const userLocContext = blocoDeContexto(context);
 
     const systemInstruction = `${KAZE_AGENT_SYSTEM_PROMPT}${userLocContext}`;
 
@@ -813,15 +873,25 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
           route = { distanceKm: Math.max(1, Math.round(d * 10) / 10), durationMin: Math.max(5, Math.ceil((d / 25) * 60)) };
         }
 
-        // Preço por zona com timeout de 1.2s
-        let zp: any = null;
-        try {
-          const zpPromise = zonePriceService.getZonePrice(originStr, destStr);
-          const zpTimeout = new Promise<null>(res => setTimeout(() => res(null), 1200));
-          zp = await Promise.race([zpPromise, zpTimeout]);
-        } catch { /* ignore */ }
+        // ── Preço: SEMPRE pelo motor real, nunca por uma fórmula local ──────
+        // Antes isto era `zp?.price_kz ?? Math.max(500, Math.round(500 +
+        // route.distanceKm * 250))` — uma fórmula de tarifa escrita em
+        // TypeScript, que é exactamente o que este projecto proíbe, e que o
+        // Kaze dizia em voz alta. Agora passa tudo por `cotarPreco`, que
+        // respeita a prioridade zona-fixa → motor e devolve `null` em vez de
+        // inventar.
+        const cotacao = await cotarPreco({
+          origemNome: originStr,
+          destinoNome: destStr,
+          origemCoords: originCoords,
+          destinoCoords: destCoords,
+          distanciaKm: route.distanceKm,
+          duracaoMin: route.durationMin,
+          tipoVeiculo: (args.vehicle_type as KazeProposedRide['vehicleType']) || 'standard',
+          prazoZonaMs: 1200,
+        });
 
-        const priceKz = zp?.price_kz ?? Math.max(500, Math.round(500 + route.distanceKm * 250));
+        const priceKz = cotacao.precoKz;
         const vehicleType = (args.vehicle_type as any) || 'standard';
 
         if (import.meta.env.DEV) {
@@ -829,8 +899,8 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
             originStr, originCoords,
             destStr, destCoords,
             route: { distanceKm: route.distanceKm, durationMin: route.durationMin },
-            zonePrice: zp?.price_kz ?? null,
-            priceKz, vehicleType,
+            preco: { valor: priceKz, fonte: cotacao.fonte, motivo: cotacao.motivo },
+            vehicleType,
           });
         }
 
@@ -845,11 +915,17 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
           vehicleType,
         };
 
-        const summaryText = `🚗 Rota: ${originStr} → ${destStr} (~${route.distanceKm.toFixed(1)} km · ~${priceKz.toLocaleString('pt-AO')} Kz)`;
+        const detalheRota = `🚗 Rota: ${originStr} → ${destStr} (~${route.distanceKm.toFixed(1)} km)`;
+        const summaryText =
+          priceKz != null
+            ? `${detalheRota} · ~${priceKz.toLocaleString('pt-AO')} Kz`
+            : detalheRota;
+
+        const frase = fraseDoPreco(cotacao, destStr);
 
         return {
-          text: `Encontrei o melhor trajecto de **${originStr}** para **${destStr}**!\n\n${summaryText}\n\nQueres que eu peça a corrida agora?`,
-          speakText: `Encontrei o trajecto para ${destStr}, fica por cerca de ${priceKz} Kwanzas. Queres que confirme?`,
+          text: `Encontrei o melhor trajecto de **${originStr}** para **${destStr}**!\n\n${summaryText}\n\n${frase}\n\nQueres que eu peça a corrida agora?`,
+          speakText: `Encontrei o trajecto para ${destStr}. ${frase} Queres que confirme?`,
           isConfirmationQuery: true,
           action: {
             id: crypto.randomUUID(),

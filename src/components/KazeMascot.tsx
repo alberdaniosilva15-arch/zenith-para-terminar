@@ -318,7 +318,10 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
             d.originCoords,
             d.destination,
             d.destCoords,
-            d.priceKz,
+            // `null` significa "o motor de preços não respondeu" — passa-se
+            // `undefined` para o PassengerHome recalcular o valor real em vez
+            // de se arrastar um número inventado.
+            d.priceKz ?? undefined,
             d.distanceKm,
             d.durationMin,
             d.vehicleType

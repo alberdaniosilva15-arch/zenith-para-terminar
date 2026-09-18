@@ -14,6 +14,13 @@ interface PanicButtonProps {
   enableScreamDetection?: boolean;
 }
 
+/**
+ * De onde veio o alerta. Não é cosmético: o motor usa isto para decidir o texto
+ * que envia ao contacto de emergência. "Accionou o botão" e "detectámos um grito
+ * automaticamente" são coisas diferentes para quem recebe a mensagem.
+ */
+type PanicSource = 'botao_panico' | 'grito' | 'escada_corrida';
+
 export default function PanicButton({
   userId,
   rideId,
@@ -58,14 +65,18 @@ export default function PanicButton({
     };
   }, []);
 
-  const triggerPanicRef = useRef<(silent?: boolean) => Promise<void>>(async () => {});
+  const triggerPanicRef = useRef<(silent?: boolean, source?: PanicSource) => Promise<void>>(
+    async () => {},
+  );
 
   // Detecção de gritos — activa durante corrida nocturna
   useEffect(() => {
     if (!enableScreamDetection || !rideId) return;
     const handle = startScreamDetection(() => {
       console.warn('[PanicButton] Grito detectado — activando SOS silencioso');
-      void triggerPanicRef.current(true);
+      // 'grito' e não 'botao_panico': a mensagem ao contacto tem de dizer que
+      // o alerta foi automático, não que o passageiro carregou em algo.
+      void triggerPanicRef.current(true, 'grito');
     });
     return () => { handle?.stop(); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -77,7 +88,7 @@ export default function PanicButton({
     }
 
     lastSilentSignalRef.current = silentSignal;
-    void triggerPanicRef.current(true);
+    void triggerPanicRef.current(true, 'escada_corrida');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [silentSignal, rideId, emergencyPhone, resolvedCounterparty]);
 
@@ -177,14 +188,22 @@ export default function PanicButton({
     latitude?: number,
     longitude?: number,
     severity: 'high' | 'critical' = 'high',
+    source: PanicSource = 'botao_panico',
   ) => {
     const payload: Record<string, unknown> = {
       user_id: userId,
       ride_id: rideId ?? null,
       driver_name: resolvedCounterparty ?? null,
       severity,
+      source,
       created_at: new Date().toISOString(),
     };
+
+    // Retrato do contacto no momento do alerta. O perfil pode mudar depois;
+    // o que interessa ao motor é para quem se estava a ligar naquela hora.
+    if (emergencyPhone) {
+      payload.contact_phone = emergencyPhone;
+    }
 
     if (typeof latitude === 'number' && typeof longitude === 'number') {
       payload.lat = latitude;
@@ -248,7 +267,7 @@ export default function PanicButton({
     return true;
   };
 
-  const triggerPanic = async (silent = false) => {
+  const triggerPanic = async (silent = false, source: PanicSource = 'botao_panico') => {
     if (!silent && !pressed) {
       setPressed(true);
       if (confirmResetRef.current) {
@@ -276,11 +295,11 @@ export default function PanicButton({
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        await persistPanic(latitude, longitude, silent ? 'critical' : 'high');
+        await persistPanic(latitude, longitude, silent ? 'critical' : 'high', source);
         sendEmergencyAlerts(latitude, longitude);
       },
       async () => {
-        await persistPanic(undefined, undefined, silent ? 'critical' : 'high');
+        await persistPanic(undefined, undefined, silent ? 'critical' : 'high', source);
         sendEmergencyAlerts();
       },
       {

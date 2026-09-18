@@ -49,7 +49,7 @@
 // por uma funcionalidade que a maioria das sessões nunca abre.
 import type { FunctionDeclaration, ToolListUnion, Type as GeminiSchemaType } from '@google/genai';
 import { geminiService } from '../services/geminiService';
-import { KAZE_APP_TOOLS, KAZE_AGENT_SYSTEM_PROMPT } from '../services/kazeAppAgent';
+import { KAZE_APP_TOOLS, KAZE_AGENT_SYSTEM_PROMPT, blocoDeContexto } from '../services/kazeAppAgent';
 import type { LatLng } from '../types';
 import { kazeDiag, kazeDiagContadores, kazeDiagFontes, kazeDiagNovoSessionId } from './kazeVoiceDiag';
 
@@ -586,20 +586,19 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     httpOptions: { apiVersion: 'v1alpha' },
   });
 
-  const locationHint = userAddress
-    ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${userAddress}"]`
-    : userLocation
-      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS (${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)})]`
-      : '';
-
-  const rideHint = hasActiveRide ? '\n[O passageiro tem uma corrida activa neste momento.]' : '';
+  // Bloco de contexto real (localização + corrida activa). Vive em
+  // kazeAppAgent para que os três caminhos do Kaze — voz, Gemini texto e
+  // OpenAI-compatible texto — enviem exactamente a mesma informação. Antes
+  // estava duplicado aqui e nos outros dois, e um deles esquecia o bloco da
+  // corrida activa.
+  const contextoReal = blocoDeContexto({ userAddress, userLocation, hasActiveRide });
 
   const conexao = ai.live.connect({
     model,
     config: {
       responseModalities: [Modality.AUDIO],
       systemInstruction: {
-        parts: [{ text: `${KAZE_AGENT_SYSTEM_PROMPT}${locationHint}${rideHint}` }],
+        parts: [{ text: `${KAZE_AGENT_SYSTEM_PROMPT}${contextoReal}` }],
       },
       speechConfig: {
         languageCode,

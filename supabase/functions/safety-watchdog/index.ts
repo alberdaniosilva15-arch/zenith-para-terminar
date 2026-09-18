@@ -17,6 +17,10 @@ const STALE_HOURS       = 4; // Corrida activa sem fim após X horas
 
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
 const CRON_SECRET       = Deno.env.get('CRON_SECRET') ?? '';
+// O job `safety-watchdog-hourly` passou a chamar esta função com o segredo
+// guardado no Vault (`SOS_CRON_SECRET`). O `CRON_SECRET` antigo continua a
+// servir, para não partir nada que já o use.
+const SOS_CRON_SECRET   = Deno.env.get('SOS_CRON_SECRET') ?? '';
 
 const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
@@ -45,10 +49,7 @@ Deno.serve(async (req: Request) => {
 
   let isAuthorized = false;
 
-  if (
-    (CRON_SECRET && cronHeader === CRON_SECRET) ||
-    (authHeader && authHeader.includes(SERVICE_ROLE_KEY))
-  ) {
+  if (segredoValido(cronHeader) || tokenValido(authHeader, SERVICE_ROLE_KEY)) {
     isAuthorized = true;
   } else if (authHeader.startsWith('Bearer ') && SUPABASE_ANON_KEY) {
     const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -167,6 +168,32 @@ Deno.serve(async (req: Request) => {
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Comparação em tempo constante — não se compara segredos com `===`. */
+function comparacaoConstante(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diferenca = 0;
+  for (let i = 0; i < a.length; i++) {
+    diferenca |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diferenca === 0;
+}
+
+function segredoValido(recebido: string): boolean {
+  if (!recebido) return false;
+  return [CRON_SECRET, SOS_CRON_SECRET]
+    .filter((s) => s.length > 0)
+    .some((s) => comparacaoConstante(recebido, s));
+}
+
+/**
+ * Antes isto era `authHeader.includes(SERVICE_ROLE_KEY)`: bastava a chave
+ * aparecer em qualquer posição do cabeçalho. Agora compara o token inteiro.
+ */
+function tokenValido(authHeader: string, esperado: string): boolean {
+  if (!esperado || !authHeader.startsWith('Bearer ')) return false;
+  return comparacaoConstante(authHeader.slice('Bearer '.length).trim(), esperado);
+}
 
 function normalizePhone(value: string): string {
   const digits = value.replace(/\D/g, '');
