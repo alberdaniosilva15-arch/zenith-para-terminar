@@ -181,6 +181,12 @@ export interface KazeLiveOptions {
    * já é feita pelo token efémero.
    */
   userId?: string;
+  /**
+   * Nome de quem está a falar. Sem isto o Kaze conversa sem saber com quem —
+   * cumprimentava pelo nome no arranque e depois esquecia-o, porque o nome
+   * nunca chegava ao contexto do modelo. Ver `blocoDeContexto`.
+   */
+  userName?: string | null;
   userAddress?: string | null;
   userLocation?: LatLng | null;
   hasActiveRide?: boolean;
@@ -301,6 +307,7 @@ function resampleLinear(input: Float32Array, fromRate: number, toRate: number): 
  */
 export async function startKazeLiveSession(options: KazeLiveOptions): Promise<KazeLiveSession> {
   const {
+    userName,
     userAddress,
     userLocation,
     hasActiveRide,
@@ -586,12 +593,12 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
     httpOptions: { apiVersion: 'v1alpha' },
   });
 
-  // Bloco de contexto real (localização + corrida activa). Vive em
+  // Bloco de contexto real (nome + localização + corrida activa). Vive em
   // kazeAppAgent para que os três caminhos do Kaze — voz, Gemini texto e
   // OpenAI-compatible texto — enviem exactamente a mesma informação. Antes
   // estava duplicado aqui e nos outros dois, e um deles esquecia o bloco da
   // corrida activa.
-  const contextoReal = blocoDeContexto({ userAddress, userLocation, hasActiveRide });
+  const contextoReal = blocoDeContexto({ userName, userAddress, userLocation, hasActiveRide });
 
   const conexao = ai.live.connect({
     model,

@@ -75,6 +75,27 @@ const JANELA_MENSAGEM_SEGUNDOS = (() => {
   return 15 * 60;
 })();
 
+// Validade de uma sessão de conversa (por inactividade).
+//
+// ⚠️ BUG REAL. O estado de cada conversa vive em `bot_conversations` e NINGUÉM
+// o expirava. O Dánio pediu uma corrida a 15/09, voltou a 20/09 e o bot abriu
+// com "só falta aquilo que me pediste" — a retomar um fluxo de CINCO DIAS antes,
+// como se não tivesse passado nada. Não é o modelo que está confuso: é a sessão
+// que nunca morreu.
+//
+// Uma sessão sem corrida viva morre ao fim disto. Com corrida viva (a procurar,
+// aceite, a caminho ou a decorrer) NUNCA expira — o passageiro pode demorar a
+// responder e isso não pode custar-lhe a viagem.
+// Afinável por secret (WHATSAPP_SESSAO_MIN).
+const SESSAO_VALIDADE_MINUTOS = (() => {
+  const minutos = Number(Deno.env.get('WHATSAPP_SESSAO_MIN') ?? '');
+  if (Number.isFinite(minutos) && minutos > 0) return minutos;
+  return 30;
+})();
+
+/** Estados de corrida em que a sessão tem de sobreviver a tudo. */
+const CORRIDA_VIVA = new Set(['searching', 'accepted', 'picking_up', 'in_progress']);
+
 // Geocodificação de endereços escritos à mão (o pin de localização já traz
 // coordenadas e não precisa disto).
 const MAPBOX_TOKEN = Deno.env.get('MAPBOX_TOKEN') ?? '';
@@ -225,6 +246,9 @@ interface Sessao {
   aprendendo_slot: 'origem' | 'destino' | null;
   aprendendo_texto: string | null;
   aprendendo_nome: string | null;
+  // Marcas de tempo — `updated_at` é o que decide se a sessão ainda vale.
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 interface MensagemEntrante {
@@ -591,6 +615,22 @@ function normalizarNome(texto: string): string {
 }
 
 /**
+ * Um nome de sítio que NÃO identifica sítio nenhum.
+ *
+ * O `NOMES_GENERICOS` sozinho só apanha a palavra isolada ("rua"). Mas em
+ * Luanda os dados do OSM estão cheios de "Rua 10", "Rua 11", "Avenida 5" — que
+ * passam no teste de palavra isolada e, no entanto, não servem para nada:
+ * existem dezenas de "Rua 10" na mesma cidade. Usar uma delas como nome do
+ * ponto mandava o motorista para o sítio errado com toda a confiança.
+ */
+function ehNomeGenerico(nome: string): boolean {
+  const n = normalizarNome(nome);
+  if (NOMES_GENERICOS.has(n)) return true;
+  // "rua 10", "avenida 5", "travessa 3b" — via numerada, não é referência.
+  return /^(rua|avenida|av|alameda|estrada|beco|travessa|bairro|zona|quarteirao|quarteirão)\s+\d+\s*[a-z]?$/i.test(n);
+}
+
+/**
  * Passo 1: procurar na base local `luanda_places`.
  * Devolve null quando não há nada suficientemente parecido — um falso positivo
  * aqui é pior do que não responder, porque manda o motorista para o sítio errado.
@@ -912,6 +952,47 @@ const ZONA_POR_ADMIN: Record<string, string> = {
   'sao paulo': 'Centro', 'bairro operario': 'Centro',
 };
 
+/**
+ * Quanto detalhe útil tem uma morada. Decide entre a morada que o WhatsApp
+ * manda agarrada ao pin e a que o bot resolve sozinho.
+ *
+ * ⚠️ BUG REAL, medido no pedido do Dánio (20/09/2026). Os três pontos que
+ * gravam a morada de um pin preferiam SEMPRE a descrição que vem agarrada ao
+ * pin do WhatsApp, mesmo quando era pior do que a que o bot tinha resolvido.
+ * No pedido real:
+ *
+ *   WhatsApp mandou : "Quilamba Quiaxi, Belas, Província de Luanda, Angola"
+ *   o bot resolveu : "Rua 53 (Rua Francisco Imperial Santana), Urbanização Nova Vida"
+ *   ficou gravado  : a do WhatsApp  <- a pior das duas
+ *
+ * Agora ganha a mais específica: conta as partes que NÃO são administrativas
+ * ("Município de X", "Província de Y", "Angola") e dá um ponto extra a quem
+ * nomeia uma via. Empate fica com a do bot, que vem das coordenadas.
+ */
+const PARTE_ADMIN = /^(munic[íi]pio|prov[íi]ncia|comuna|distrito|angola|luanda|cidade|urbano|peri-?urbano)\b/i;
+const NOMEIA_VIA = /\b(rua|avenida|av\.?|estrada|beco|travessa|alameda|largo|praça|praca)\b/i;
+
+function especificidade(endereco: string | null | undefined): number {
+  if (!endereco) return 0;
+  const partes = endereco.split(',').map((p) => p.trim()).filter((p) => p !== '');
+  let n = 0;
+  for (const p of partes) if (!PARTE_ADMIN.test(p)) n++;
+  if (NOMEIA_VIA.test(endereco)) n += 1;
+  return n;
+}
+
+/** A mais específica das duas moradas. Empate -> a do bot (vem das coordenadas). */
+function melhorEndereco(
+  doWhatsapp: string | null | undefined,
+  doBot: string | null | undefined,
+): string {
+  const a = (doWhatsapp ?? '').trim();
+  const b = (doBot ?? '').trim();
+  if (!a) return b;
+  if (!b) return a;
+  return especificidade(a) > especificidade(b) ? a : b;
+}
+
 export interface PontoResolvido {
   endereco: string;
   zona: string | null;
@@ -944,11 +1025,34 @@ async function reverterNoNominatim(lat: number, lng: number): Promise<{
       address?: Record<string, string>;
     };
     const a = d.address ?? {};
-    const partes = [a['road'], a['neighbourhood'] ?? a['suburb']]
-      .filter((p) => !!p && p.trim() !== '');
+
+    // ⚠️ BUG REAL, medido contra a API (20/09/2026) — não suposto.
+    //
+    // A cadeia antiga era `[road, neighbourhood ?? suburb]` e, quando ambos
+    // faltavam, caía para `county`. Em Luanda isso dava "Município do Belas" a
+    // qualquer pin fora do centro, porque o OSM de Angola NÃO fornece `suburb`
+    // — fornece `residential`, `town` e `city`. Resposta crua do OSM para um
+    // pin no Kilamba:
+    //
+    //   address: { residential: "Kilamba", town: "Nova Cidade de Kilamba",
+    //              county: "Município do Belas" }
+    //   -> road: ausente, neighbourhood: ausente, suburb: ausente
+    //   -> antigo: "Município do Belas"   (inútil para o motorista)
+    //   -> agora: "Kilamba, Nova Cidade de Kilamba"
+    //
+    // A regra: via (se houver) + a área mais específica + o nível seguinte.
+    const via = a['road'] ?? a['pedestrian'] ?? a['footway'] ?? null;
+    const area1 = a['neighbourhood'] ?? a['suburb'] ?? a['quarter'] ?? a['residential'] ?? null;
+    const area2 = a['city_district'] ?? a['village'] ?? a['hamlet'] ?? a['town'] ?? null;
+
+    const partes: string[] = [];
+    if (via) partes.push(via);
+    if (area1) partes.push(area1);
+    if (area2 && area2 !== area1 && area2 !== via) partes.push(area2);
+
     const endereco = partes.length > 0
       ? partes.join(', ')
-      : (a['suburb'] ?? a['city_district'] ?? a['county'] ?? d.display_name ?? '');
+      : (a['city'] ?? a['county'] ?? d.display_name ?? '');
 
     // A zona sai do campo administrativo mais específico que existir.
     let zona: string | null = null;
@@ -1000,12 +1104,22 @@ async function resolverPonto(
     }>;
     const comZona = perto.find((p) => !!p.zona);
     if (comZona) zona = comZona.zona;
-    // Só usamos o nome do local se for de facto um sítio (bairro/zona), e não
-    // uma loja que por acaso está a 200 m.
-    const melhor = perto[0];
-    if (melhor && Number(melhor.confianca) >= 80 && Number(melhor.distancia_m) <= 900) {
-      localConhecido = melhor.nome;
-    }
+    // ⚠️ BUG REAL. O limiar era `confianca >= 80`, mas TODOS os locais vindos
+    // do OSM têm confianca 70–72 (verificado na base: "Parque Nova Vida" = 72
+    // a 70 m do pin do Dánio). O limiar de 80 não deixava passar nenhum — a
+    // base sabia exactamente onde a pessoa estava e o código deitava fora,
+    // caindo para o município.
+    //
+    // Baixado para 70 com duas salvaguardas: distância máxima e recusa de
+    // nomes genéricos ("Rua 10", "Avenida 5"), que não identificam sítio.
+    const melhor = perto.find(
+      (p) =>
+        Number(p.confianca) >= 70 &&
+        Number(p.distancia_m) <= 900 &&
+        !!p.nome &&
+        !ehNomeGenerico(p.nome),
+    );
+    if (melhor) localConhecido = melhor.nome;
   } catch (err) {
     console.warn('[whatsapp-webhook] locais_perto falhou:', err);
   }
@@ -1286,6 +1400,45 @@ async function calcularPreco(
 
 // ─── Sessão ──────────────────────────────────────────────────────────────────
 
+/**
+ * Há uma corrida em curso para esta sessão?
+ *
+ * Existe para a expiração não ser cega: um passageiro com motorista a caminho
+ * pode calar-se meia hora — e isso não pode fazer-lhe perder a viagem.
+ */
+async function temCorridaViva(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  sessao: Sessao,
+): Promise<boolean> {
+  if (!sessao.ride_id) return false;
+  try {
+    const { data } = await supabaseAdmin
+      .from('rides')
+      .select('status')
+      .eq('id', sessao.ride_id)
+      .maybeSingle();
+    return CORRIDA_VIVA.has(String((data as { status?: string } | null)?.status ?? ''));
+  } catch (err) {
+    console.warn('[whatsapp-webhook] temCorridaViva falhou:', err);
+    // Não sei se há corrida viva -> assumir que sim. Preferimos uma sessão a
+    // mais do que cancelar a viagem a alguém que estava à espera do carro.
+    return true;
+  }
+}
+
+/**
+ * Carrega a sessão de um telefone, expirando-a se estiver velha.
+ *
+ * Devolve a MESMA linha já limpa, com `state: 'idle'`, e não `null`. A diferença
+ * importa: `guardarSessao` grava por `id` quando recebe uma sessão, e insere
+ * quando não recebe. Devolver `null` criava uma linha nova a cada sessão morta —
+ * uma por telefone e por expiração, para sempre. É o oposto do que o Dánio
+ * pediu ("guarda a última sessão e apaga o resto").
+ *
+ * `'idle'` é o estado neutro permitido pelo CHECK da tabela, e o índice único
+ * parcial (`idx_bot_conv_phone_active`) não o conta como sessão activa. Quem
+ * lê o estado trata `'idle'` como conversa nova.
+ */
 async function carregarSessao(
   supabaseAdmin: ReturnType<typeof createClient>,
   telefone: string,
@@ -1302,7 +1455,38 @@ async function carregarSessao(
     console.error('[whatsapp-webhook] Erro a carregar sessao:', error.message);
     return null;
   }
-  return (data as Sessao) ?? null;
+  if (!data) return null;
+
+  const sessao = data as Sessao;
+  const marca = new Date(sessao.updated_at ?? sessao.created_at ?? '').getTime();
+  // Sem marca de tempo fiável não se expira nada: é melhor uma sessão a mais do
+  // que deitar fora um fluxo a meio por causa de um campo mal preenchido.
+  if (!Number.isFinite(marca)) return sessao;
+
+  const idadeMin = (Date.now() - marca) / 60000;
+  if (idadeMin <= SESSAO_VALIDADE_MINUTOS) return sessao;
+
+  if (await temCorridaViva(supabaseAdmin, sessao)) return sessao;
+
+  console.log(
+    `[whatsapp-webhook] Sessao de ${telefone} com ${Math.floor(idadeMin)} min ` +
+      `(estado ${sessao.state}) — expirada, a comecar do zero.`,
+  );
+  const limpa = {
+    state: 'idle' as const,
+    origin_address: null, origin_lat: null, origin_lng: null,
+    dest_address: null, dest_lat: null, dest_lng: null,
+    estimated_price: null, ride_id: null, dispatch_attempt: null,
+    aprendendo_nome: null, aprendendo_texto: null, aprendendo_slot: null,
+  };
+  const { error: erroLimpeza } = await supabaseAdmin
+    .from('bot_conversations')
+    .update(limpa)
+    .eq('id', sessao.id);
+  if (erroLimpeza) {
+    console.error('[whatsapp-webhook] Erro a expirar sessao:', erroLimpeza.message);
+  }
+  return { ...sessao, ...limpa };
 }
 
 async function guardarSessao(
@@ -2047,6 +2231,11 @@ async function tratarPassageiro(
   const veioLocalizacao = msg.lat !== null && msg.lng !== null;
   let estado = sessao?.state ?? null;
 
+  // `'idle'` é o estado neutro: sessão expirada (ver `carregarSessao`) ou nunca
+  // começada. Em qualquer dos casos a mensagem é uma conversa nova — mas a
+  // linha da base é reaproveitada, para não haver uma por telefone e por sessão.
+  if (estado === 'idle') estado = null;
+
   // ── Cancelar, em qualquer estado ──
   if (/^(cancelar|cancela|desistir|parar|stop)$/i.test(texto)) {
     if (sessao?.ride_id) {
@@ -2141,7 +2330,7 @@ async function tratarPassageiro(
   if (estado === null) {
     if (veioLocalizacao) {
       const ponto = await resolverPonto(supabaseAdmin, msg.lat!, msg.lng!);
-      const endereco = msg.descricaoLocal || ponto.endereco;
+      const endereco = melhorEndereco(msg.descricaoLocal, ponto.endereco);
       await guardarSessao(supabaseAdmin, telefone, {
         state: 'awaiting_dest',
         origin_address: endereco,
@@ -2193,7 +2382,7 @@ async function tratarPassageiro(
     }
     if (veioLocalizacao) {
       const ponto = await resolverPonto(supabaseAdmin, msg.lat!, msg.lng!);
-      const endereco = msg.descricaoLocal || ponto.endereco;
+      const endereco = melhorEndereco(msg.descricaoLocal, ponto.endereco);
       await guardarSessao(supabaseAdmin, telefone, {
         state: 'awaiting_dest',
         origin_address: endereco, origin_lat: msg.lat, origin_lng: msg.lng,
@@ -2240,7 +2429,7 @@ async function tratarPassageiro(
       destino = {
         lat: msg.lat!,
         lng: msg.lng!,
-        endereco: msg.descricaoLocal || ponto.endereco,
+        endereco: melhorEndereco(msg.descricaoLocal, ponto.endereco),
         zona: ponto.zona,
       };
     } else {

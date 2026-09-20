@@ -305,8 +305,10 @@ export const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente de intelig�
 - Frases correctas: "O preço exacto aparece no ecrã assim que escolheres o destino." / "Deixa-me preparar o trajecto — o valor que vês no ecrã é o valor que pagas."
 - Inventar um preço é o pior erro que podes cometer: o passageiro decide com base nele. Mais vale não dizer número nenhum.
 
-═══ ONDE ESTÁ O PASSAGEIRO E A CORRIDA ═══
-- Recebes sempre, no fim destas instruções, um bloco [LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: …] e, quando existe, [O passageiro tem uma corrida activa neste momento.]. USA-OS. É informação real e actual, não um exemplo.
+═══ QUEM FALA, ONDE ESTÁ E A CORRIDA ═══
+- Recebes sempre, no fim destas instruções, um bloco [ESTÁS A FALAR COM: …], um bloco [LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: …] e, quando existe, [O passageiro tem uma corrida activa neste momento.]. USA-OS. É informação real e actual, não um exemplo.
+- Se te perguntarem quem são, "sabes quem sou?", "como me chamo?" ou o teu nome, responde com o nome que está nesse bloco. Se o bloco disser que o nome não está disponível, diz que não o tens — NUNCA inventes um nome.
+- Quando souberes o nome, trata a pessoa pelo primeiro nome. Quando não souberes, trata por "você" — não improvises um nome para parecer mais próximo.
 - Se te perguntarem "onde estou?", responde com o que está nesse bloco. Se não estiver lá nada, diz que precisas da localização do dispositivo e sugere abrir o mapa.
 - Se houver corrida activa e te perguntarem pela corrida, usa as ferramentas do app para agir sobre ela (cancelar, ver histórico) em vez de descreveres de memória.
 - Sobre o tempo de chegada ou a posição exacta do motorista: quem sabe é o ecrã da corrida, em tempo real. Não inventes minutos nem distâncias.
@@ -329,24 +331,58 @@ Se for apenas conversa, NÃO chames ferramentas; responde com texto acolhedor, i
  *
  * ⚠️ PORQUE É QUE ISTO EXISTE COMO FUNÇÃO E NÃO COMO CÓDIGO INLINE:
  * O KAZE_AGENT_SYSTEM_PROMPT promete ao modelo, em texto, que recebe sempre um
- * bloco `[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: …]` e, quando existe, um bloco
- * `[O passageiro tem uma corrida activa neste momento.]`. Essa promessa estava a
- * ser cumprida de forma desigual: o caminho de voz (kazeLiveClient) enviava os
- * dois blocos, mas os dois caminhos de texto (Gemini e OpenAI-compatible) só
- * enviavam o primeiro — o `hasActiveRide` era aceite no contexto e nunca usado.
+ * bloco `[ESTÁS A FALAR COM: …]` e um bloco `[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO:
+ * …]` e, quando existe, um bloco `[O passageiro tem uma corrida activa neste
+ * momento.]`. Essa promessa estava a ser cumprida de forma desigual: o caminho
+ * de voz (kazeLiveClient) enviava dois dos três, mas os dois caminhos de texto
+ * (Gemini e OpenAI-compatible) só enviavam a localização — o `hasActiveRide` era
+ * aceite no contexto e nunca usado.
  *
  * Um prompt que promete dados que não chegam é pior do que um prompt sem
  * promessa nenhuma: o modelo ou inventa a informação em falta, ou responde a
- * pedir algo que já lá devia estar. Com uma única função, os dois blocos passam
- * a ser impossíveis de esquecer num dos caminhos.
+ * pedir algo que já lá devia estar. Com uma única função, os blocos passam a ser
+ * impossíveis de esquecer num dos caminhos.
+ *
+ * O bloco do nome entrou por último e pelo mesmo motivo: o `KazeMascot` já
+ * recebia `userName` e já cumprimentava a pessoa pelo nome, mas a conversa a
+ * partir daí corria sem ele — o Kaze falava sem saber com quem, e um modelo sem
+ * o nome no contexto tem tendência a inventá-lo.
  */
 export interface ContextoDeVoz {
+  userName?: string | null;
   userLocation?: LatLng | null;
   userAddress?: string | null;
   hasActiveRide?: boolean;
 }
 
+/**
+ * Contexto completo do agente: o que a voz usa, mais o que só o texto usa.
+ *
+ * Existe para que os três caminhos (voz, Gemini, OpenAI-compatible) partilhem
+ * UM tipo. Antes, cada método declarava o seu objecto inline — e foi assim que
+ * o `hasActiveRide` ficou aceite-mas-nunca-usado num deles. Um campo a mais
+ * numa assinatura e a menos noutra não dá erro nenhum: dá um prompt a prometer
+ * dados que não chegam. Com um tipo único, acrescentar um campo obriga a
+ * olhar para todos os sítios.
+ */
+export interface ContextoDoAgente extends ContextoDeVoz {
+  userId?: string;
+  userRole?: string;
+  pendingAction?: KazeProposedAction | null;
+}
+
 export function blocoDeContexto(context: ContextoDeVoz): string {
+  // O nome vem primeiro, e é o bloco que faltava. O Kaze cumprimentava o
+  // utilizador pelo nome no arranque (`KazeMascot`), mas a partir daí falava
+  // sem saber com quem — e a "quem estou a falar?" respondia com uma
+  // generalidade. Pior: sem o nome no contexto, o modelo tem tendência a
+  // inventá-lo, e inventar o nome de uma pessoa real é o erro que já nos
+  // custou uma sessão inteira (o "Jão Silva").
+  const quem = context.userName
+    ? `\n[ESTÁS A FALAR COM: ${context.userName}]`
+    : '\n[QUEM ESTÁ A FALAR: o nome não está disponível neste momento — não o inventes, ' +
+      'e não trates a pessoa por um nome que não te tenha sido dado.]';
+
   const localizacao = context.userAddress
     ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${context.userAddress}"]`
     : context.userLocation
@@ -357,7 +393,7 @@ export function blocoDeContexto(context: ContextoDeVoz): string {
     ? '\n[O passageiro tem uma corrida activa neste momento.]'
     : '';
 
-  return `${localizacao}${corrida}`;
+  return `${quem}${localizacao}${corrida}`;
 }
 
 /**
@@ -384,14 +420,7 @@ export class KazeAppAgent {
    */
   async processUserMessage(
     message: string,
-    context: {
-      userId?: string;
-      userRole?: string;
-      userLocation?: LatLng | null;
-      userAddress?: string | null;
-      hasActiveRide?: boolean;
-      pendingAction?: KazeProposedAction | null;
-    }
+    context: ContextoDoAgente
   ): Promise<KazeAgentResult> {
     const trimmed = message.trim();
 
@@ -462,13 +491,7 @@ export class KazeAppAgent {
   async resolveToolCall(
     toolName: string,
     args: Record<string, unknown>,
-    context: {
-      userId?: string;
-      userRole?: string;
-      userLocation?: LatLng | null;
-      userAddress?: string | null;
-      hasActiveRide?: boolean;
-    },
+    context: ContextoDoAgente,
     fallbackText = '',
     rawUserMessage = '',
   ): Promise<KazeAgentResult> {
@@ -525,12 +548,7 @@ export class KazeAppAgent {
     apiKey: string,
     models: string[],
     message: string,
-    context: {
-      userId?: string;
-      userLocation?: LatLng | null;
-      userAddress?: string | null;
-      hasActiveRide?: boolean;
-    },
+    context: ContextoDoAgente,
     timeoutMs = 4500,
   ): Promise<KazeAgentResult | null> {
     if (!apiKey) return null;
@@ -630,12 +648,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
    */
   private async _callGroqWithTools(
     message: string,
-    context: {
-      userId?: string;
-      userLocation?: LatLng | null;
-      userAddress?: string | null;
-      hasActiveRide?: boolean;
-    }
+    context: ContextoDoAgente
   ): Promise<KazeAgentResult | null> {
     return this._callOpenAiCompatibleWithTools(
       'https://api.groq.com/openai/v1/chat/completions',
@@ -656,12 +669,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
    */
   private async _callOpenRouterGeminiWithTools(
     message: string,
-    context: {
-      userId?: string;
-      userLocation?: LatLng | null;
-      userAddress?: string | null;
-      hasActiveRide?: boolean;
-    }
+    context: ContextoDoAgente
   ): Promise<KazeAgentResult | null> {
     return this._callOpenAiCompatibleWithTools(
       'https://openrouter.ai/api/v1/chat/completions',
@@ -678,12 +686,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
    */
   private async _callGeminiWithTools(
     message: string,
-    context: {
-      userId?: string;
-      userLocation?: LatLng | null;
-      userAddress?: string | null;
-      hasActiveRide?: boolean;
-    }
+    context: ContextoDoAgente
   ): Promise<KazeAgentResult | null> {
     const userLocContext = blocoDeContexto(context);
 
@@ -766,7 +769,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
     toolName: string,
     args: any,
     fallbackText: string,
-    context: { userId?: string; userLocation?: LatLng | null; userAddress?: string | null; hasActiveRide?: boolean },
+    context: ContextoDoAgente,
     rawUserMessage?: string
   ): Promise<KazeAgentResult> {
     switch (toolName) {
@@ -1108,7 +1111,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
    */
   private async _processLocalIntent(
     message: string,
-    context: { userId?: string; userRole?: string; userLocation?: LatLng | null; userAddress?: string | null; hasActiveRide?: boolean }
+    context: ContextoDoAgente
   ): Promise<KazeAgentResult> {
     const text = message.toLowerCase();
 

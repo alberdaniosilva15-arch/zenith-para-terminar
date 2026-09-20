@@ -958,19 +958,66 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     try { kazeLiveRef.current?.close(); } catch { /* já fechada */ }
     kazeLiveRef.current = null;
 
-    const effectiveCoords = liveGpsCoords || userLocation || null;
+    // ── Localização: garantir ANTES de abrir a sessão ────────────────────────
+    // ⚠️ A Voz Ao Vivo era o único caminho que não a garantia.
+    //
+    // O `useEffect` de arranque preenche `liveGpsAddress` de forma assíncrona
+    // (GPS + reverse geocode). Quem toca no microfone logo a seguir apanha o
+    // estado ainda a `null` — e o Kaze abre a conversa a dizer que não sabe
+    // onde a pessoa está.
+    //
+    // E não se corrige depois: a `systemInstruction` do Live é fixada no
+    // arranque da sessão. Um contexto vazio condena a conversa INTEIRA; só uma
+    // sessão nova o apanha. Por isso espera-se aqui, com tecto, em vez de
+    // aceitar o que estiver no estado neste instante.
+    let effectiveCoords = liveGpsCoords || userLocation || null;
+    let effectiveAddress = liveGpsAddress || null;
+
+    if (!effectiveCoords) {
+      try {
+        const gps = await Promise.race([
+          mapService.getCurrentPosition(),
+          new Promise<null>((res) => setTimeout(() => res(null), 3000)),
+        ]);
+        if (gps) {
+          effectiveCoords = gps;
+          setLiveGpsCoords(gps);
+        }
+      } catch { /* sem GPS — segue sem coordenadas */ }
+    }
+
+    if (effectiveCoords && !effectiveAddress) {
+      try {
+        const morada = await Promise.race([
+          mapService.reverseGeocode(effectiveCoords),
+          new Promise<null>((res) => setTimeout(() => res(null), 2500)),
+        ]);
+        if (morada) {
+          effectiveAddress = morada;
+          setLiveGpsAddress(morada);
+        }
+      } catch { /* sem morada — o bloco de contexto usa as coordenadas */ }
+    }
+
+    // Não se inventa localização nenhuma. Se o GPS falhar, o bloco de contexto
+    // diz ao Kaze que não a tem e proíbe-o de a inventar. Um "estás em Luanda
+    // Centro" falso seria o mesmo erro que o bot do WhatsApp fazia ao responder
+    // "Município do Belas" a um pin exacto.
+
     const toolContext = {
       userId,
       userRole: role,
+      userName,
       userLocation: effectiveCoords,
-      userAddress: liveGpsAddress,
+      userAddress: effectiveAddress,
       hasActiveRide: rideStatus !== RideStatus.IDLE,
     };
 
     try {
       const session = await startKazeLiveSession({
         userId: userId || 'anonimo',
-        userAddress: liveGpsAddress,
+        userName,
+        userAddress: effectiveAddress,
         userLocation: effectiveCoords,
         hasActiveRide: rideStatus !== RideStatus.IDLE,
         voiceName: 'Aoede',
