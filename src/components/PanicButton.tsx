@@ -1,7 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
-import { sendNativeEmergencySMS, makeEmergencyCall, buildEmergencyMessage, isNightTime } from '../lib/nativeEmergency';
-import { startScreamDetection } from '../lib/screamDetector';
+import {
+  construirMensagemDeEmergencia,
+  linkDoWhatsApp,
+  linkDoSms,
+  abrirAbaParaOWhatsApp,
+  levarAbaPara,
+  enviarSmsNativo,
+  makeEmergencyCall,
+} from '../lib/nativeEmergency';
+import { dispararPanico, type PanicSource } from '../lib/panicDispatcher';
 
 interface PanicButtonProps {
   userId: string;
@@ -11,15 +19,16 @@ interface PanicButtonProps {
   counterpartyName?: string;
   counterpartyLabel?: string;
   silentSignal?: number;
-  enableScreamDetection?: boolean;
+  /** Matrícula e marca/cor da viatura, para a mensagem ao contacto. */
+  matricula?: string;
+  marcaECor?: string;
+  origem?: string;
+  destino?: string;
+  telefonePassageiro?: string;
 }
 
-/**
- * De onde veio o alerta. Não é cosmético: o motor usa isto para decidir o texto
- * que envia ao contacto de emergência. "Accionou o botão" e "detectámos um grito
- * automaticamente" são coisas diferentes para quem recebe a mensagem.
- */
-type PanicSource = 'botao_panico' | 'grito' | 'escada_corrida';
+/** Segundos que o contacto leva a ser chamado, com hipótese de travar. */
+const SEGUNDOS_ATE_LIGAR = 3;
 
 export default function PanicButton({
   userId,
@@ -29,7 +38,11 @@ export default function PanicButton({
   counterpartyName,
   counterpartyLabel = 'Motorista',
   silentSignal,
-  enableScreamDetection = false,
+  matricula,
+  marcaECor,
+  origem,
+  destino,
+  telefonePassageiro,
 }: PanicButtonProps) {
   const [pressed, setPressed] = useState(false);
   const [sent, setSent] = useState(false);
@@ -37,65 +50,73 @@ export default function PanicButton({
   const [audioSaved, setAudioSaved] = useState(false);
   const [silentAcknowledged, setSilentAcknowledged] = useState(false);
   const [emergencyContactMissing, setEmergencyContactMissing] = useState(false);
+  const [falhaAoRegistar, setFalhaAoRegistar] = useState<string | null>(null);
+
+  // Links prontos a tocar. O `<a href>` é a única forma que nenhum browser
+  // bloqueia — por isso é ele que fica no ecrã, mesmo quando a aba automática
+  // já abriu. Uma rede de segurança que não custa nada.
+  const [linkWhatsApp, setLinkWhatsApp] = useState<string | null>(null);
+  const [linkSms, setLinkSms] = useState<string | null>(null);
+  const [segundosParaLigar, setSegundosParaLigar] = useState<number | null>(null);
 
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSilentSignalRef = useRef<number | undefined>(silentSignal);
-  const activeAlertIdRef = useRef<string | null>(null);
   const silentFeedbackResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ligarTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resolvedCounterparty = counterpartyName ?? driverName;
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-      }
-      if (confirmResetRef.current) {
-        clearTimeout(confirmResetRef.current);
-      }
-      if (silentFeedbackResetRef.current) {
-        clearTimeout(silentFeedbackResetRef.current);
-      }
-      if (mediaRef.current?.state === 'recording') {
-        mediaRef.current.stop();
-      }
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
+      if (silentFeedbackResetRef.current) clearTimeout(silentFeedbackResetRef.current);
+      if (ligarTimerRef.current) clearTimeout(ligarTimerRef.current);
+      if (mediaRef.current?.state === 'recording') mediaRef.current.stop();
     };
   }, []);
 
-  const triggerPanicRef = useRef<(silent?: boolean, source?: PanicSource) => Promise<void>>(
-    async () => {},
-  );
+  const triggerPanicRef = useRef<
+    (silent?: boolean, source?: PanicSource, janela?: Window | null) => Promise<void>
+  >(async () => {});
 
-  // Detecção de gritos — activa durante corrida nocturna
-  useEffect(() => {
-    if (!enableScreamDetection || !rideId) return;
-    const handle = startScreamDetection(() => {
-      console.warn('[PanicButton] Grito detectado — activando SOS silencioso');
-      // 'grito' e não 'botao_panico': a mensagem ao contacto tem de dizer que
-      // o alerta foi automático, não que o passageiro carregou em algo.
-      void triggerPanicRef.current(true, 'grito');
-    });
-    return () => { handle?.stop(); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enableScreamDetection, rideId]);
-
+  // A escada de segurança (corrida a passar 1,5× o previsto) continua a entrar
+  // por aqui. O GRITO saiu daqui — vive no `ScreamGuard`, porque tem de estar
+  // armado mesmo sem corrida nenhuma.
   useEffect(() => {
     if (silentSignal == null || silentSignal === lastSilentSignalRef.current) {
       return;
     }
-
     lastSilentSignalRef.current = silentSignal;
     void triggerPanicRef.current(true, 'escada_corrida');
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [silentSignal, rideId, emergencyPhone, resolvedCounterparty]);
 
-  const startAudioRecording = async (silent: boolean) => {
-    if (!silent) {
-      setAudioSaved(false);
+  // Contagem até a chamada sair, com hipótese de travar.
+  useEffect(() => {
+    if (segundosParaLigar == null) return;
+    if (segundosParaLigar <= 0) {
+      if (emergencyPhone) makeEmergencyCall(emergencyPhone);
+      setSegundosParaLigar(null);
+      return;
     }
+    const t = setTimeout(() => setSegundosParaLigar((s) => (s == null ? null : s - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [segundosParaLigar, emergencyPhone]);
+
+  /**
+   * Grava e liga o ficheiro ao alerta.
+   *
+   * ⚠️ `idDoAlerta` é uma promessa e não um id porque a gravação arranca assim
+   * que o alerta existe — e o caminho do ficheiro só é preciso no fim, quando
+   * o `onstop` corre. Era aqui que o F1 se perdia: o ficheiro ia para
+   * `pending/` e nunca mais era encontrado.
+   */
+  const startAudioRecording = async (silent: boolean, idDoAlerta?: Promise<string | null>) => {
+    if (!silent) setAudioSaved(false);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -103,29 +124,23 @@ export default function PanicButton({
       chunksRef.current = [];
 
       recorder.ondataavailable = async (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
+        if (event.data.size <= 0) return;
+        chunksRef.current.push(event.data);
 
-          // Emitir audio via Supabase Realtime (Live Stream)
-          try {
-            const reader = new FileReader();
-            reader.readAsDataURL(event.data);
-            reader.onloadend = async () => {
-              const base64Audio = (reader.result as string).split(',')[1];
-              await supabase.channel(`emergency_audio_${userId}`).send({
-                type: 'broadcast',
-                event: 'audio_chunk',
-                payload: {
-                  user_id: userId,
-                  ride_id: rideId,
-                  timestamp: Date.now(),
-                  audio_data: base64Audio,
-                },
-              });
-            };
-          } catch (e) {
-            console.warn('[PanicButton] Falha no broadcast de audio:', e);
-          }
+        // Difusão em tempo real para o painel de admin.
+        try {
+          const reader = new FileReader();
+          reader.readAsDataURL(event.data);
+          reader.onloadend = async () => {
+            const base64Audio = (reader.result as string).split(',')[1];
+            await supabase.channel(`emergency_audio_${userId}`).send({
+              type: 'broadcast',
+              event: 'audio_chunk',
+              payload: { user_id: userId, ride_id: rideId, timestamp: Date.now(), audio_data: base64Audio },
+            });
+          };
+        } catch (e) {
+          console.warn('[PanicButton] Falha no broadcast de audio:', e);
         }
       };
 
@@ -134,145 +149,111 @@ export default function PanicButton({
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
 
         try {
-          const alertId = activeAlertIdRef.current;
-          const filename = `${userId}/${alertId ?? 'pending'}/panic_${Date.now()}.webm`;
+          const alertId = (await idDoAlerta?.catch(() => null)) ?? null;
+
+          if (!alertId) {
+            // Nunca gravar para `pending/`: um ficheiro órfão não serve para
+            // nada e nunca mais é encontrado. Melhor não guardar e deixar rasto.
+            console.warn('[PanicButton] Audio sem alerta associado — nao guardado.');
+            if (!silent) setAudioSaved(false);
+            return;
+          }
+
+          const filename = `${userId}/${alertId}/panic_${Date.now()}.webm`;
           const { error: uploadError } = await supabase.storage
             .from('panic-audio')
             .upload(filename, blob, { contentType: 'audio/webm' });
 
-          if (uploadError) {
-            throw uploadError;
+          if (uploadError) throw uploadError;
+
+          // ⚠️ Verificar o erro do UPDATE. Sem isto, o ficheiro ficava no
+          // bucket e o alerta sem ponteiro — em silêncio.
+          const { error: erroLigacao } = await supabase
+            .from('panic_alerts')
+            .update({ audio_storage_path: filename, audio_bytes: blob.size })
+            .eq('id', alertId);
+
+          if (erroLigacao) {
+            console.error('[PanicButton] Audio gravado mas NAO ligado ao alerta:', erroLigacao);
+            if (!silent) setAudioSaved(false);
+            return;
           }
 
-          if (alertId) {
-            await supabase
-              .from('panic_alerts')
-              .update({ audio_storage_path: filename })
-              .eq('id', alertId);
-          }
-
-          if (!silent) {
-            setAudioSaved(true);
-          }
-        } catch (err) { 
-          console.warn('[PanicButton] Supabase webhook auth fail:', err);
-          if (!silent) {
-            setAudioSaved(false);
-          }
-          console.warn('[PanicButton] Erro ao guardar audio de emergencia.');
+          if (!silent) setAudioSaved(true);
+        } catch (err) {
+          console.warn('[PanicButton] Erro ao guardar audio de emergencia:', err);
+          if (!silent) setAudioSaved(false);
         } finally {
-          if (!silent) {
-            setRecording(false);
-          }
+          if (!silent) setRecording(false);
         }
       };
 
       mediaRef.current = recorder;
-      recorder.start(2000); // Emite um chunk a cada 2 segundos
+      recorder.start(2000);
 
-      if (!silent) {
-        setRecording(true);
-      }
+      if (!silent) setRecording(true);
 
       timerRef.current = setTimeout(() => {
-        if (recorder.state === 'recording') {
-          recorder.stop();
-        }
+        if (recorder.state === 'recording') recorder.stop();
       }, 30000);
     } catch (err) {
       console.warn('[PanicButton] Sem acesso ao microfone:', err);
     }
   };
 
-  const persistPanic = async (
-    latitude?: number,
-    longitude?: number,
-    severity: 'high' | 'critical' = 'high',
-    source: PanicSource = 'botao_panico',
-  ) => {
-    const payload: Record<string, unknown> = {
-      user_id: userId,
-      ride_id: rideId ?? null,
-      driver_name: resolvedCounterparty ?? null,
-      severity,
-      source,
-      created_at: new Date().toISOString(),
-    };
-
-    // Retrato do contacto no momento do alerta. O perfil pode mudar depois;
-    // o que interessa ao motor é para quem se estava a ligar naquela hora.
-    if (emergencyPhone) {
-      payload.contact_phone = emergencyPhone;
-    }
-
-    if (typeof latitude === 'number' && typeof longitude === 'number') {
-      payload.lat = latitude;
-      payload.lng = longitude;
-    }
-
-    try {
-      const { data } = await supabase
-        .from('panic_alerts')
-        .insert(payload)
-        .select('id')
-        .single();
-
-      activeAlertIdRef.current = data?.id ?? null;
-
-      try {
-        await supabase.channel('panic_alerts_live').send({
-          type: 'broadcast',
-          event: 'panic_triggered',
-          payload: {
-            id: data?.id ?? null,
-            ...payload,
-          },
-        });
-      } catch (broadcastError) {
-        console.warn('[PanicButton] Broadcast SOS falhou:', broadcastError);
-      }
-
-      return data?.id ?? null;
-    } catch (err) { 
-      console.warn('[PanicButton] Fetch fail:', err);
-      // Falha silenciosa para nunca bloquear o SOS.
-      activeAlertIdRef.current = null;
-      return null;
-    }
-  };
-
-  const sendEmergencyAlerts = (latitude?: number, longitude?: number) => {
+  /**
+   * Leva o alerta ao contacto. O `janela` vem do gesto do utilizador (quando
+   * houve um) e é a aba já pré-aberta — é isso que faz o WhatsApp abrir
+   * sozinho sem ser bloqueado.
+   */
+  const avisarOContacto = async (
+    pos: { latitude?: number; longitude?: number },
+    janela: Window | null,
+  ): Promise<void> => {
     if (!emergencyPhone) {
       setEmergencyContactMissing(true);
-      return false;
+      return;
     }
 
-    const message = buildEmergencyMessage({
-      driverName: resolvedCounterparty,
-      lat: latitude,
-      lng: longitude,
+    const mensagem = construirMensagemDeEmergencia({
+      nomeMotorista: resolvedCounterparty,
+      matricula,
+      marcaECor,
+      origem,
+      destino,
+      lat: pos.latitude ?? null,
+      lng: pos.longitude ?? null,
+      telefonePassageiro,
     });
 
-    // 1. SMS nativo (funciona sem internet)
-    sendNativeEmergencySMS({ phone: emergencyPhone, message }).catch(err =>
-      console.warn('[PanicButton] SMS nativo falhou:', err)
-    );
+    const wa = linkDoWhatsApp(emergencyPhone, mensagem);
+    setLinkWhatsApp(wa);
+    setLinkSms(linkDoSms(emergencyPhone, mensagem));
 
-    // 2. Chamada automática (se noite)
-    if (isNightTime()) {
-      setTimeout(() => makeEmergencyCall(emergencyPhone), 3000);
+    // 1. WhatsApp — pela aba pré-aberta, quando houve gesto.
+    const abriu = levarAbaPara(janela, wa);
+    if (!abriu) {
+      console.warn('[PanicButton] Sem aba pré-aberta — o botão no ecrã é o caminho.');
     }
 
+    // 2. SMS nativo — só existe numa app empacotada. No browser devolve false
+    //    e o botão `sms:` no ecrã é o caminho.
+    void enviarSmsNativo({ telefone: emergencyPhone, mensagem });
+
+    // 3. Chamada — a qualquer hora, com hipótese de travar.
+    setSegundosParaLigar(SEGUNDOS_ATE_LIGAR);
+
     setEmergencyContactMissing(false);
-    return true;
   };
 
-  const triggerPanic = async (silent = false, source: PanicSource = 'botao_panico') => {
+  const triggerPanic = async (
+    silent = false,
+    source: PanicSource = 'botao_panico',
+    janela: Window | null = null,
+  ) => {
     if (!silent && !pressed) {
       setPressed(true);
-      if (confirmResetRef.current) {
-        clearTimeout(confirmResetRef.current);
-      }
+      if (confirmResetRef.current) clearTimeout(confirmResetRef.current);
       confirmResetRef.current = setTimeout(() => setPressed(false), 5000);
       return;
     }
@@ -283,48 +264,73 @@ export default function PanicButton({
     } else {
       setSilentAcknowledged(true);
       navigator.vibrate?.([80, 60, 80]);
-      if (silentFeedbackResetRef.current) {
-        clearTimeout(silentFeedbackResetRef.current);
-      }
+      if (silentFeedbackResetRef.current) clearTimeout(silentFeedbackResetRef.current);
       silentFeedbackResetRef.current = setTimeout(() => setSilentAcknowledged(false), 1800);
     }
 
-    void startAudioRecording(silent);
-    activeAlertIdRef.current = null;
+    setFalhaAoRegistar(null);
 
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const { latitude, longitude } = position.coords;
-        await persistPanic(latitude, longitude, silent ? 'critical' : 'high', source);
-        sendEmergencyAlerts(latitude, longitude);
-      },
-      async () => {
-        await persistPanic(undefined, undefined, silent ? 'critical' : 'high', source);
-        sendEmergencyAlerts();
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 15000,
-      },
-    );
+    // 1. O ALERTA NASCE JÁ — sem esperar por GPS nenhum.
+    const { alertaId, posicao, erro } = await dispararPanico({
+      userId,
+      rideId,
+      emergencyPhone,
+      driverName: resolvedCounterparty,
+      source,
+      severity: silent ? 'critical' : 'high',
+    });
+
+    if (erro || !alertaId) {
+      // Já não se engole: o alerta NÃO existe e quem está a pedir socorro tem
+      // de saber, para poder ligar 113/112 à mão.
+      setFalhaAoRegistar(erro ?? 'sem id de volta');
+      return;
+    }
+
+    // 2. A gravação liga-se ao id que acabou de nascer.
+    void startAudioRecording(silent, Promise.resolve(alertaId));
+
+    // 3. As coordenadas entram quando chegarem (tecto 3 s) e só depois é que
+    //    o contacto é avisado — para a mensagem já levar a localização.
+    const pos = await posicao;
+    await avisarOContacto(pos, janela);
   };
 
-  useEffect(() => { triggerPanicRef.current = triggerPanic; });
+  useEffect(() => {
+    triggerPanicRef.current = triggerPanic;
+  });
+
+  /** O clique do botão. A aba abre AQUI, ainda dentro do gesto. */
+  const aoCarregarNoBotao = () => {
+    if (!pressed) {
+      void triggerPanic(false, 'botao_panico');
+      return;
+    }
+
+    // Segundo toque = a sério. ⚠️ A aba tem de nascer antes de qualquer
+    // `await`, senão o browser bloqueia-a em silêncio. É esta linha que faz o
+    // WhatsApp abrir sozinho.
+    const janela = abrirAbaParaOWhatsApp();
+    void triggerPanic(false, 'botao_panico', janela);
+  };
 
   if (sent) {
     return (
       <div className="zr-card" style={{ border: '1px solid var(--danger-soft)', background: 'rgba(239, 68, 68, 0.05)', display: 'flex', flexDirection: 'column', gap: '16px' }}>
         <div className="zr-inline" style={{ gap: '12px' }}>
           <div style={{ width: '40px', height: '40px', background: 'rgba(239, 68, 68, 0.2)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px' }}>
-            <span className="material-symbols-outlined" style={{fontSize: '28px'}}>emergency</span>
+            <span className="material-symbols-outlined" style={{ fontSize: '28px' }}>emergency</span>
           </div>
           <div>
-            <strong style={{ color: 'var(--danger-soft)', display: 'block', marginBottom: '4px' }}>Alerta enviado</strong>
+            <strong style={{ color: 'var(--danger-soft)', display: 'block', marginBottom: '4px' }}>
+              {falhaAoRegistar ? 'Alerta NÃO registado' : 'Alerta enviado'}
+            </strong>
             <span className="zr-meta" style={{ color: 'var(--danger-soft)', opacity: 0.8 }}>
-              {emergencyContactMissing
-                ? 'Central SOS registada. Define um contacto de emergência para activar SMS e chamada.'
-                : 'Contacto de emergência notificado'}
+              {falhaAoRegistar
+                ? 'Não conseguimos registar o alerta. Liga 113 ou 112 agora.'
+                : emergencyContactMissing
+                  ? 'Central SOS registada. Define um contacto de emergência para avisar alguém.'
+                  : 'Contacto de emergência avisado'}
             </span>
           </div>
         </div>
@@ -338,17 +344,56 @@ export default function PanicButton({
 
         {audioSaved && !recording && (
           <div className="zr-chip zr-chip--success" style={{ justifyContent: 'flex-start' }}>
-            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle', marginRight: '8px'}}>check_circle</span>
-            Áudio de evidência guardado
+            <span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle', marginRight: '8px' }}>check_circle</span>
+            Áudio de evidência guardado e ligado ao alerta
           </div>
+        )}
+
+        {segundosParaLigar != null && (
+          <div className="zr-chip zr-chip--danger" style={{ justifyContent: 'space-between' }}>
+            <span>A ligar ao contacto em {segundosParaLigar}s</span>
+            <button
+              type="button"
+              onClick={() => setSegundosParaLigar(null)}
+              className="zr-button zr-button--secondary"
+              style={{ padding: '4px 10px', fontSize: '10px' }}
+            >
+              Travar
+            </button>
+          </div>
+        )}
+
+        {/* A rede de segurança: um <a href> verdadeiro nunca é bloqueado. */}
+        {linkWhatsApp && (
+          <a
+            href={linkWhatsApp}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="zr-button zr-button--danger zr-button--block"
+            style={{ justifyContent: 'center', fontWeight: 700 }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle', marginRight: '6px' }}>chat</span>
+            Abrir WhatsApp para o contacto
+          </a>
+        )}
+
+        {linkSms && (
+          <a
+            href={linkSms}
+            className="zr-button zr-button--secondary zr-button--block"
+            style={{ justifyContent: 'center' }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle', marginRight: '6px' }}>sms</span>
+            Enviar SMS ao contacto
+          </a>
         )}
 
         <div className="zr-inline" style={{ gap: '8px' }}>
           <a href="tel:113" className="zr-button zr-button--danger zr-button--block" style={{ flex: 1, padding: '10px 0', fontSize: '10px' }}>
-            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 113
+            <span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle' }}>call</span> Ligar 113
           </a>
           <a href="tel:112" className="zr-button zr-button--secondary zr-button--block" style={{ flex: 1, padding: '10px 0', fontSize: '10px', color: 'var(--danger-soft)', borderColor: 'var(--danger-soft)' }}>
-            <span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>call</span> Ligar 112
+            <span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle' }}>call</span> Ligar 112
           </a>
         </div>
       </div>
@@ -367,17 +412,19 @@ export default function PanicButton({
         <div className="zr-alert-box zr-alert-box--warning" style={{ marginBottom: 0 }}>
           <div className="zr-alert-content">
             <strong>Contacto de emergência em falta</strong>
-            <p>O SOS continua a guardar e difundir o alerta, mas sem SMS nem chamada automática.</p>
+            <p>O SOS continua a guardar e difundir o alerta, mas sem avisar ninguém.</p>
           </div>
         </div>
       )}
 
       <button
-        onClick={() => void triggerPanic(false)}
+        onClick={aoCarregarNoBotao}
         className={`zr-button zr-button--block ${pressed ? 'zr-button--danger animate-pulse' : 'zr-button--secondary'}`}
         style={pressed ? { boxShadow: '0 0 20px rgba(239, 68, 68, 0.6)' } : { color: 'var(--danger-soft)', borderColor: 'rgba(239, 68, 68, 0.3)', backgroundColor: 'rgba(239, 68, 68, 0.1)' }}
       >
-        {pressed ? <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>emergency</span> CONFIRMA - toca de novo para enviar alerta</> : <><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>shield</span> Botão de Pânico (SOS)</>}
+        {pressed
+          ? <><span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle' }}>emergency</span> CONFIRMA - toca de novo para enviar alerta</>
+          : <><span className="material-symbols-outlined" style={{ fontSize: 'inherit', verticalAlign: 'middle' }}>shield</span> Botão de Pânico (SOS)</>}
       </button>
     </div>
   );

@@ -743,7 +743,6 @@ const PassengerHome: React.FC<PassengerHomeProps> = ({
                   emergencyPhone={emergencyPhone}
                   driverName={ride.driverName}
                   silentSignal={silentPanicSignal}
-                  enableScreamDetection={true}
                 />
               </div>
             )}

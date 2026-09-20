@@ -18,6 +18,7 @@
 // =============================================================================
 
 import {
+  alertaExpirou,
   alertaPrecisaDeAviso,
   decidirEscada,
   duracaoPrevistaUsada,
@@ -103,6 +104,12 @@ export interface Porta {
   // ── Alertas de pânico (passo 4) ──────────────────────────────────────────
   /** Alertas recentes ainda por avisar ao contacto. Já filtrados por idade. */
   listarAlertasPorAvisar(): Promise<AlertaParaNotificar[]>;
+  /**
+   * Alertas que já NÃO vão ser avisados: ou se esgotaram as tentativas, ou
+   * passou a janela inteira. Servem para os fechar com nota, em vez de os
+   * deixar a apodrecer no painel como `active` para sempre.
+   */
+  listarAlertasExpirados(): Promise<AlertaParaNotificar[]>;
   /** Dados da corrida para dar contexto à mensagem. */
   lerCorrida(rideId: string): Promise<{ origem: string | null; destino: string | null } | null>;
   /**
@@ -119,6 +126,11 @@ export interface MudancasAlerta {
   contact_notified_at?: string | null;
   contact_attempts?: number;
   contact_last_error?: string | null;
+  /**
+   * ⚠️ Existe para o FECHO dos alertas que já não vão ser avisados. Só se
+   * escreve `'expired'` — os outros estados são do admin ou do próprio fluxo.
+   */
+  status?: 'expired';
 }
 
 export interface Relatorio {
@@ -136,6 +148,8 @@ export interface Relatorio {
   alertasSemContacto: number;
   alertasFalhados: number;
   alertasComAudio: number;
+  /** Passo 5 — alertas que já não vão ser avisados e foram fechados. */
+  alertasExpirados: number;
   erros: string[];
 }
 
@@ -154,6 +168,7 @@ function relatorioVazio(): Relatorio {
     alertasSemContacto: 0,
     alertasFalhados: 0,
     alertasComAudio: 0,
+    alertasExpirados: 0,
     erros: [],
   };
 }
@@ -283,7 +298,54 @@ export async function correrEscada(porta: Porta, agoraMs: number): Promise<Relat
   // prova real do que se passa. Até aqui esse áudio ficava parado no storage.
   await notificarContactos(porta, agoraMs, rel);
 
+  // ── Passo 5: fechar o que já não vai ser avisado ─────────────────────────
+  // ⚠️ Existe por causa do F6. A fila tinha prazo de 30 minutos e as três
+  // tentativas gastavam-se em três — um alerta cuja primeira tentativa falhasse
+  // (por exemplo, com a janela da Meta fechada) saía da fila em meia hora
+  // **sem nota, sem aviso e sem nunca ser fechado**. Ficava `active` para
+  // sempre a poluir o painel. Agora é fechado e diz porquê.
+  await fecharAlertasExpirados(porta, agoraMs, rel);
+
   return rel;
+}
+
+/**
+ * Fecha, com nota, os alertas que já não vão ser levados a ninguém.
+ *
+ * ⚠️ `expired` e **não** `false_alarm`: um alerta que não chegou ao contacto
+ * não é um falso alarme — é um socorro que falhou. Marcá-lo de falso alarme
+ * seria mentir no registo, e é esse registo que um dia pode valer num tribunal.
+ */
+async function fecharAlertasExpirados(
+  porta: Porta,
+  agoraMs: number,
+  rel: Relatorio,
+): Promise<void> {
+  let alertas: AlertaParaNotificar[] = [];
+
+  try {
+    alertas = await porta.listarAlertasExpirados();
+  } catch (e) {
+    rel.erros.push(`listar alertas expirados: ${mensagemDeErro(e)}`);
+    return;
+  }
+
+  for (const alerta of alertas) {
+    if (!alertaExpirou(alerta, agoraMs)) continue;
+
+    try {
+      await porta.actualizarAlerta(alerta.id, {
+        status: 'expired',
+        contact_last_error:
+          alerta.contact_attempts >= MAX_TENTATIVAS_CONTACTO
+            ? `desistimos apos ${alerta.contact_attempts} tentativas`
+            : 'fila expirada sem entrega',
+      });
+      rel.alertasExpirados++;
+    } catch (e) {
+      rel.erros.push(`fechar alerta expirado ${alerta.id}: ${mensagemDeErro(e)}`);
+    }
+  }
 }
 
 /**

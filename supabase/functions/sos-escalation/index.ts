@@ -154,6 +154,11 @@ const porta: Porta = {
         severity: aviso.severity,
         lat: aviso.lat,
         lng: aviso.lng,
+        // ⚠️ Explícito de propósito. Sem esta linha o INSERT caía no DEFAULT
+        // `'botao_panico'` e um aviso da escada — onde ninguém tocou em botão
+        // nenhum — aparecia no painel como pânico carregado à mão, e a
+        // mensagem ao contacto diria "accionou o botão de emergência".
+        source: aviso.source,
       })
       .select('id')
       .single();
@@ -214,6 +219,45 @@ const porta: Porta = {
 
     if (error) throw new Error(error.message);
     return (data ?? []) as AlertaParaNotificar[];
+  },
+
+  /**
+   * Alertas que já não vão ser avisados — para os fechar com nota.
+   *
+   * Duas consultas em vez de uma com `or()`: o valor do limite é um timestamp
+   * com `:` e `-` lá dentro, e metê-lo numa expressão `or` do PostgREST é
+   * pedir para ser interpretado como sintaxe. Duas consultas simples não têm
+   * esse risco, e a deduplicação resolve quem cair nas duas.
+   */
+  async listarAlertasExpirados(): Promise<AlertaParaNotificar[]> {
+    const campos =
+      'id, user_id, ride_id, severity, source, created_at, lat, lng, driver_name, audio_storage_path, contact_phone, contact_notified_at, contact_attempts';
+    const limite = new Date(Date.now() - JANELA_ALERTAS_MS).toISOString();
+
+    // Só os que continuam `active` e nunca foram avisados. Um alerta já
+    // fechado pelo admin não se toca.
+    const porIdade = () =>
+      admin
+        .from('panic_alerts')
+        .select(campos)
+        .is('contact_notified_at', null)
+        .eq('status', 'active');
+
+    const [velhos, semTentativas] = await Promise.all([
+      porIdade().lt('created_at', limite).limit(50),
+      porIdade().gte('contact_attempts', MAX_TENTATIVAS_CONTACTO).limit(50),
+    ]);
+
+    if (velhos.error) throw new Error(velhos.error.message);
+    if (semTentativas.error) throw new Error(semTentativas.error.message);
+
+    const todos = [
+      ...((velhos.data ?? []) as AlertaParaNotificar[]),
+      ...((semTentativas.data ?? []) as AlertaParaNotificar[]),
+    ];
+
+    const porId = new Map(todos.map((a) => [a.id, a]));
+    return [...porId.values()];
   },
 
   async lerCorrida(rideId: string) {

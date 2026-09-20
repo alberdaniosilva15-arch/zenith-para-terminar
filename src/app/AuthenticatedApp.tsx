@@ -6,7 +6,8 @@ import Layout from '../components/Layout';
 import FullPageSpinner from '../components/FullPageSpinner';
 import Toast from '../components/Toast';
 import ErrorBoundary from '../components/ErrorBoundary';
-import { TabType, UserRole } from '../types';
+import ScreamGuard from '../components/ScreamGuard';
+import { TabType, UserRole, RideStatus } from '../types';
 
 const PassengerHome = React.lazy(() => import('../components/PassengerHome'));
 const DriverHome = React.lazy(() => import('../components/DriverHome'));
@@ -139,6 +140,22 @@ export default function AuthenticatedApp() {
       userName={profile?.name}
       userRating={profile?.rating}
     >
+      {/* O grito tem de estar armado desde que o app abre — não só quando há
+          corrida aceite. Vive aqui, na raiz, e não dentro do painel do
+          passageiro: o motorista também precisa dele. */}
+      <ScreamGuard
+        userId={dbUser?.id}
+        rideId={ride.rideId}
+        emCorrida={
+          ride.status === RideStatus.ACCEPTED ||
+          ride.status === RideStatus.PICKING_UP ||
+          ride.status === RideStatus.IN_PROGRESS
+        }
+        emergencyPhone={profile?.emergency_contact_phone ?? undefined}
+        driverName={ride.driverName}
+        telefonePassageiro={profile?.phone ?? undefined}
+      />
+
       {hasVisitedHome && (
         <TabAwarePanel activeTab={activeTab} thisTab="home">
           <Suspense

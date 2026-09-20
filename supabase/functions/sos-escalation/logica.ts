@@ -110,6 +110,20 @@ export interface AvisoAdmin {
   lat: number | null;
   lng: number | null;
   motivo: 'sem_resposta' | 'respondeu_nao';
+  /**
+   * ⚠️ Sem isto, o INSERT caía no DEFAULT da coluna, que é `'botao_panico'`.
+   *
+   * O resultado era um alerta da escada — ninguém carregou em botão nenhum —
+   * a chegar ao painel rotulado como "botão de pânico". Pior: a mensagem ao
+   * contacto decide o texto por este campo (`foiAutomatico: source !==
+   * 'botao_panico'`), portanto diria "accionou o botão de emergência" sobre um
+   * silêncio. Uma frase falsa numa mensagem de socorro é pior do que nenhuma.
+   *
+   * O valor `'escada_corrida'` já existia no CHECK desde 16/09 — a intenção
+   * estava escrita na migração, só nunca chegou a ser ligada. (Apanhado na
+   * prova P3, 16/09: aviso criado às 22:04:01 com `source=botao_panico`.)
+   */
+  source: 'escada_corrida';
 }
 
 /**
@@ -131,6 +145,7 @@ export function montarAvisoAdmin(
     lat: ponto?.lat ?? null,
     lng: ponto?.lng ?? null,
     motivo,
+    source: 'escada_corrida',
   };
 }
 
@@ -364,8 +379,20 @@ export const MAX_TENTATIVAS_CONTACTO = 3;
  */
 export const ESPERA_PARA_ANEXAR_AUDIO_MS = 45 * 1000;
 
-/** Só olhamos para alertas recentes. Um alerta de ontem já não se avisa hoje. */
-export const JANELA_ALERTAS_MS = 30 * 60 * 1000;
+/**
+ * Durante quanto tempo ainda vale a pena tentar avisar o contacto.
+ *
+ * ⚠️ Era **30 minutos**. Isso parecia razoável e era uma armadilha: as
+ * `MAX_TENTATIVAS_CONTACTO` (3) gastam-se em **três minutos** com o cron a
+ * correr a cada minuto. Se as três falhassem pelo mesmo motivo — a janela da
+ * Meta fechada, por exemplo — o alerta saía da fila aos 30 minutos **sem nota,
+ * sem aviso e sem nunca ser fechado**. Ficava `active` para sempre.
+ *
+ * Seis horas dão espaço para a janela da Meta abrir, para o telemóvel do
+ * contacto voltar a ter rede, e para um admin olhar. E o que não sair dentro
+ * disso é fechado com nota — ver `alertaExpirou`.
+ */
+export const JANELA_ALERTAS_MS = 6 * 60 * 60 * 1000;
 
 export interface AlertaParaNotificar {
   id: string;
@@ -412,6 +439,31 @@ export function alertaPrecisaDeAviso(
   }
 
   return true;
+}
+
+/**
+ * Um alerta que já **não vai** ser avisado a ninguém.
+ *
+ * Existe para o fechar com nota, em vez de o deixar desaparecer em silêncio.
+ * Sem isto, um alerta que não saísse à primeira ficava `active` para sempre:
+ * ninguém era avisado, e o painel enchia-se de lixo antigo que competia por
+ * atenção com os alertas a sério.
+ *
+ * Duas formas de expirar, e as duas contam:
+ *   • esgotaram-se as tentativas (desistimos de propósito); ou
+ *   • passou a janela inteira sem nunca ter sido avisado.
+ *
+ * ⚠️ Um alerta JÁ avisado nunca expira por aqui — esse é do admin.
+ */
+export function alertaExpirou(alerta: AlertaParaNotificar, agoraMs: number): boolean {
+  if (alerta.contact_notified_at !== null) return false;
+
+  if (alerta.contact_attempts >= MAX_TENTATIVAS_CONTACTO) return true;
+
+  const criadoMs = Date.parse(alerta.created_at);
+  if (!Number.isFinite(criadoMs)) return false;
+
+  return agoraMs - criadoMs > JANELA_ALERTAS_MS;
 }
 
 export interface DadosDaMensagemDePanico {

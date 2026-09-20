@@ -6,13 +6,30 @@ const SCREAM_THRESHOLD = 0.85;    // 0-1 normalizado, 0.85 = muito alto
 const SCREAM_DURATION_MS = 800;   // Deve manter-se alto por 800ms para confirmar
 const COOLDOWN_MS = 30_000;       // Após detectar, espera 30s antes de detectar novamente
 
-type ScreamCallback = () => void;
+type ScreamCallback = (motivo: string) => void;
 
-interface ScreamDetectorHandle {
+export interface ScreamDetectorHandle {
   stop: () => void;
 }
 
-export function startScreamDetection(onScream: ScreamCallback): ScreamDetectorHandle | null {
+export interface OpcoesDetector {
+  /**
+   * Liga o wake-word por voz ("socorro", "ajuda").
+   *
+   * ⚠️ `SpeechRecognition` com `continuous = true` **envia o áudio do microfone
+   * para os servidores da Google**, continuamente. Por isso é opcional e só se
+   * liga quando há corrida a decorrer — quando há mesmo alguém a ouvir-te.
+   *
+   * A detecção por amplitude (`AnalyserNode`) é 100 % local e não sai do
+   * telemóvel. É essa que fica sempre armada, desde que o app abre.
+   */
+  voz?: boolean;
+}
+
+export function startScreamDetection(
+  onScream: ScreamCallback,
+  opcoes: OpcoesDetector = {},
+): ScreamDetectorHandle | null {
   let active = true;
   let stream: MediaStream | null = null;
   let audioCtx: AudioContext | null = null;
@@ -26,7 +43,7 @@ export function startScreamDetection(onScream: ScreamCallback): ScreamDetectorHa
     if (now - lastTriggerTime >= COOLDOWN_MS) {
       lastTriggerTime = now;
       console.warn(`[ScreamDetector] 🆘 ${reason} DETECTADO`);
-      onScream();
+      onScream(reason);
     }
   };
 
@@ -128,8 +145,11 @@ export function startScreamDetection(onScream: ScreamCallback): ScreamDetectorHa
     try { recognition.start(); } catch (e) { /* reconhecimento indisponível */ }
   };
 
+  // A amplitude é LOCAL — nada sai do telemóvel. Fica sempre armada.
   initAudio();
-  initSpeech();
+
+  // O reconhecimento de voz passa pela Google. Só entra quando há corrida.
+  if (opcoes.voz) initSpeech();
 
   return {
     stop: () => {
