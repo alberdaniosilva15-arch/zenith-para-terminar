@@ -2494,6 +2494,52 @@ async function tratarPassageiro(
       return;
     }
 
+    // ── Há mesmo alguém para atender? ────────────────────────────────────────
+    // ⚠️ Isto não é uma optimização: é a diferença entre prometer e cumprir.
+    //
+    // Antes, o bot criava a corrida, dizia ao passageiro «Código da viagem:
+    // ABC12345 — guarda-o, é o que o motorista vai pedir», e só DEPOIS
+    // descobria que não havia motorista nenhum. Cancelava tudo uns segundos
+    // mais tarde e deixava o passageiro com um código que nunca chegou a
+    // ninguém.
+    //
+    // O Danio apanhou isto em 20/09: duas corridas seguidas (22:39 e 22:41),
+    // ambas canceladas, porque `driver_locations` tinha 0 motoristas
+    // `available`. Um código de viagem só tem valor se houver quem o leia.
+    //
+    // Se não há ninguém, dizemos a verdade AGORA e não se cria nada. O
+    // passageiro fica em `awaiting_confirm`, portanto basta responder *1*
+    // outra vez quando quiser tentar de novo — não perde o pedido.
+    const origemLat = Number(sessao!.origin_lat);
+    const origemLng = Number(sessao!.origin_lng);
+
+    if (Number.isFinite(origemLat) && Number.isFinite(origemLng)) {
+      // ⚠️ Envolvido em try/catch de propósito: uma verificação prévia que
+      // falha NUNCA pode impedir o despacho. Se isto rebentar, seguimos como
+      // antes — criar a corrida e deixar o `enviados === 0` tratar do assunto.
+      // O pior que pode acontecer é voltarmos ao comportamento antigo, não a
+      // ficarmos sem socorro nenhum.
+      let candidatosAgora: MotoristaCandidato[] = [];
+      try {
+        candidatosAgora = await encontrarMotoristas(supabaseAdmin, origemLat, origemLng);
+      } catch (e) {
+        console.warn('[whatsapp-webhook] Verificacao previa de motoristas falhou:', e);
+      }
+
+      if (candidatosAgora.length === 0) {
+        await sendWhatsAppMessage(
+          telefone,
+          `Não te vou mentir${comNome(msg.nome)} — neste momento não tenho nenhum motorista ` +
+            'disponível perto de ti 🚫\n\n' +
+            `O trajecto *${sessao!.origin_address} → ${sessao!.dest_address}* fica em ` +
+            `*${kz(Number(sessao!.estimated_price))} Kz*.\n\n` +
+            'Não criei a viagem, para não te dar um código que não serve para nada. ' +
+            'Responde *1* dentro de pouco tempo e eu volto a procurar.',
+        );
+        return;
+      }
+    }
+
     const { data: ride, error: erroCorrida } = await supabaseAdmin
       .from('rides')
       .insert({
@@ -2554,13 +2600,33 @@ async function tratarPassageiro(
         .update({ status: 'cancelled' })
         .eq('id', rideId)
         .eq('status', 'searching');
+
+      // ⚠️ Aqui havia `{ state: 'awaiting_origin', ride_id: null }` e MAIS NADA.
+      // O `guardarSessao` faz merge, portanto `origin_address`, `dest_address` e
+      // `estimated_price` do pedido falhado ficavam lá dentro. A sessão dizia
+      // "estou à espera da origem" mas já tinha um trajecto e um preço de uma
+      // tentativa anterior — e a mensagem seguinte do passageiro era lida contra
+      // esses dados velhos.
+      //
+      // Foi exactamente este o estado que ficou gravado em 20/09 nas duas
+      // conversas: `awaiting_origin` com origem, destino E preço preenchidos,
+      // `ride_id` nulo e `dispatch_attempt` a 1.
+      //
+      // Agora mantém-se em `awaiting_confirm` com o pedido intacto: o passageiro
+      // responde *1* e o bot volta a procurar, sem ter de reescrever a morada
+      // toda. É também o que a verificação anterior promete.
       await guardarSessao(supabaseAdmin, telefone, {
-        state: 'awaiting_origin', ride_id: null,
+        state: 'awaiting_confirm',
+        ride_id: null,
+        dispatch_attempt: null,
       }, sessao);
+
       await sendWhatsAppMessage(
         telefone,
         `Pois${comNome(msg.nome)}, neste momento não tenho motorista por perto 😔\n\n` +
-          'Deixei o pedido de lado. Tenta daqui a 2 minutos que eu volto a procurar.',
+          `O trajecto *${sessao!.origin_address} → ${sessao!.dest_address}* continua ` +
+          `guardado por *${kz(Number(sessao!.estimated_price))} Kz*.\n\n` +
+          'Responde *1* daqui a pouco e eu volto a procurar — não precisas de repetir as moradas.',
       );
     }
     return;
