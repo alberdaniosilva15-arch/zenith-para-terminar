@@ -507,8 +507,12 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         }
 
         if (!effectiveCoords) {
-          effectiveCoords = { lat: -8.8390, lng: 13.2343 }; // Luanda Centro
-          effectiveAddress = 'Luanda';
+          // Não se inventa localização nenhuma. Se o GPS falhar, o bloco de
+          // contexto diz ao Kaze que não a tem e proíbe-o de a inventar. Um
+          // "estás em Luanda Centro" falso seria o mesmo erro que o bot do
+          // WhatsApp fazia ao responder "Município do Belas" a um pin exacto.
+          effectiveCoords = null;
+          effectiveAddress = null;
         }
 
         // Passar pelo Kaze App Agent com protecção contra congelamento (máximo 6.5s)
@@ -781,7 +785,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
       if (SpeechRecognitionClass) {
         try {
           const speechRec = new SpeechRecognitionClass();
-          speechRec.lang = 'pt-BR';
+          speechRec.lang = 'pt-PT';
           speechRec.continuous = true;
           speechRec.interimResults = true;
           speechRec.maxAlternatives = 3;

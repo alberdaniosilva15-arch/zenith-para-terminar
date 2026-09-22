@@ -124,6 +124,54 @@ const RATE_LIMITS: Record<string, number> = {
   _default:             30,
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TRANSCRIÇÃO (acção `kaze_transcribe`)
+//
+// ⚠️ `GROQ_PROMPT_MAX_BYTES` é 896 porque foi isso que a API respondeu, com
+// estas palavras, a 22/09/2026:
+//
+//   HTTP 400 invalid_prompt:
+//   "prompt length must be 896 characters or fewer, but provided prompt
+//    contains 924 characters"
+//
+// E o número 924 é a chave de tudo: o prompt do cliente tinha 903 CARACTERES.
+// O Groq chama-lhe "characters" mas conta BYTES UTF-8 — e "táxi" (4 caracteres)
+// são 5 bytes, "Quarteirão" (10) são 11. É por isso que o limite tem de ser
+// medido com `TextEncoder`, não com `.length`. Estimar aqui não serve.
+// ─────────────────────────────────────────────────────────────────────────────
+const GROQ_PROMPT_MAX_BYTES = 896;
+/** Abaixo disto é cabeçalho WebM sem fala, não uma frase curta. */
+const MIN_AUDIO_BYTES = 800;
+
+/** Corta no último espaço antes de `maxBytes`, contados em UTF-8. */
+function truncarPorBytesUtf8(texto: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(texto).length <= maxBytes) return texto;
+  let cortado = texto;
+  while (cortado.length > 0 && encoder.encode(cortado).length > maxBytes) {
+    const espaco = cortado.lastIndexOf(' ');
+    cortado = espaco > 0 ? cortado.slice(0, espaco) : cortado.slice(0, -1);
+  }
+  return cortado.trim().replace(/[,;]\s*$/, '');
+}
+
+/**
+ * Extensão de ficheiro que corresponde ao MIME.
+ *
+ * O nome do ficheiro enviado ao Groq tem de acompanhar o conteúdo real: um
+ * browser que grave em MP4 (Safari/iOS) manda bytes MP4, e chamar-lhes
+ * `audio.webm` faz o fornecedor recusar com `invalid_media_file`.
+ */
+function extensaoDeAudio(mime: string): string {
+  const m = mime.toLowerCase();
+  if (m.includes('ogg') || m.includes('opus')) return 'ogg';
+  if (m.includes('wav') || m.includes('wave')) return 'wav';
+  if (m.includes('mp4') || m.includes('m4a') || m.includes('aac')) return 'm4a';
+  if (m.includes('mpeg') || m.includes('mp3')) return 'mp3';
+  if (m.includes('flac')) return 'flac';
+  return 'webm';
+}
+
 function normalizeProvider(provider: unknown) {
   const value = String(provider || '').trim().toLowerCase();
   if (value === 'gemini') return 'google';
@@ -957,18 +1005,48 @@ JSON: { text: string }`,
 
         const audioBase64 = String((payload as { audio?: unknown })?.audio ?? '');
         const mime = String((payload as { mime?: unknown })?.mime ?? 'audio/webm');
+
         // O cliente envia um prompt com o vocabulário de Luanda (quarteirões,
         // bairros, comandos). Sem ele o Whisper escreve "Kilamba" de dez
-        // maneiras diferentes. Passa-se tal-e-qual, com tecto.
-        const prompt = String((payload as { prompt?: unknown })?.prompt ?? '').slice(0, 4000);
+        // maneiras diferentes.
+        //
+        // ⚠️ O corte é por BYTES e é feito AQUI, não no cliente. O `.slice(0,
+        // 4000)` que aqui estava era 4,5× o limite real do fornecedor — deixava
+        // passar tudo e o Groq é que recusava. Quem manda é a regra do Groq, e
+        // aplicá-la no servidor é o que garante que nenhum cliente futuro a
+        // contorne. Ver `GROQ_PROMPT_MAX_BYTES` acima.
+        const promptBruto = String((payload as { prompt?: unknown })?.prompt ?? '');
+        const prompt = truncarPorBytesUtf8(promptBruto, GROQ_PROMPT_MAX_BYTES);
+        if (prompt.length < promptBruto.length) {
+          console.warn(
+            '[gemini-proxy] kaze_transcribe prompt cortado:',
+            promptBruto.length, '->', prompt.length, 'caracteres |',
+            new TextEncoder().encode(promptBruto).length, '->',
+            new TextEncoder().encode(prompt).length, 'bytes',
+          );
+        }
+
         if (!audioBase64) return err('Áudio em falta.', 400);
         // 8 MB de base64 ≈ 6 MB de áudio: muito acima de qualquer fala do Kaze.
         if (audioBase64.length > 8_000_000) return err('Áudio demasiado longo.', 413);
 
+        // 4 caracteres de base64 = 3 bytes de áudio.
+        const bytesAudio = Math.floor((audioBase64.length * 3) / 4);
+        if (bytesAudio < MIN_AUDIO_BYTES) {
+          console.warn('[gemini-proxy] kaze_transcribe áudio curto:', bytesAudio, 'bytes |', mime);
+          return err(
+            `Áudio demasiado curto (${bytesAudio} bytes). Fala mais perto do microfone.`,
+            400,
+          );
+        }
+
         try {
           const binario = Uint8Array.from(atob(audioBase64), (c) => c.charCodeAt(0));
           const form = new FormData();
-          form.append('file', new Blob([binario], { type: mime }), 'audio.webm');
+          // ⚠️ O nome do ficheiro tem de acompanhar o MIME real. Estava fixo em
+          // 'audio.webm': um browser que grave em MP4 (Safari/iOS) mandava bytes
+          // MP4 com nome .webm e o Groq recusava com `invalid_media_file`.
+          form.append('file', new Blob([binario], { type: mime }), `audio.${extensaoDeAudio(mime)}`);
           form.append('model', 'whisper-large-v3-turbo');
           form.append('language', 'pt');
           form.append('response_format', 'verbose_json');

@@ -142,10 +142,44 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
         return;
       }
 
+      // Buscar dados do carro (cor, marca, modelo) em driver_documents.
+      // O carro vive em driver_documents, não em driver_vehicles (que está vazio).
+      let vehicleColor: string | undefined;
+      let vehicleModel: string | undefined;
+      if (ride.driver_id) {
+        const { data: docs } = await supabase
+          .from('driver_documents')
+          .select('car_color, car_brand, car_model')
+          .eq('driver_id', ride.driver_id)
+          .eq('status', 'approved')
+          .limit(1)
+          .maybeSingle();
+        if (docs) {
+          vehicleColor = docs.car_color ?? undefined;
+          vehicleModel = [docs.car_brand, docs.car_model].filter(Boolean).join(' ') || undefined;
+        }
+      }
+
+      // Buscar o traço de GPS real da corrida para desenhar a rota no recibo.
+      let trackPoints: Array<{ lat: number; lng: number }> | undefined;
+      if (postRide.rideId) {
+        const { data: track } = await supabase
+          .from('ride_track_points')
+          .select('lat, lng')
+          .eq('ride_id', postRide.rideId)
+          .order('recorded_at', { ascending: true })
+          .limit(200);
+        if (track && track.length >= 2) {
+          trackPoints = track;
+        }
+      }
+
       const receiptData: RideReceiptData = {
         passengerName:  ride.passenger?.name ?? 'Passageiro',
         driverName:     postRide.driverName ?? ride.driver?.name ?? 'Motorista',
         driverPlate:    ride.vehicle?.plate_number ?? '',
+        vehicleColor,
+        vehicleModel,
         rideId:         postRide.rideId!,
         acceptedAt:     ride.accepted_at ?? ride.created_at,
         startedAt:      ride.started_at  ?? ride.accepted_at ?? ride.created_at,
@@ -161,6 +195,7 @@ const PostRideReview: React.FC<PostRideReviewProps> = ({ postRide, onSubmit, onD
         priceKz:        postRide.priceKz  ?? ride.price_kz        ?? 0,
         trafficFactor:  ride.traffic_factor ?? 1.0,
         vehicleType:    ride.vehicle?.vehicle_type ?? 'standard',
+        trackPoints,
       };
 
       await generateAndShareReceipt(receiptData, mode);

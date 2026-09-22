@@ -491,7 +491,19 @@ export default function KazePanel() {
           setDraftText('');
           setLastReply(`> KAZE: ${errMsg}`);
           setVoiceState('error');
-          await speakAndResume(`Não consegui ouvir com clareza. Podes repetir, Comandante?`);
+          // ⚠️ Aqui dizia-se SEMPRE "Não consegui ouvir com clareza. Podes
+          // repetir?" — mesmo quando a falha era do servidor. Isso apontava o
+          // dedo ao microfone do Dánio quando o erro estava do nosso lado: foi
+          // o que aconteceu com o prompt de 924 bytes, que partiu a transcrição
+          // e se disfarçou de problema de captação de som.
+          //
+          // Uma falha que chega a este `catch` é sempre NOSSA (o áudio
+          // demasiado curto nem chega aqui — sai como 'empty' e reinicia o
+          // ciclo em silêncio). A fala não pode contradizer o erro real, que
+          // fica no `lastReply` e no registo do servidor.
+          await speakAndResume(
+            'Tive um problema a processar o teu áudio. Já ficou registado — tenta outra vez.',
+          );
         }
       }
     };

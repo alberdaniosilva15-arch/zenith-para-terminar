@@ -88,17 +88,66 @@ async function detectAudioMimeType(blob: Blob): Promise<string> {
   return 'audio/webm';
 }
 
-/**
- * Obtém a extensão de ficheiro correspondente ao MIME type
- */
-function mimeToExtension(mime: string): string {
-  if (mime.includes('webm')) return 'webm';
-  if (mime.includes('ogg')) return 'ogg';
-  if (mime.includes('wav')) return 'wav';
-  if (mime.includes('mp4') || mime.includes('m4a')) return 'm4a';
-  if (mime.includes('mpeg') || mime.includes('mp3')) return 'mp3';
-  return 'webm';
+// ── Vocabulário de Luanda para o Whisper ───────────────────────────────────
+//
+// ⚠️ LIMITE MEDIDO CONTRA A API REAL (22/09/2026): o Groq conta o `prompt` em
+// BYTES UTF-8 e recusa acima de 896. NÃO são caracteres — são bytes.
+// "Quarteirão" tem 10 caracteres mas 11 bytes, "táxi" tem 4 mas 5. A lista
+// anterior somava 903 caracteres = **924 bytes**, e o Groq respondia:
+//
+//   HTTP 400 invalid_prompt:
+//   "prompt length must be 896 characters or fewer, but provided prompt
+//    contains 924 characters"
+//
+// O efeito era o pior possível: a transcrição falhava SEMPRE, e o erro só
+// existia no servidor — no telemóvel o Kaze dizia apenas "não consegui ouvir
+// com clareza", o que fazia parecer problema de microfone. A lista tinha
+// crescido até partir o limite sem que ninguém reparasse.
+//
+// Regra: MEDIR, nunca estimar. O valor abaixo é 880 e não 800 porque a lista
+// completa ocupa 870 bytes — com um tecto de 800 o corte caía a meio e perdia
+// justamente os comandos ("leva-me ao", "pede um táxi"), que são a parte mais
+// útil. 880 deixa 16 bytes de folga sob o limite do fornecedor e deixa o corte
+// ser o que deve ser: uma rede de segurança para quando a lista crescer, não
+// uma tesoura a cortar vocabulário bom.
+export const KAZE_WHISPER_PROMPT_MAX_BYTES = 880;
+
+/** Corta o texto no último separador antes de `maxBytes` (contados em UTF-8). */
+export function truncarPorBytes(texto: string, maxBytes: number): string {
+  const encoder = new TextEncoder();
+  if (encoder.encode(texto).length <= maxBytes) return texto;
+  let cortado = texto;
+  while (cortado.length > 0 && encoder.encode(cortado).length > maxBytes) {
+    const separador = Math.max(cortado.lastIndexOf(', '), cortado.lastIndexOf(' '));
+    cortado = separador > 0 ? cortado.slice(0, separador) : cortado.slice(0, -1);
+  }
+  return cortado.trim().replace(/[,;]\s*$/, '');
 }
+
+/**
+ * Vocabulário que vai ao Whisper como `prompt`. Sem ele o Whisper escreve
+ * "Kilamba" de várias maneiras diferentes.
+ *
+ * Construído a partir de uma lista (e não de uma string concatenada à mão) para
+ * que o limite de bytes seja uma conta verificável em vez de um acto de fé.
+ */
+export const KAZE_WHISPER_PROMPT = truncarPorBytes(
+  [
+    'Zenith Ride, táxi, corrida, Luanda, Angola.',
+    'Centralidade do Kilamba, Quarteirão A, Quarteirão B, Quarteirão C, Quarteirão D',
+    'Quarteirão E, Quarteirão F, Quarteirão G, Quarteirão H, Quarteirão I, Quarteirão J',
+    'Quarteirão K, Quarteirão L, Quarteirão M, Quarteirão N, Quarteirão O, Quarteirão P',
+    'KK 5000, Golf 2, Golf 1, Nova Vida, Zona A, Zona B, Zona C, Zona D',
+    'Mercado dos Correios, Talatona, Lar do Patriota, Belas Shopping',
+    'Cidade Financeira, Morro Bento, Benfica, Camama, Cidade Universitária',
+    'Viana, Estalagem, Capalanga, Kikuxi, Zango 1, Zango 2, Zango 3, Vida Pacífica',
+    'Cazenga, Tala Hady, Hoji Ya Henda, Cuca, Cacuaco, Sequele, Kikolo, Panguila',
+    'Mutamba, Kinaxixi, Maculusso, Maianga, Alvalade, Prenda, Sambizanga',
+    'Bairro Operário, Ilha do Cabo, Aeroporto 4 de Fevereiro',
+    'Comandos: quero ir para, leva-me ao, pede um táxi, chama um carro, quanto custa.',
+  ].join(' '),
+  KAZE_WHISPER_PROMPT_MAX_BYTES,
+);
 
 // ─── Provedor 1: Groq Whisper (MODELO DEDICADO DE TRANSCRIÇÃO) ──────────────
 // Whisper é treinado ESPECIFICAMENTE para transcrição de fala → Muito mais preciso
@@ -113,37 +162,18 @@ async function transcribeWithGroq(
   blob: Blob,
   mimeType: string,
 ): Promise<AudioTranscribeResult> {
-  const ext = mimeToExtension(mimeType);
-  const formData = new FormData();
-  formData.append('file', blob, `recording.${ext}`);
-  formData.append('model', 'whisper-large-v3-turbo');
-  formData.append('language', 'pt');
-  formData.append('response_format', 'verbose_json');
-  // Prompt de contexto expandido para Whisper com vocabulário rico de Angola
-  formData.append('prompt',
-    'Zenith Ride, táxi, corrida, Luanda, Angola. ' +
-    'Centralidade do Kilamba, Quarteirão A, Quarteirão B, Quarteirão C, Quarteirão D, ' +
-    'Quarteirão E, Quarteirão F, Quarteirão G, Quarteirão H, Quarteirão I, Quarteirão J, ' +
-    'Quarteirão K, Quarteirão L, Quarteirão M, Quarteirão N, Quarteirão O, Quarteirão P, ' +
-    'KK 5000, Golf 2, Golf 1, Nova Vida, Zona A, Zona B, Zona C, Zona D, Mercado dos Correios, ' +
-    'Talatona, Lar do Patriota, Belas Shopping, Cidade Financeira, Morro Bento, Benfica, ' +
-    'Camama, Cidade Universitária, Viana, Estalagem, Capalanga, Kikuxi, Zango 1, Zango 2, Zango 3, ' +
-    'Vida Pacífica, Cazenga, Tala Hady, Hoji Ya Henda, Cuca, Cacuaco, Sequele, Kikolo, Panguila, ' +
-    'Mutamba, Kinaxixi, Maculusso, Maianga, Alvalade, Prenda, Sambizanga, Bairro Operário, ' +
-    'Ilha do Cabo, Aeroporto 4 de Fevereiro, Benguela, Lobito, Huambo, Lubango, Cabinda. ' +
-    'Comandos: quero ir para, leva-me ao, pede um táxi, chama um carro, quanto custa.'
-  );
-
   // ⚠️ Antes daqui saía um `fetch` directo para `api.groq.com` com a chave do
   // browser. Agora o áudio vai para a Edge Function `gemini-proxy`
   // (acção `kaze_transcribe`), que já tem a chave nos secrets do servidor.
   //
-  // O `formData` continua a ser montado só para o prompt de vocabulário; lê-se
-  // de volta em vez de se duplicar a lista de quarteirões numa segunda string.
+  // O `FormData` que aqui se montava existia só para transportar o prompt de
+  // vocabulário até esta linha. Foi removido: o prompt é agora a constante
+  // `KAZE_WHISPER_PROMPT` (acima), já cortada por bytes — que é o que o Groq
+  // mede. Montar um FormData para o voltar a ler era um rodeio que escondia
+  // precisamente o número que estava errado.
   try {
-    const promptUsado = String(formData.get('prompt') ?? '');
     const audioBase64 = await blobToBase64(blob);
-    const rawText = (await transcreverAudioNoServidor(audioBase64, mimeType, promptUsado)).trim();
+    const rawText = (await transcreverAudioNoServidor(audioBase64, mimeType, KAZE_WHISPER_PROMPT)).trim();
 
     // Whisper retorna string vazia quando não há fala
     if (!rawText || rawText.length < 2) {
@@ -239,10 +269,21 @@ function fallbackGoogleDesligado(): AudioTranscribeResult {
  */
 export async function transcribeAudioWithGemini(blob: Blob): Promise<AudioTranscribeResult> {
   // ── Validação básica ──
-  if (!blob || blob.size < 300) {
+  //
+  // ⚠️ O limiar era 300 bytes e estava baixo de mais: o `MediaRecorder` do
+  // Chrome emite o CABEÇALHO WebM (EBML) no instante em que arranca, antes de
+  // existir som. Uma gravação cortada cedo demais ficava com ~400 bytes —
+  // passava este teste, era enviada, e o Groq respondia
+  // `400 invalid_media_file: could not process file - is it a valid media file?`
+  // Um ficheiro só-cabeçalho não tem fala nenhuma: mais vale identificar isso
+  // aqui, onde ainda se sabe explicar, do que no servidor.
+  const MIN_BYTES_COM_FALA = 800;
+  if (!blob || blob.size < MIN_BYTES_COM_FALA) {
     return {
       text: '', rawText: '', isEmpty: true, status: 'empty',
-      errorMessage: `Áudio muito curto ou vazio (${blob?.size || 0} bytes). O microfone não captou sinal sonoro.`,
+      errorMessage:
+        `Áudio demasiado curto (${blob?.size || 0} bytes, mínimo ${MIN_BYTES_COM_FALA}). ` +
+        'O microfone não chegou a captar fala.',
     };
   }
 

@@ -133,7 +133,7 @@ function webSpeechTranscribe(timeoutMs: number): Promise<string> {
       return;
     }
     const recognition = new SpeechRecognition();
-    recognition.lang = 'pt-BR';
+    recognition.lang = 'pt-PT';
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.maxAlternatives = 3;

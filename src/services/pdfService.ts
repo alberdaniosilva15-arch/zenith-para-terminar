@@ -10,6 +10,8 @@ export interface RideReceiptData {
   passengerName:   string;
   driverName:      string;
   driverPlate:     string;
+  vehicleColor?:   string;
+  vehicleModel?:   string;
   rideId:          string;
   acceptedAt:      string;   // ISO
   startedAt:       string;
@@ -25,6 +27,7 @@ export interface RideReceiptData {
   priceKz:         number;
   trafficFactor:   number;   // >1.3 = engarrafamento
   vehicleType:     'standard' | 'moto' | 'comfort' | 'xl';
+  trackPoints?:    Array<{ lat: number; lng: number }>;
 }
 
 export interface ContractData {
@@ -32,8 +35,12 @@ export interface ContractData {
   title: string;
   contract_type: 'school' | 'family' | 'corporate';
   address: string;
+  origin_lat?: number;
+  origin_lng?: number;
+  origin_address?: string;
   dest_lat?: number;
   dest_lng?: number;
+  dest_address?: string;
   time_start: string;
   time_end: string;
   km_accumulated: number;
@@ -56,11 +63,37 @@ export interface FleetBillingPdfData {
 async function getMapImageBase64(data: RideReceiptData): Promise<string | null> {
   if (!MAPBOX_TOKEN) return null;
   try {
-    const pin1 = `pin-l-a+1D9E75(${data.originLng},${data.originLat})`;
-    const pin2 = `pin-l-b+E24B4A(${data.destLng},${data.destLat})`;
+    const overlays: string[] = [];
+
+    // Se houver traço de GPS, desenhar a rota real como polyline.
+    // O Mapbox Static API aceita path-{width}+{color}-{opacity}({lon,lat;lon,lat;...}).
+    if (data.trackPoints && data.trackPoints.length >= 2) {
+      // Simplificação por subamostragem: no máximo 80 pontos para não estourar o URL.
+      const step = Math.max(1, Math.ceil(data.trackPoints.length / 80));
+      const pts: string[] = [];
+      for (let i = 0; i < data.trackPoints.length; i += step) {
+        const p = data.trackPoints[i];
+        if (!p) continue;
+        pts.push(`${p.lng.toFixed(5)},${p.lat.toFixed(5)}`);
+      }
+      // Garantir que o último ponto está incluído
+      const last = data.trackPoints[data.trackPoints.length - 1];
+      if (last) {
+        const lastStr = `${last.lng.toFixed(5)},${last.lat.toFixed(5)}`;
+        if (pts[pts.length - 1] !== lastStr) pts.push(lastStr);
+      }
+
+      overlays.push(`path-4+1D9E75-0.8(${pts.join(';')})`);
+    }
+
+    // Pin de partida
+    overlays.push(`pin-l-a+1D9E75(${data.originLng},${data.originLat})`);
+    // Pin de chegada
+    overlays.push(`pin-l-b+E24B4A(${data.destLng},${data.destLat})`);
+
     const url = [
       'https://api.mapbox.com/styles/v1/mapbox/dark-v11/static',
-      `${pin1},${pin2}`,
+      overlays.join(','),
       'auto/580x220@2x',
       `?padding=50&access_token=${MAPBOX_TOKEN}`,
     ].join('/');
@@ -143,7 +176,12 @@ export async function buildReceiptPDF(data: RideReceiptData): Promise<string> {
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(120, 120, 120);
   doc.text('Passageiro', MARGIN + 6, y + 22);
-  doc.text(data.driverPlate ? `Matrícula: ${data.driverPlate}` : 'Motorista Zenith', halfX + 4, y + 22);
+  const vehicleInfo = [
+    data.driverPlate ? `Matrícula: ${data.driverPlate}` : null,
+    data.vehicleColor ? `${data.vehicleColor}` : null,
+    data.vehicleModel ? data.vehicleModel : null,
+  ].filter(Boolean).join(' · ');
+  doc.text(vehicleInfo || 'Motorista Zenith', halfX + 4, y + 22);
 
   y += 36;
 
@@ -253,7 +291,35 @@ export async function buildReceiptPDF(data: RideReceiptData): Promise<string> {
 
   y += 30;
 
-  // ── Rodapé ───────────────────────────────────────────────────────────────────
+  // ── Agradecimento ────────────────────────────────────────────────────────────
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(20, 20, 20);
+  doc.text(`Obrigado por viajar com a Zenith Ride, ${data.passengerName.split(' ')[0]}.`, MARGIN, y);
+  y += 6;
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(120, 120, 120);
+  doc.text('A tua corrida foi registada. Este recibo serve como comprovativo do serviço prestado.', MARGIN, y);
+  y += 10;
+
+  // ── Rodapé + cláusula de pertences ──────────────────────────────────────────
+  doc.setFontSize(6);
+  doc.setFont('helvetica', 'italic');
+  doc.setTextColor(160, 160, 160);
+  const pertences = doc.splitTextToSize(
+    'Aten\u00E7\u00E3o aos seus pertences: outros passageiros podem entrar no ve\u00EDculo. ' +
+    'A Zenith Ride far\u00E1 o poss\u00EDvel por auxiliar na recupera\u00E7\u00E3o de bens esquecidos, ' +
+    'mas n\u00E3o se responsabiliza por objectos deixados no ve\u00EDculo. ' +
+    'Consoante a situa\u00E7\u00E3o, ser\u00E3o aplicadas ao motorista as san\u00E7\u00F5es previstas no regulamento interno.',
+    W - MARGIN * 2
+  );
+  pertences.forEach((line: string) => {
+    doc.text(line, MARGIN, y);
+    y += 3.5;
+  });
+  y += 4;
+
   doc.setFontSize(6.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(180, 180, 180);
@@ -293,8 +359,8 @@ export async function buildContractPDF(c: ContractData): Promise<string> {
   doc.text(`Tipo: Contrato ${type}`, M, y); y += 6;
   doc.text(`Morada: ${c.address}`, M, y); y += 6;
   doc.text(`Hor\u00E1rio: ${c.time_start} \u2014 ${c.time_end}`, M, y); y += 6;
-  doc.text(`Km acumulados: ${c.km_accumulated.toFixed(1)} km`, M, y); y += 6;
-  doc.text(`B\u00F3nus dispon\u00EDvel: ${c.bonus_kz.toFixed(0)} AOA`, M, y); y += 6;
+  doc.text(`Km acumulados: ${(c.km_accumulated ?? 0).toFixed(1)} km`, M, y); y += 6;
+  doc.text(`B\u00F3nus dispon\u00EDvel: ${(c.bonus_kz ?? 0).toFixed(0)} AOA`, M, y); y += 6;
   if (c.route_deviation_alert) {
     doc.text(`Alerta de desvio activo (m\u00E1x. ${c.max_deviation_km} km)`, M, y); y += 6;
   }
@@ -313,14 +379,18 @@ export async function buildContractPDF(c: ContractData): Promise<string> {
   // Adicionar Mapa do Trajecto
   if (c.dest_lat && c.dest_lng && MAPBOX_TOKEN) {
     try {
-      // Usa Luanda centro como origem caso não haja origem definida no contrato
-      const originLat = -8.8368;
-      const originLng = 13.2343;
-      const pin1 = `pin-l-a+1D9E75(${originLng},${originLat})`;
-      const pin2 = `pin-l-b+E24B4A(${c.dest_lng},${c.dest_lat})`;
+      // Origem real do contrato; se não existir, não se inventa — o mapa
+      // mostra só o pin de destino. Antes estava fixo em Luanda centro.
+      const originLat = c.origin_lat ?? null;
+      const originLng = c.origin_lng ?? null;
+      const pins: string[] = [];
+      if (originLat != null && originLng != null) {
+        pins.push(`pin-l-a+1D9E75(${originLng},${originLat})`);
+      }
+      pins.push(`pin-l-b+E24B4A(${c.dest_lng},${c.dest_lat})`);
       const mapUrl = [
         'https://api.mapbox.com/styles/v1/mapbox/dark-v11/static',
-        `${pin1},${pin2}`,
+        pins.join(','),
         'auto/580x220@2x',
         `?padding=50&access_token=${MAPBOX_TOKEN}`,
       ].join('/');

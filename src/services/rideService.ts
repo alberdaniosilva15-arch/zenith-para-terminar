@@ -812,24 +812,15 @@ class RideService {
         // utilizador com uma mensagem honesta. Não há nada a repetir aqui.
       }
 
-      // 3. Fallback de contingência: se RPC deu erro, tentar update directo
-      if (!acceptedRide && currentUserId) {
-        const { data: directData } = await supabase
-          .from('rides')
-          .update({
-            driver_id: currentUserId,
-            status: RideStatus.ACCEPTED,
-            accepted_at: new Date().toISOString(),
-            driver_confirmed: true,
-          })
-          .eq('id', rideId)
-          .select('*')
-          .maybeSingle();
-
-        if (directData) {
-          acceptedRide = directData as DbRide;
-        }
-      }
+      // 3. Fallback de contingência REMOVIDO.
+      //
+      // Antes daqui havia um .update() directo à tabela rides que contornava
+      // o accept_ride_atomic — sem verificação de driver_id IS NULL, sem
+      // validação de papel, sem atomicidade. Era um buraco de segurança:
+      // um motorista podia aceitar uma corrida já aceite por outro, ou
+      // atribuir-se uma corrida qualquer. As RPCs (accept_ride_atomic e
+      // accept_ride) agora estão corrigidas e testadas. Se ambas falham,
+      // a corrida não se aceita — que é o comportamento correcto.
 
       if (!acceptedRide) {
         const failureReason = rawData?.reason || rpcError?.message || 'Corrida já aceite ou não disponível.';
