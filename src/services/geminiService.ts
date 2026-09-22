@@ -272,6 +272,32 @@ async function callProxy<T>(action: string, payload: Record<string, unknown>, ti
   });
 }
 
+/**
+ * Transcreve áudio no SERVIDOR (Edge Function `gemini-proxy`, acção
+ * `kaze_transcribe`).
+ *
+ * Porque existe: a transcrição corria no browser contra a API do Groq, com a
+ * chave inlined no bundle (`VITE_GROQ_API_KEY`, mais uma cópia hardcoded e
+ * ofuscada em `src/lib/kazeKey.ts`). A chave passa a ficar só no servidor — o
+ * cliente envia o áudio, não a credencial.
+ *
+ * O `prompt` é o vocabulário de Luanda (quarteirões, bairros, comandos). Sem
+ * ele o Whisper escreve "Kilamba" de várias maneiras. O tecto de 30 s é maior
+ * que os 15 s de antes porque agora há uma Edge Function pelo meio.
+ */
+export async function transcreverAudioNoServidor(
+  audioBase64: string,
+  mime: string,
+  prompt: string,
+): Promise<string> {
+  const r = await callProxy<{ text?: string }>(
+    'kaze_transcribe',
+    { audio: audioBase64, mime, prompt },
+    30_000,
+  );
+  return (r?.text ?? '').trim();
+}
+
 async function callAdminProxy<T>(payload: Record<string, unknown>, timeoutMs = 35000): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -445,10 +471,17 @@ const FRONTEND_GROQ_KEY = getResolvedKazeGroqKey();
 // ⚠️ NÃO repor uma chave aqui.
 const FRONTEND_GEMINI_KEY = '';
 
-const FRONTEND_IA_KEY = (
-  import.meta.env.VITE_IA_API_KEY ||
-  ''
-).trim();
+// Chave OpenRouter/IA no frontend: DELIBERADAMENTE VAZIA, pelo mesmo motivo.
+//
+// O envPrefix do vite.config.ts inlinava no bundle tudo o que começasse por
+// VITE_ (e, pior, o `import.meta.env?.X` do kazeKey.ts fazia o Vite inlinar o
+// objecto env INTEIRO). Uma chave aqui fica visível no JavaScript público.
+//
+// Com a constante vazia, os blocos `if (FRONTEND_IA_KEY)` são saltados e a
+// cadeia usa as rotas vivas: Edge Function `gemini-proxy` → Groq → local.
+//
+// ⚠️ NÃO repor uma chave aqui.
+const FRONTEND_IA_KEY = '';
 
 async function callDirectGeminiChat(
   message: string,

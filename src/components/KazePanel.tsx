@@ -325,8 +325,13 @@ export default function KazePanel() {
     setVoiceState('speaking');
 
     try {
-      const elevenLabsKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
-      await kazeSpeakOnline(text, elevenLabsKey);
+      // ⚠️ Aqui lia-se `import.meta.env.VITE_ELEVENLABS_API_KEY` e passava-se a
+      // chave a `kazeSpeakOnline`. Era código morto por duas razões:
+      //   1. `kazeSpeakOnline` ignora o segundo parâmetro (`_elevenLabsApiKey`);
+      //   2. a fala vai pela Edge Function `gemini-proxy` (acção `kaze_tts`), que
+      //      já tem a chave no servidor.
+      // E não era inofensivo: com prefixo `VITE_`, a chave ia inlined no bundle.
+      await kazeSpeakOnline(text);
     } catch (error) {
       console.warn('[KazePanel] fala online falhou:', error);
     } finally {

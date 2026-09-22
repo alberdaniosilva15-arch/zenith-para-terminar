@@ -52,7 +52,23 @@ function zenithDevQrPlugin() {
 export default defineConfig({
   appType: 'spa',
   cacheDir: 'node_modules/.vite-app',
-  envPrefix: ['VITE_', 'GEMINI_', 'GROQ_', 'OPENAI_', 'OPENROUTER_', 'RESEND_'],
+  // ⚠️ SÓ `VITE_`. Nada de `GEMINI_`, `GROQ_`, `OPENAI_`, `OPENROUTER_`, `RESEND_`.
+  //
+  // O `envPrefix` decide que variáveis o Vite expõe ao browser. Estava assim:
+  //     ['VITE_', 'GEMINI_', 'GROQ_', 'OPENAI_', 'OPENROUTER_', 'RESEND_']
+  // e isso punha nomes de segredos do SERVIDOR ao alcance do cliente. Provado
+  // no bundle: `RESEND_API_KEY` (a chave de email) aparecia dentro de
+  // `dist-verify/assets/geminiService-*.js`.
+  //
+  // Pior: o `kazeKey.ts` lia `import.meta.env?.GROQ_API_KEY` com optional
+  // chaining. O Vite não consegue substituir a propriedade estaticamente nesse
+  // caso, por isso inlinava o objecto `import.meta.env` INTEIRO — e com ele
+  // todos os segredos com prefixo. Foi por essa porta que o RESEND saiu.
+  //
+  // Regra que passa a valer: **só `VITE_` chega ao browser**, e nada com
+  // prefixo `VITE_` pode ser um segredo. As chaves vivem nos secrets das Edge
+  // Functions do Supabase e nas variáveis de ambiente do Vercel.
+  envPrefix: ['VITE_'],
   plugins: [react(), zenithDevQrPlugin()],
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },

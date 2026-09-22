@@ -12,7 +12,12 @@ import { haversineKm as _haversineKm, haversineMeters as _haversineMeters } from
 import { searchAngolaLocationsLazy } from './angolaLocationsService';
 import { POPULAR_LOCATIONS } from '../data/popularLocations';
 
-const MAPBOX_TOKEN = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAPBOX_TOKEN) as string | undefined;
+// ⚠️ Leitura ESTÁTICA, sem `import.meta.env?.`. O optional chaining derrota a
+// substituição estática do Vite e obriga a inlinar o objecto `import.meta.env`
+// INTEIRO no bundle — foi por esse caminho que chaves sem prefixo `VITE_`
+// (ex.: RESEND_API_KEY) acabaram dentro do JS que o browser descarrega.
+// O `VITE_MAPBOX_TOKEN` é um token público (`pk.`), mas a forma fica estática por regra.
+const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
 const LOCATION_NAME_SEPARATOR = '—';
 
 export const LUANDA_STATIC_LOCATIONS: LocationResult[] = POPULAR_LOCATIONS;

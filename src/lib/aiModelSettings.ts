@@ -116,13 +116,17 @@ export function getAiModelSettings(): AiModelSettings {
   // lê-los aqui punha-os no JavaScript público. A chave do Gemini chegou a ser
   // marcada pela Google como "leaked" exactamente por isto.
   //
-  // Mantêm-se apenas as variáveis VITE_*, que são de uso público por desenho.
-  const effectiveKey = (
-    (provider === 'groq' ? import.meta.env.VITE_GROQ_API_KEY : null) ||
-    import.meta.env.VITE_GROQ_API_KEY ||
-    import.meta.env.VITE_IA_API_KEY ||
-    ''
-  ).trim();
+  // Vazio por desenho.
+  //
+  // ⚠️ As variáveis `VITE_GROQ_API_KEY` / `VITE_IA_API_KEY` foram REMOVIDAS
+  // daqui. O comentário acima dizia "mantêm-se apenas as variáveis VITE_*, que
+  // são de uso público por desenho" — mas não são: um prefixo `VITE_` não torna
+  // uma chave pública, torna-a INLINED. Era por aqui que a chave do Groq saía
+  // no bundle (verificado em `dist-verify/assets/geminiService-*.js`).
+  //
+  // Com a chave vazia, os caminhos directos são saltados e a cadeia usa a Edge
+  // Function `gemini-proxy`, que tem as chaves nos secrets do servidor.
+  const effectiveKey = '';
 
   return {
     provider,
@@ -133,10 +137,12 @@ export function getAiModelSettings(): AiModelSettings {
 }
 
 export function buildKazeApiKeys(settings = getAiModelSettings()) {
-  const groqKey = (import.meta.env.VITE_GROQ_API_KEY || '').trim();
-  // Vazio por desenho: a chave do Gemini vive no servidor (Edge Function).
+  // Todas vazias por desenho: as chaves vivem nos secrets das Edge Functions
+  // (Supabase) e nas variáveis de ambiente do Vercel — nunca no browser.
+  // Ver a nota em `getAiModelSettings`.
+  const groqKey = '';
   const geminiKey = '';
-  const iaKey = (import.meta.env.VITE_IA_API_KEY || '').trim();
+  const iaKey = '';
 
   return {
     [settings.provider]: settings.apiKey,

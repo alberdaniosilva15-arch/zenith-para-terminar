@@ -7,6 +7,8 @@
 // =============================================================================
 
 import { normalizeAngolanSpeech } from './angolaSpeechNormalizer';
+// A transcrição passa pelo servidor. A chave do Groq nunca chega ao browser.
+import { transcreverAudioNoServidor } from '../services/geminiService';
 
 export interface AudioTranscribeResult {
   text: string;
@@ -101,10 +103,14 @@ function mimeToExtension(mime: string): string {
 // ─── Provedor 1: Groq Whisper (MODELO DEDICADO DE TRANSCRIÇÃO) ──────────────
 // Whisper é treinado ESPECIFICAMENTE para transcrição de fala → Muito mais preciso
 // que modelos generativos como Gemini para esta tarefa.
+//
+// ⚠️ A chamada já NÃO sai daqui para a API do Groq. O áudio vai para a Edge
+// Function `gemini-proxy` (acção `kaze_transcribe`), que tem a chave nos secrets
+// do servidor. Antes, esta função recebia a chave por parâmetro — vinda de
+// `VITE_GROQ_API_KEY`, inlined no bundle.
 
 async function transcribeWithGroq(
   blob: Blob,
-  apiKey: string,
   mimeType: string,
 ): Promise<AudioTranscribeResult> {
   const ext = mimeToExtension(mimeType);
@@ -128,38 +134,16 @@ async function transcribeWithGroq(
     'Comandos: quero ir para, leva-me ao, pede um táxi, chama um carro, quanto custa.'
   );
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
-
+  // ⚠️ Antes daqui saía um `fetch` directo para `api.groq.com` com a chave do
+  // browser. Agora o áudio vai para a Edge Function `gemini-proxy`
+  // (acção `kaze_transcribe`), que já tem a chave nos secrets do servidor.
+  //
+  // O `formData` continua a ser montado só para o prompt de vocabulário; lê-se
+  // de volta em vez de se duplicar a lista de quarteirões numa segunda string.
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: formData,
-      signal: controller.signal,
-    });
-
-    if (res.status === 429 || res.status === 503) {
-      return {
-        text: '', rawText: '', isEmpty: false, status: 'error',
-        httpStatus: res.status,
-        errorMessage: `Groq rate-limited (HTTP ${res.status}). A tentar outro provedor...`,
-        provider: 'groq',
-      };
-    }
-
-    if (!res.ok) {
-      const errBody = await res.text().catch(() => '');
-      return {
-        text: '', rawText: '', isEmpty: false, status: 'error',
-        httpStatus: res.status,
-        errorMessage: `Groq HTTP ${res.status}: ${errBody.slice(0, 200)}`,
-        provider: 'groq',
-      };
-    }
-
-    const data = await res.json();
-    const rawText = (data.text || '').trim();
+    const promptUsado = String(formData.get('prompt') ?? '');
+    const audioBase64 = await blobToBase64(blob);
+    const rawText = (await transcreverAudioNoServidor(audioBase64, mimeType, promptUsado)).trim();
 
     // Whisper retorna string vazia quando não há fala
     if (!rawText || rawText.length < 2) {
@@ -202,178 +186,41 @@ async function transcribeWithGroq(
     if (err?.name === 'AbortError') {
       return {
         text: '', rawText: '', isEmpty: false, status: 'error',
-        errorMessage: 'Groq/Whisper timeout (>15s).',
+        errorMessage: 'Transcrição no servidor excedeu o tempo (>30s).',
         provider: 'groq',
       };
     }
     return {
       text: '', rawText: '', isEmpty: false, status: 'error',
-      errorMessage: `Groq/Whisper: ${err?.message || err}`,
+      errorMessage: `Transcrição no servidor: ${err?.message || err}`,
       provider: 'groq',
     };
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
-// ─── Provedor 2: Gemini (modelo generativo — fallback) ──────────────────────
-// Usa prompt fortemente condicionado com contexto angolano para minimizar alucinações
+// ─── Provedor 2: Google directo — DESLIGADO (removido) ─────────────────────
+//
+// ⚠️ Aqui vivia um caminho completo de transcricao directa ao Google: um
+// `fetch` para `generativelanguage.googleapis.com/...?key=${key}`, com a chave
+// lida de `import.meta.env.VITE_IA_API_KEY`. Foi REMOVIDO, nao comentado:
+//
+//   1. a chave era do OpenRouter (`sk-or-...`) e o filtro exigia `AIza`
+//      (Google) — logo aquela chave NUNCA era usada para nada. Era exposicao
+//      pura, sem contrapartida;
+//   2. qualquer `?key=` no cliente e mais uma chave dentro do bundle que o
+//      browser descarrega;
+//   3. a transcricao real corre no servidor: accao `kaze_transcribe` do
+//      `gemini-proxy`, com Groq/Whisper e a chave so do lado do servidor.
+//
+// Se um dia for preciso um fallback Google, acrescenta-se uma accao ao
+// `gemini-proxy`. NUNCA se repoe uma chave no browser.
 
-function getGeminiApiKeys(): string[] {
-  // A chave antiga do Gemini (VITE_GEMINI_API_KEY) foi revogada e removida do
-  // bundle — o caminho Google directo passou para o servidor. Este filtro só
-  // aceita chaves com prefixo `AIza` (Google), por isso a chave OpenRouter que
-  // resta aqui nunca é usada; a transcrição funciona pelo Groq/Whisper acima.
-  const envKeys: (string | undefined)[] = [
-    import.meta.env.VITE_IA_API_KEY,
-  ];
-  // Filtrar chaves válidas de ambiente
-  return Array.from(new Set(
-    envKeys.filter((k): k is string => Boolean(k && k.trim() && k.startsWith('AIza')))
-  ));
-}
-
-const CANDIDATE_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-flash-latest',
-];
-
-// Prompt optimizado: muito mais restritivo, com exemplos concretos de Angola
-const GEMINI_TRANSCRIPTION_PROMPT = `TAREFA: Transcrever este áudio de voz falada em português.
-
-CONTEXTO: O utilizador está dentro da app Zenith Ride (serviço de táxi e mobilidade em Angola).
-Ele pode estar a pedir corridas, indicar destinos ou quarteirões, ou dar comandos de voz ao assistente Kaze.
-
-VOCABULÁRIO ESPERADO (nomes de centralidades, quarteirões, bairros e comandos comuns):
-- Kilamba: Quarteirão A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, KK 5000, Xyami Kilamba
-- Golf e Nova Vida: Golf 2 (Zona A, B, C, D, Mercado dos Correios, Rotunda), Golf 1, Urbanização Nova Vida
-- Talatona e Sul: Talatona, Lar do Patriota (Fases 1, 2, 3), Belas Shopping, Cidade Financeira, Benfica, Morro Bento, Futungo
-- Camama e Viana: Camama 1 e 2, Cidade Universitária, Viana Centro, Estalagem, Capalanga, Kikuxi, Zango (0, 1, 2, 3, 4, 5), Vida Pacífica
-- Cazenga e Cacuaco: Cazenga, Tala Hady, Hoji Ya Henda, Cacuaco, Centralidade do Sequele, Kikolo, Panguila
-- Luanda Centro: Mutamba, Kinaxixi, Maculusso, Maianga, Alvalade, Prenda, Sambizanga, Bairro Operário, Ilha do Cabo, Aeroporto 4 de Fevereiro
-- Províncias: Benguela, Lobito, Huambo, Lubango, Cabinda, Namibe, Malanje, Soyo
-- Comandos: "pede um táxi para...", "quero ir para...", "leva-me ao...", "quanto custa...", "confirma", "cancela", "sim", "não", "saldo"
-
-REGRAS ABSOLUTAS:
-1. Retorna APENAS e EXCLUSIVAMENTE o texto falado. Nada mais.
-2. NÃO inventes texto. Se não consegues perceber, responde: [VAZIO]
-3. NÃO incluas timestamps (00:00), aspas, prefixos ou explicações.
-4. Mantém nomes de quarteirões e bairros com fidelidade absoluta.
-5. Se o áudio tiver ruído mas houver voz humana, transcreve a voz.
-6. Se for APENAS ruído/silêncio sem voz humana, responde: [VAZIO]`;
-
-async function transcribeWithGemini(
-  blob: Blob,
-  base64Audio: string,
-  mimeType: string,
-): Promise<AudioTranscribeResult> {
-  const keys = getGeminiApiKeys();
-  if (keys.length === 0) {
-    return {
-      text: '', rawText: '', isEmpty: false, status: 'error',
-      errorMessage: 'Nenhuma chave Gemini (AIza...) configurada.',
-      provider: 'gemini',
-    };
-  }
-
-  let lastError = '';
-  let lastHttpStatus: number | undefined;
-  let lastRawText = '';
-
-  for (const model of CANDIDATE_MODELS) {
-    for (const key of keys) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 20000);
-
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            signal: controller.signal,
-            body: JSON.stringify({
-              contents: [
-                {
-                  parts: [
-                    { text: GEMINI_TRANSCRIPTION_PROMPT },
-                    {
-                      inline_data: {
-                        mime_type: mimeType,
-                        data: base64Audio,
-                      },
-                    },
-                  ],
-                },
-              ],
-              generationConfig: {
-                temperature: 0.0,
-                maxOutputTokens: 200,
-                topP: 1.0,
-                topK: 1,
-              },
-            }),
-          }
-        );
-
-        clearTimeout(timeoutId);
-        lastHttpStatus = res.status;
-
-        if (res.status === 429 || res.status === 503) {
-          console.warn(`[kazeAudioTranscribe] Gemini ${model} key ${key.slice(0, 8)}... → HTTP ${res.status}`);
-          continue;
-        }
-
-        if (!res.ok) {
-          const errText = await res.text().catch(() => '');
-          lastError = `HTTP ${res.status}: ${errText.slice(0, 250)}`;
-          continue;
-        }
-
-        const data = await res.json();
-        const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
-        lastRawText = rawText;
-
-        const cleaned = rawText
-          .replace(/\[?\d{1,2}:\d{2}(?::\d{2})?\]?/g, '')
-          .replace(/^(?:A transcrição é|O áudio diz|Transcrição|O utilizador disse|A pessoa disse|O texto falado é):?\s*/i, '')
-          .replace(/^["']|["']$/g, '')
-          .trim();
-
-        const isExplicitlyEmpty =
-          !cleaned ||
-          /^\[?(?:vazio|sil[eê]ncio|ru[ií]do|sem[ _]voz)\]?$/i.test(cleaned) ||
-          /^(?:não há fala|nenhuma voz detectada|apenas ruído|não foi possível)/i.test(cleaned);
-
-        if (isExplicitlyEmpty) {
-          return {
-            text: '', rawText, isEmpty: true, status: 'empty',
-            errorMessage: 'Nenhuma fala humana audível detectada no áudio.',
-            modelUsed: model, provider: 'gemini',
-          };
-        }
-
-        const normalizedCleaned = normalizeAngolanSpeech(cleaned);
-        console.log(`[kazeAudioTranscribe] ✅ Gemini/${model} transcreveu:`, cleaned, '->', normalizedCleaned);
-
-        return {
-          text: normalizedCleaned, rawText, isEmpty: false,
-          status: 'success', modelUsed: model, provider: 'gemini',
-        };
-      } catch (fetchErr: any) {
-        if (fetchErr?.name === 'AbortError') {
-          lastError = `Gemini/${model} timeout (>20s)`;
-        } else {
-          lastError = fetchErr?.message || String(fetchErr);
-        }
-      }
-    }
-  }
-
+function fallbackGoogleDesligado(): AudioTranscribeResult {
   return {
-    text: '', rawText: lastRawText, isEmpty: false, status: 'error',
-    httpStatus: lastHttpStatus,
-    errorMessage: lastError || 'Não foi possível transcrever após tentar todas as chaves e modelos.',
+    text: '', rawText: '', isEmpty: false, status: 'error',
+    errorMessage:
+      'Fallback Google desligado. A transcricao corre no servidor (kaze_transcribe) — ' +
+      'se falhou, ver o erro do Groq/Whisper acima.',
     provider: 'gemini',
   };
 }
@@ -381,9 +228,14 @@ async function transcribeWithGemini(
 // ─── Função Principal: Cascata de Provedores ────────────────────────────────
 
 /**
- * Transcreve áudio com cascata inteligente de provedores:
- *   1º) Groq/Whisper (se VITE_GROQ_API_KEY estiver configurada)
- *   2º) Gemini (fallback com prompt condicionado)
+ * Transcreve áudio de voz.
+ *
+ * Caminho único: `kaze_transcribe` na Edge Function `gemini-proxy` (Groq/Whisper
+ * com `whisper-large-v3-turbo`, vocabulário angolano no `prompt`). O cliente não
+ * tem — nem precisa — de ter chave nenhuma.
+ *
+ * O antigo fallback Google directo foi REMOVIDO: exigia uma chave no browser e,
+ * na prática, nunca funcionava (ver o bloco "Provedor 2" abaixo).
  */
 export async function transcribeAudioWithGemini(blob: Blob): Promise<AudioTranscribeResult> {
   // ── Validação básica ──
@@ -398,10 +250,13 @@ export async function transcribeAudioWithGemini(blob: Blob): Promise<AudioTransc
   console.log(`[kazeAudioTranscribe] Áudio: ${blob.size} bytes, MIME: ${mimeType}`);
 
   // ── 1º Tentar Groq/Whisper (transcrição dedicada, MUITO mais precisa) ──
-  const { getResolvedKazeGroqKey } = await import('./kazeKey');
-  const groqKey = getResolvedKazeGroqKey();
-  if (groqKey) {
-    const groqResult = await transcribeWithGroq(blob, groqKey, mimeType);
+  //
+  // ⚠️ Deixou de haver um teste à existência da chave. A chave já não está no
+  // cliente (ver `src/lib/kazeKey.ts`): quem a tem é a Edge Function
+  // `gemini-proxy`. Se o servidor não a tiver configurada, devolve 503 e cai-se
+  // no Gemini abaixo — que é o comportamento certo.
+  {
+    const groqResult = await transcribeWithGroq(blob, mimeType);
     // Se deu sucesso ou vazio confirmado, retornar
     if (groqResult.status === 'success' || groqResult.status === 'empty') {
       return groqResult;
@@ -410,18 +265,13 @@ export async function transcribeAudioWithGemini(blob: Blob): Promise<AudioTransc
     console.warn('[kazeAudioTranscribe] Groq falhou, a tentar Gemini:', groqResult.errorMessage);
   }
 
-  // ── 2º Tentar Gemini (fallback generativo) ──
-  let base64Audio = '';
-  try {
-    base64Audio = await blobToBase64(blob);
-  } catch (convErr: any) {
-    return {
-      text: '', rawText: '', isEmpty: false, status: 'error',
-      errorMessage: `Falha ao converter áudio para Base64: ${convErr?.message || convErr}`,
-    };
-  }
-
-  return await transcribeWithGemini(blob, base64Audio, mimeType);
+  // ── 2º Fallback Google directo — DESLIGADO ──
+  //
+  // Antes convertia-se o áudio para Base64 e tentava-se o Google com uma chave
+  // vinda do cliente. Isso acabou (ver o bloco "Provedor 2" acima). A conversão
+  // para Base64 também sai daqui: não faz sentido pagar esse custo para devolver
+  // logo um erro.
+  return fallbackGoogleDesligado();
 }
 
 /**

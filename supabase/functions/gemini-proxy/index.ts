@@ -119,6 +119,8 @@ const RATE_LIMITS: Record<string, number> = {
   get_live_token:        5,
   // Uma fala por resposta do chat: o limite acompanha o do kaze_chat.
   kaze_tts:             40,
+  // Transcrição de voz: um pedido por fala do utilizador.
+  kaze_transcribe:      40,
   _default:             30,
 };
 
@@ -934,6 +936,70 @@ JSON: { text: string }`,
           console.error('[gemini-proxy] kaze_tts falhou:', detalhe);
           logAiUsage({ userId: user.id, action: 'kaze_tts', errorReturned: detalhe.slice(0, 200) });
           return err('Não foi possível gerar a voz do Kaze.', 502);
+        }
+      }
+
+      case 'kaze_transcribe': {
+        // ----------------------------------------------------------------
+        // Transcrição de voz (Whisper) feita no SERVIDOR.
+        //
+        // Existe porque a transcrição corria no browser com a chave do Groq
+        // inlined no bundle — a chave estava em `VITE_GROQ_API_KEY`, que o Vite
+        // expõe ao cliente por desenho (e havia ainda uma cópia hardcoded e
+        // ofuscada em `src/lib/kazeKey.ts`).
+        //
+        // Aqui a chave já vivia: `GROQ_API_KEY` está nos secrets desta Edge
+        // Function desde sempre. O cliente passa a enviar só o áudio.
+        // ----------------------------------------------------------------
+        if (!GROQ_API_KEY) {
+          return err('Transcrição indisponível: chave do Groq não configurada no servidor.', 503);
+        }
+
+        const audioBase64 = String((payload as { audio?: unknown })?.audio ?? '');
+        const mime = String((payload as { mime?: unknown })?.mime ?? 'audio/webm');
+        // O cliente envia um prompt com o vocabulário de Luanda (quarteirões,
+        // bairros, comandos). Sem ele o Whisper escreve "Kilamba" de dez
+        // maneiras diferentes. Passa-se tal-e-qual, com tecto.
+        const prompt = String((payload as { prompt?: unknown })?.prompt ?? '').slice(0, 4000);
+        if (!audioBase64) return err('Áudio em falta.', 400);
+        // 8 MB de base64 ≈ 6 MB de áudio: muito acima de qualquer fala do Kaze.
+        if (audioBase64.length > 8_000_000) return err('Áudio demasiado longo.', 413);
+
+        try {
+          const binario = Uint8Array.from(atob(audioBase64), (c) => c.charCodeAt(0));
+          const form = new FormData();
+          form.append('file', new Blob([binario], { type: mime }), 'audio.webm');
+          form.append('model', 'whisper-large-v3-turbo');
+          form.append('language', 'pt');
+          form.append('response_format', 'verbose_json');
+          if (prompt) form.append('prompt', prompt);
+
+          const resposta = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${GROQ_API_KEY}` },
+            body: form,
+          });
+
+          if (!resposta.ok) {
+            const detalhe = (await resposta.text()).slice(0, 300);
+            console.error('[gemini-proxy] kaze_transcribe HTTP', resposta.status, detalhe);
+            logAiUsage({
+              userId: user.id,
+              action: 'kaze_transcribe',
+              errorReturned: `HTTP ${resposta.status}: ${detalhe}`.slice(0, 200),
+            });
+            return err('Não foi possível transcrever o áudio.', 502);
+          }
+
+          const dados = await resposta.json();
+          logAiUsage({ userId: user.id, action: 'kaze_transcribe' });
+
+          return ok({ text: String(dados?.text ?? '').trim(), model: 'whisper-large-v3-turbo' });
+        } catch (trErr) {
+          const detalhe = trErr instanceof Error ? trErr.message : String(trErr);
+          console.error('[gemini-proxy] kaze_transcribe falhou:', detalhe);
+          logAiUsage({ userId: user.id, action: 'kaze_transcribe', errorReturned: detalhe.slice(0, 200) });
+          return err('Não foi possível transcrever o áudio.', 502);
         }
       }
 
