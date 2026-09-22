@@ -201,7 +201,7 @@ interface AuthContextValue {
 
   // Acções
   signIn:      (email: string, password: string) => Promise<AppError | null>;
-  signInWithGoogle: (role: UserRole, redirectPath?: string) => Promise<AppError | null>;
+  signInWithGoogle: (role: UserRole, redirectPath?: string, loginHint?: string) => Promise<AppError | null>;
   signInAsLocalGuest: (role?: UserRole, name?: string) => void;
   signUp:      (email: string, password: string, name: string, role: UserRole) => Promise<AppError | null>;
   signOut:     () => Promise<void>;
@@ -709,7 +709,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ------------------------------------------------------------------
   // SIGN IN WITH GOOGLE
   // ------------------------------------------------------------------
-  const signInWithGoogle = useCallback(async (role: UserRole, redirectPath?: string): Promise<AppError | null> => {
+  const signInWithGoogle = useCallback(async (role: UserRole, redirectPath?: string, loginHint?: string): Promise<AppError | null> => {
     try {
       persistStoredRoleIntent(role);
       const safeRedirectTarget = sanitizeRedirectTarget(redirectPath);
@@ -719,12 +719,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const redirectTo = safeRedirectTarget
         ? `${window.location.origin}/login?next=${encodeURIComponent(safeRedirectTarget)}`
         : `${window.location.origin}/login`;
+      // `login_hint` é um parâmetro REAL do Google: pré-selecciona a conta no ecrã
+      // de escolha. Não é segurança (o Google deixa sempre escolher outra) — é
+      // para o Dánio não ter de procurar o email certo numa lista. A segurança
+      // está na base de dados: `admin_allowlist` + o gatilho `proteger_papel_admin`.
+      const queryParams: Record<string, string> = { role };
+      if (loginHint) queryParams.login_hint = loginHint;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
-        options: {
-          queryParams: { role },
-          redirectTo,
-        }
+        options: { queryParams, redirectTo }
       });
       if (error) throw error;
       return null;

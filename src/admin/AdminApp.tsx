@@ -5,13 +5,14 @@ import { AuthProvider, useAuth } from '../contexts/AuthContext';
 import FullPageSpinner from '../components/FullPageSpinner';
 import { UserRole } from '../types';
 import AdminLogin from './AdminLogin';
+import { ADMIN_EMAIL, isAdminEmail } from './adminConfig';
 
 
 
 const AdminDashboard = React.lazy(() => import('../components/AdminDashboard'));
 
 function ProtectedAdminRoute({ children }: { children: React.ReactNode }) {
-  const { dbUser, loading, role } = useAuth();
+  const { dbUser, loading, role, authUser } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -23,7 +24,12 @@ function ProtectedAdminRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to={`/login?next=${encodeURIComponent(next)}`} replace />;
   }
 
-  if (role !== UserRole.ADMIN) {
+  // Duas condições, de propósito:
+  //   • `role` é o que ABRE o painel — e só existe um admin, garantido na base
+  //     de dados por `admin_allowlist` + o gatilho `proteger_papel_admin`;
+  //   • `isAdminEmail` serve para dar a mensagem certa a quem entrou com a conta
+  //     Google errada, em vez de um "não és admin" sem explicação nenhuma.
+  if (role !== UserRole.ADMIN || !isAdminEmail(authUser?.email)) {
     return <AdminAccessDenied />;
   }
 
@@ -37,9 +43,13 @@ function AdminAccessDenied() {
     <div style={centerShellStyle}>
       <div style={cardStyle}>
         <p style={kickerStyle}>Acesso restrito</p>
-        <h1 style={{ margin: '10px 0 0', fontSize: 28, fontWeight: 800 }}>Esta conta não é admin</h1>
+        <h1 style={{ margin: '10px 0 0', fontSize: 28, fontWeight: 800 }}>Esta conta não abre o painel</h1>
         <p style={copyStyle}>
-          O CRM administrativo só abre com uma conta `admin`. A conta activa agora é {authUser?.email ?? 'desconhecida'}.
+          O CRM administrativo só abre com <strong>{ADMIN_EMAIL}</strong>.
+          {authUser?.email ? <> A conta activa agora é <strong>{authUser.email}</strong>.</> : null}
+        </p>
+        <p style={copyStyle}>
+          Se escolheste outra conta Google sem querer, sai e tenta outra vez — o Google vai abrir já na conta certa.
         </p>
         <button onClick={() => void signOut()} style={buttonStyle}>
           Trocar de conta

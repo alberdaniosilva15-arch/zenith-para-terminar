@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { ShieldCheck, Sparkles } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
+import { ADMIN_EMAIL } from './adminConfig';
 
 const AUTH_REDIRECT_STORAGE_KEY = 'auth_redirect_target';
 
@@ -23,7 +24,9 @@ function readNextTarget() {
 
 export default function AdminLogin() {
   const { signIn, signInWithGoogle } = useAuth();
-  const [email, setEmail] = useState('');
+  // ⚠️ Não há estado de email: só existe UMA conta com acesso ao painel.
+  // O campo mostra-a mas não deixa alterá-la. Quem manda é a base de dados
+  // (`admin_allowlist` + gatilho `proteger_papel_admin`), não este formulário.
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,15 +38,15 @@ export default function AdminLogin() {
   };
 
   const handlePasswordSignIn = async () => {
-    if (!email.trim() || !password.trim()) {
-      setError('Preenche email e palavra-passe de admin.');
+    if (!password.trim()) {
+      setError('Preenche a palavra-passe de admin.');
       return;
     }
 
     persistNextTarget();
     setLoading(true);
     setError(null);
-    const authError = await signIn(email.trim(), password);
+    const authError = await signIn(ADMIN_EMAIL, password);
     setLoading(false);
     if (authError) {
       setError(authError.message);
@@ -54,7 +57,8 @@ export default function AdminLogin() {
     persistNextTarget();
     setLoading(true);
     setError(null);
-    const authError = await signInWithGoogle(UserRole.ADMIN, nextTarget);
+    // `ADMIN_EMAIL` vai como `login_hint`: o Google abre já na conta certa.
+    const authError = await signInWithGoogle(UserRole.ADMIN, nextTarget, ADMIN_EMAIL);
     setLoading(false);
     if (authError) {
       setError(authError.message);
@@ -124,18 +128,30 @@ export default function AdminLogin() {
             </div>
           ) : null}
 
+          {/* A via normal é o Google — por isso é o botão principal, e não uma alternativa. */}
+          <button onClick={() => void handleGoogleSignIn()} disabled={loading} style={primaryButtonStyle}>
+            <Sparkles size={18} />
+            <span>{loading ? 'A ligar ao Google...' : 'Entrar com Google'}</span>
+          </button>
+
+          <div style={{ position: 'relative', textAlign: 'center', color: '#7ca29b', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.16em' }}>
+            <span style={{ background: 'rgba(5, 15, 24, 0.9)', padding: '0 10px', position: 'relative', zIndex: 1 }}>ou</span>
+            <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: 'rgba(87,255,222,0.12)' }} />
+          </div>
+
           <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.18em', color: '#9deee3' }}>Email admin</span>
+            <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.18em', color: '#9deee3' }}>Conta autorizada</span>
             <input
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              placeholder="admin@zenithride.ao"
-              style={inputStyle}
+              value={ADMIN_EMAIL}
+              readOnly
+              aria-readonly="true"
+              title="Só esta conta tem acesso ao painel."
+              style={{ ...inputStyle, opacity: 0.8 }}
             />
           </label>
 
           <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.18em', color: '#9deee3' }}>Palavra-passe</span>
+            <span style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.18em', color: '#9deee3' }}>Palavra-passe (só se o Google falhar)</span>
             <input
               type="password"
               value={password}
@@ -151,18 +167,8 @@ export default function AdminLogin() {
             />
           </label>
 
-          <button onClick={() => void handlePasswordSignIn()} disabled={loading} style={primaryButtonStyle}>
-            {loading ? 'A entrar...' : 'Entrar no CRM'}
-          </button>
-
-          <div style={{ position: 'relative', textAlign: 'center', color: '#7ca29b', fontSize: 12, textTransform: 'uppercase', letterSpacing: '0.16em' }}>
-            <span style={{ background: 'rgba(5, 15, 24, 0.9)', padding: '0 10px', position: 'relative', zIndex: 1 }}>ou</span>
-            <div style={{ position: 'absolute', left: 0, right: 0, top: '50%', height: 1, background: 'rgba(87,255,222,0.12)' }} />
-          </div>
-
-          <button onClick={() => void handleGoogleSignIn()} disabled={loading} style={secondaryButtonStyle}>
-            <Sparkles size={18} />
-            <span>Continuar com Google Admin</span>
+          <button onClick={() => void handlePasswordSignIn()} disabled={loading} style={secondaryButtonStyle}>
+            {loading ? 'A entrar...' : 'Entrar com palavra-passe'}
           </button>
         </div>
       </div>

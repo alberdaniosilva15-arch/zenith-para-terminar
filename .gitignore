@@ -149,7 +149,12 @@ test_loop.js
 test_rls.js
 
 # Misc
-admin-dev/
+# NOTA: `admin-dev/` esteve aqui ignorado. Isso tornava o painel de admin
+# IMPOSSÍVEL de construir a partir de um clone limpo: é lá que vivem o
+# `index.html` e o `main.tsx` que o `vite.admin.config.ts` usa como entrada.
+# Sem eles, `npm run build:crm` não produz nada. Passa a ser versionado —
+# verificado: só contém o index.html e o main.tsx, nenhum segredo.
+# (O `admin-dev/node_modules/` continua ignorado pela regra global `node_modules/`.)
 kaze_voice_server.py
 dist-admin/
 KAZE_CORE_BACKUP.md
