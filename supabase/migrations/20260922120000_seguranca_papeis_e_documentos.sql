@@ -86,11 +86,34 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  -- Qualquer escrita de um utilizador comum volta a 'pending'. Isto inclui
-  -- editar o carro depois de aprovado: se o carro muda, a verificação
-  -- caduca. Um documento aprovado nunca é escrito pelo próprio.
-  NEW.status := 'pending';
-  NEW.ai_feedback := NULL;
+  -- Inserção: um documento nasce sempre por analisar.
+  IF TG_OP = 'INSERT' THEN
+    NEW.status := 'pending';
+    NEW.ai_feedback := NULL;
+    RETURN NEW;
+  END IF;
+
+  -- Actualização por um utilizador comum.
+  --
+  -- ⚠️ A regra é: só pode pedir REVISÃO. Nunca aprovar, nunca rejeitar — e,
+  -- importante, nunca REBAIXAR.
+  --
+  -- A primeira versão deste gatilho forçava tudo a 'pending', e isso tinha um
+  -- efeito colateral em produção: o cliente antigo ainda faz, a cada corrida
+  -- aceite, um upsert com `status: 'approved'`. Com a regra antiga, isso
+  -- rebaixava um motorista já aprovado para 'pending' a cada corrida — trocar
+  -- um buraco por uma avaria.
+  --
+  -- Agora, escrever 'approved' ou 'rejected' não faz nada: o estado fica como
+  -- estava. Escrever 'pending' é um pedido de (re)análise, e esse é legítimo
+  -- (é o que o `DriverDocumentsForm` faz ao reenviar depois de uma rejeição).
+  IF NEW.status = 'pending' THEN
+    NEW.ai_feedback := NULL;
+    RETURN NEW;
+  END IF;
+
+  NEW.status := OLD.status;
+  NEW.ai_feedback := OLD.ai_feedback;
 
   RETURN NEW;
 END;
