@@ -1834,7 +1834,7 @@ const PEDIDO_DE_CORRIDA =
 // (S seguido de ponto é word boundary) e era lido como confirmação.
 // Agora exige que a MENSAGEM INTEIRA (após trim) seja a palavra de
 // confirmação, permitindo apenas pontuação final: "s", "s!", "sim.", "ok".
-const CONFIRMA = /^(1|sim|s|ok|okay|confirmo|confirmar|aceito|aceitar|vamos|bora|yes)\b\s*[!.;?]?\s*$/i;
+const CONFIRMA = /^(1|sim|s|ok|okay|confirmo|confirmar|aceito|aceitar|vamos|bora|yes)\b\s*[!.;?]*\s*$/i;
 const RECUSA = /^(2|n[ãa]o|nao|cancelar|cancela|desistir|no)\b\s*[!.;?]?\s*$/i;
 
 function ehPedidoDeCorrida(texto: string): boolean {
