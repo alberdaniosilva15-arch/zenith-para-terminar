@@ -387,7 +387,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             : intent === UserRole.DRIVER
               ? 'set_my_role_driver'
               : 'set_my_role_passenger';
-          await supabase.rpc(roleRpcName);
+          // ⚠️ Envolvido em try/catch de propósito.
+          //
+          // `set_my_role_fleet_owner` passou a exigir uma frota existente e
+          // `set_my_role_driver` passou a exigir documentos aprovados — as duas
+          // levantam excepção quando o pedido não se justifica (ver a migração
+          // 20260922120000_seguranca_papeis_e_documentos.sql).
+          //
+          // Sem este try/catch, um papel recusado subia até ao catch exterior do
+          // `loadUserData`, que está dentro de um ciclo de 4 tentativas: um
+          // pedido legítimo-mas-recusado derrubava o carregamento do perfil e o
+          // utilizador não entrava. Um papel que não se aplica não é motivo para
+          // falhar a sessão — a intenção fica simplesmente por cumprir.
+          try {
+            await supabase.rpc(roleRpcName);
+          } catch (roleErr) {
+            console.warn('[AuthContext] role intent recusado, a manter o papel actual:', roleErr);
+          }
           const { data: updatedUser } = await supabase.from('users').select('*').eq('id', userId).maybeSingle();
           if (updatedUser) finalUserRow = updatedUser;
         }

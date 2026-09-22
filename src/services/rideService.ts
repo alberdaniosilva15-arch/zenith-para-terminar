@@ -742,22 +742,27 @@ class RideService {
       const { data: authData } = await supabase.auth.getUser();
       const currentUserId = authData?.user?.id || driverId;
 
-      if (currentUserId) {
-        // Garantir papel de motorista, documentos aprovados e disponibilidade na BD antes de chamar a RPC
-        await Promise.allSettled([
-          supabase.rpc('set_my_role_driver'),
-          supabase.from('driver_documents').upsert({
-            driver_id: currentUserId,
-            status: 'approved',
-            updated_at: new Date().toISOString(),
-          }, { onConflict: 'driver_id' }),
-          supabase.from('driver_locations').upsert({
-            driver_id: currentUserId,
-            status: 'available',
-            updated_at: new Date().toISOString(),
-          }, { onConflict: 'driver_id' }),
-        ]);
-      }
+      // ⚠️ AQUI HAVIA UM BLOCO DE "AUTO-REPARO" QUE ERA UM BURACO DE SEGURANÇA.
+      //
+      // Ele fazia, a partir do browser:
+      //     driver_documents.upsert({ driver_id, status: 'approved' })
+      //     driver_locations.upsert({ driver_id, status: 'available' })
+      //
+      // Ou seja: quem aceitasse uma corrida escrevia `approved` na sua própria
+      // linha de documentos e ficava "verificado" — sem BI, sem carta, sem
+      // ninguém rever nada. A policy de `driver_documents` era `ALL` com
+      // `auth.uid() = driver_id`, e não olhava ao `status`, portanto a escrita
+      // passava. É a razão de os 17 documentos da base estarem TODOS
+      // 'approved', sem um único 'pending'.
+      //
+      // O papel de motorista e a aprovação do documento deixaram de ser coisas
+      // que o cliente escreve (ver a migração
+      // 20260922120000_seguranca_papeis_e_documentos.sql): o documento nasce
+      // 'pending', só um admin aprova, e `set_my_role_driver` exige essa
+      // aprovação. O cliente já não tem nada que "reparar" aqui.
+      //
+      // Fica só `currentUserId`, que a chamada à RPC abaixo ainda usa.
+      void currentUserId;
 
       // 2. Chamar RPC accept_ride_atomic
       let rpcResult: any = null;
@@ -794,42 +799,17 @@ class RideService {
           accepted_at: new Date().toISOString(),
         }) as DbRide;
       } else if (rawData && rawData.success === false) {
-        // Se deu driver_not_available ou not_a_driver, auto-reparar e reexecutar
-        const reason = rawData.reason;
-        if (reason === 'driver_not_available' || reason === 'not_a_driver') {
-          if (currentUserId) {
-            try {
-              await supabase.rpc('set_my_role_driver');
-            } catch {}
-            try {
-              await supabase.from('driver_documents').upsert({
-                driver_id: currentUserId,
-                status: 'approved',
-                updated_at: new Date().toISOString(),
-              }, { onConflict: 'driver_id' });
-            } catch {}
-            try {
-              await supabase.from('driver_locations').upsert({
-                driver_id: currentUserId,
-                status: 'available',
-                updated_at: new Date().toISOString(),
-              }, { onConflict: 'driver_id' });
-            } catch {}
-
-            const retryRes = await supabase.rpc('accept_ride_atomic', { p_ride_id: rideId });
-            const retryRaw = Array.isArray(retryRes.data) ? retryRes.data[0] : retryRes.data;
-            if (retryRaw && (retryRaw.id === rideId || retryRaw.status === 'accepted' || retryRaw.success === true)) {
-              const { data: readRetry } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
-              acceptedRide = (retryRaw.id ? retryRaw : (readRetry || {
-                id: rideId,
-                status: RideStatus.ACCEPTED,
-                driver_id: currentUserId,
-                driver_confirmed: true,
-                accepted_at: new Date().toISOString(),
-              })) as DbRide;
-            }
-          }
-        }
+        // ⚠️ AQUI HAVIA UM "AUTO-REPARO" QUE ERA O MESMO BURACO DO INÍCIO DESTA FUNÇÃO.
+        //
+        // Quando a RPC respondia `driver_not_available` ou `not_a_driver`, o
+        // cliente tentava arranjar-se sozinho: promovia-se a motorista,
+        // escrevia `driver_documents.status = 'approved'` na sua própria linha
+        // e punha-se `available`. Depois repetia a chamada — e passava.
+        //
+        // Não se "repara" uma verificação. Se a RPC diz `not_a_driver`, isso é
+        // a verdade: ou a conta não tem documentos aprovados, ou não está
+        // online. O caminho de falha logo abaixo já explica as duas coisas ao
+        // utilizador com uma mensagem honesta. Não há nada a repetir aqui.
       }
 
       // 3. Fallback de contingência: se RPC deu erro, tentar update directo

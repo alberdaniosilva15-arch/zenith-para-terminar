@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { useAppStore } from '../../store/useAppStore';
 import { parseSupabasePoint } from '../../services/rideService';
 import type { FleetCarRecord, FleetDriverAgreementRecord, FleetRecord } from '../../types';
 import FleetAddCar from './FleetAddCar';
@@ -17,6 +18,7 @@ interface FleetDashboardProps {
 }
 
 const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) => {
+  const { showToast } = useAppStore();
   const [fleet, setFleet] = useState<FleetRecord | null>(null);
   const [cars, setCars] = useState<FleetCarRecord[]>([]);
   const [agreements, setAgreements] = useState<FleetDriverAgreementRecord[]>([]);
@@ -179,11 +181,42 @@ const FleetDashboard: React.FC<FleetDashboardProps> = ({ ownerId, ownerName }) =
 
     setLoading(true);
     try {
-      await supabase.from('fleets').insert({
-        owner_id: ownerId,
-        name: newFleetName.trim(),
-      });
+      // ⚠️ Antes, isto só inseria em `fleets` e mais nada.
+      //
+      // O plano da frota vive em `fleet_subscriptions`, e nenhuma linha era
+      // criada — por isso o painel mostrava sempre 'free' por omissão e a
+      // facturação (`fleet_billing_events`) nunca tinha a que se agarrar.
+      // Criar a frota passa a criar também a subscrição que lhe dá o plano.
+      const { data: novaFrota, error: frotaErr } = await supabase
+        .from('fleets')
+        .insert({
+          owner_id: ownerId,
+          name: newFleetName.trim(),
+        })
+        .select('id')
+        .single();
+
+      if (frotaErr) throw frotaErr;
+
+      if (novaFrota?.id) {
+        const { error: subErr } = await supabase.from('fleet_subscriptions').insert({
+          fleet_id: novaFrota.id,
+          plan: 'free',
+          max_cars: 2,
+          price_per_car_kz: 0,
+        });
+        // Uma subscrição que não se cria não pode passar em silêncio: é ela que
+        // define o plano e o tecto de carros.
+        if (subErr) {
+          console.error('[FleetDashboard] Subscrição da frota não criada:', subErr);
+          showToast('Frota criada, mas a subscrição falhou. Contacta o suporte.', 'error');
+        }
+      }
+
       await loadFleetData();
+    } catch (err) {
+      console.error('[FleetDashboard] Criar frota:', err);
+      showToast('Não foi possível criar a frota agora.', 'error');
     } finally {
       setLoading(false);
     }

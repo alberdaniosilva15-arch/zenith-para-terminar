@@ -21,9 +21,45 @@ const KazeMascot = React.lazy(() => import('../components/KazeMascot'));
 const PostRideReview = React.lazy(() => import('../components/PostRideReview'));
 const FleetDashboard = React.lazy(() => import('../components/fleet/FleetDashboard'));
 
-// Temporariamente desativado — aguarda desenho da relação fleet↔motoristas
-// e da policy RLS correspondente. Ver ZENITH_RIDE_DECISOES_FINAIS_P0_P1.txt.
-const FLEET_DASHBOARD_ENABLED = false;
+// ── Frota: porque é que isto voltou a ficar ligado (2026-09-22) ──────────────
+//
+// Estava `false`, com um comentário a mandar ler um ficheiro —
+// `ZENITH_RIDE_DECISOES_FINAIS_P0_P1.txt` — que NÃO EXISTE no repositório.
+//
+// O efeito era pior do que "frota desligada": o ternário de render caía no
+// ramo final, que é o `DriverHome`. Ou seja, um dono de frota que escolhia
+// "Modo Frota" era atirado para o ECRÃ DE MOTORISTA. É a razão pela qual
+// contas de frota apareciam como motorista.
+//
+// O painel está escrito e é coerente (424 linhas, lê `fleets`, `fleet_cars`,
+// `fleet_driver_agreements`, `fleet_subscriptions`). O que faltava não era
+// código: era o papel de frota deixar de ser atribuível por qualquer um (ver a
+// migração 20260922120000_seguranca_papeis_e_documentos.sql). Agora só entra
+// aqui quem tem mesmo uma frota.
+const FLEET_DASHBOARD_ENABLED = true;
+
+/**
+ * Rede de segurança do modo frota.
+ *
+ * Se algum dia alguém voltar a pôr `FLEET_DASHBOARD_ENABLED` a `false`, um dono
+ * de frota passa a ver ESTE aviso — e não o ecrã de motorista. Um painel por
+ * acabar é um problema; um painel por acabar disfarçado de ecrã de motorista é
+ * uma mentira, e foi essa que causou a confusão toda.
+ */
+function FleetEmPreparacao() {
+  return (
+    <div className="zr-app" style={{ minHeight: '100vh', padding: '20px' }}>
+      <section className="zr-card" style={{ textAlign: 'center', padding: '24px 16px' }}>
+        <p className="zr-kicker">Modo Dono de Frota</p>
+        <h2 className="zr-section-title">O painel de frota está temporariamente indisponível</h2>
+        <p className="zr-muted" style={{ marginTop: 8 }}>
+          A tua frota não foi perdida. O painel volta assim que estiver pronto.
+        </p>
+      </section>
+    </div>
+  );
+}
+
 function useMapTabResize() {
   useEffect(() => {
     const dispatchResize = () => {
@@ -185,11 +221,20 @@ export default function AuthenticatedApp() {
                 emergencyPhone={profile?.emergency_contact_phone ?? undefined}
                 isVisible={activeTab === 'home'}
               />
-            ) : (effectiveRole === UserRole.FLEET_OWNER && FLEET_DASHBOARD_ENABLED) ? (
-              <FleetDashboard
-                ownerId={dbUser?.id ?? ''}
-                ownerName={profile?.name}
-              />
+            ) : effectiveRole === UserRole.FLEET_OWNER ? (
+              // ⚠️ O `&& FLEET_DASHBOARD_ENABLED` que aqui estava era o bug.
+              // Com a flag a `false`, esta condição falhava e o render caía no
+              // ramo de baixo — o `DriverHome`. Um dono de frota via o ecrã de
+              // motorista. Agora o ramo de frota é dele e de mais ninguém: ou
+              // vê o painel, ou vê um aviso honesto. Nunca o ecrã errado.
+              FLEET_DASHBOARD_ENABLED ? (
+                <FleetDashboard
+                  ownerId={dbUser?.id ?? ''}
+                  ownerName={profile?.name}
+                />
+              ) : (
+                <FleetEmPreparacao />
+              )
             ) : (
               <DriverHome
                 ride={ride}
