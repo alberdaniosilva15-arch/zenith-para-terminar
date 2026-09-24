@@ -64,28 +64,10 @@ const ActiveRideCard: React.FC<ActiveRideCardProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* ── Listener contínuo de chamada em background ── */}
-      {resolvedRideId && !isEnRoute && ride.status !== RideStatus.IN_PROGRESS && (
-        <ErrorBoundary
-          name="AgoraCall"
-          compact
-          fallback={
-            <p className="text-[10px] text-white/40 font-bold text-center px-2">
-              Chamada de voz indisponível neste momento.
-            </p>
-          }
-        >
-          <Suspense fallback={null}>
-            <AgoraCall
-              corridaId={resolvedRideId}
-              userId={userId}
-              peerName={resolvedDriverName}
-              silentIdle={true}
-              onEndCall={() => {}}
-            />
-          </Suspense>
-        </ErrorBoundary>
-      )}
+      {/* ── AgoraCall já é renderizado dentro das seções isEnRoute e IN_PROGRESS
+           abaixo com UI completa — o listener silencioso aqui era redundante e
+           a sua condição (!isEnRoute && !IN_PROGRESS) significava que SÓ funcionava
+           durante SEARCHING (sem motorista), onde chamadas não fazem sentido. ── */}
 
       {/* ── SEARCHING ─────────────────────────────────────────────────────── */}
       {ride.status === RideStatus.SEARCHING && (

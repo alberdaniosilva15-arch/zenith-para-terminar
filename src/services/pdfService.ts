@@ -357,7 +357,27 @@ export async function buildContractPDF(c: ContractData): Promise<string> {
   const typeMap = { school: 'Escolar', family: 'Familiar', corporate: 'Empresarial' };
   const type = typeMap[c.contract_type] || 'Servi\u00E7o';
   doc.text(`Tipo: Contrato ${type}`, M, y); y += 6;
-  doc.text(`Morada: ${c.address}`, M, y); y += 6;
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(20, 120, 60);
+  doc.text('Ponto de Recolha (Onde pegam):', M, y); y += 4;
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(40, 40, 40);
+  const originText = c.origin_address || 'Ponto de recolha acordado';
+  const originLines = doc.splitTextToSize(originText, W - M * 2);
+  doc.text(originLines, M, y);
+  y += originLines.length * 4 + 2;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(180, 50, 40);
+  doc.text('Ponto de Destino (Onde deixam):', M, y); y += 4;
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(40, 40, 40);
+  const destText = c.dest_address || c.address || 'Ponto de destino acordado';
+  const destLines = doc.splitTextToSize(destText, W - M * 2);
+  doc.text(destLines, M, y);
+  y += destLines.length * 4 + 2;
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(100, 100, 100);
   doc.text(`Hor\u00E1rio: ${c.time_start} \u2014 ${c.time_end}`, M, y); y += 6;
   doc.text(`Km acumulados: ${(c.km_accumulated ?? 0).toFixed(1)} km`, M, y); y += 6;
   doc.text(`B\u00F3nus dispon\u00EDvel: ${(c.bonus_kz ?? 0).toFixed(0)} AOA`, M, y); y += 6;

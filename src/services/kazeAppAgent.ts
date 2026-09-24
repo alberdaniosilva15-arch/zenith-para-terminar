@@ -305,11 +305,11 @@ export const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente de intelig�
 - Frases correctas: "O preço exacto aparece no ecrã assim que escolheres o destino." / "Deixa-me preparar o trajecto — o valor que vês no ecrã é o valor que pagas."
 - Inventar um preço é o pior erro que podes cometer: o passageiro decide com base nele. Mais vale não dizer número nenhum.
 
-═══ QUEM FALA, ONDE ESTÁ E A CORRIDA ═══
-- Recebes sempre, no fim destas instruções, um bloco [ESTÁS A FALAR COM: …], um bloco [LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: …] e, quando existe, [O passageiro tem uma corrida activa neste momento.]. USA-OS. É informação real e actual, não um exemplo.
-- Se te perguntarem quem são, "sabes quem sou?", "como me chamo?" ou o teu nome, responde com o nome que está nesse bloco. Se o bloco disser que o nome não está disponível, diz que não o tens — NUNCA inventes um nome.
-- Quando souberes o nome, trata a pessoa pelo primeiro nome. Quando não souberes, trata por "você" — não improvises um nome para parecer mais próximo.
-- Se te perguntarem "onde estou?", responde com o que está nesse bloco. Se não estiver lá nada, diz que precisas da localização do dispositivo e sugere abrir o mapa.
+═══ QUEM ÉS TU, QUEM FALA E ONDE ESTÃO ═══
+- Quem és tu: Tu és o KAZE, a Inteligência Artificial e assistente de mobilidade da Zenith Ride.
+- Onde estás / onde estamos: Estás em Luanda, Angola, integrado na plataforma Zenith Ride e pronto para apoiar o utilizador na sua jornada urbana.
+- Quem é o utilizador: Se souberes o nome no bloco [ESTÁS A FALAR COM: …], trata a pessoa pelo nome próprio ("Tu és o [nome]"). Se não tiveres o nome confirmado, trata com respeito e proximidade ("mano", "parceiro").
+- Onde está o utilizador: Se te perguntarem "onde estou?", responde com o que está no bloco de localização. Se estiverem em Luanda, confirma que estão em Luanda, Angola, e indica o bairro/endereço exacto disponível.
 - Se houver corrida activa e te perguntarem pela corrida, usa as ferramentas do app para agir sobre ela (cancelar, ver histórico) em vez de descreveres de memória.
 - Sobre o tempo de chegada ou a posição exacta do motorista: quem sabe é o ecrã da corrida, em tempo real. Não inventes minutos nem distâncias.
 
@@ -380,17 +380,16 @@ export function blocoDeContexto(context: ContextoDeVoz): string {
   // custou uma sessão inteira (o "Jão Silva").
   const quem = context.userName
     ? `\n[ESTÁS A FALAR COM: ${context.userName}]`
-    : '\n[QUEM ESTÁ A FALAR: o nome não está disponível neste momento — não o inventes, ' +
-      'e não trates a pessoa por um nome que não te tenha sido dado.]';
+    : '\n[QUEM ESTÁ A FALAR: utilizador da Zenith Ride (nome não especificado no perfil).]';
 
   const localizacao = context.userAddress
-    ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: "${context.userAddress}"]`
+    ? `\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: "${context.userAddress}", Luanda, Angola]`
     : context.userLocation
-      ? `\n[LOCALIZAÇÃO ACTUAL DO PASSAGEIRO: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)})]`
-      : '\n[LOCALIZAÇÃO DO PASSAGEIRO: não disponível neste momento — não a inventes.]';
+      ? `\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)}), Luanda, Angola]`
+      : '\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: Luanda, Angola (coordenadas GPS a sincronizar com o mapa).]';
 
   const corrida = context.hasActiveRide
-    ? '\n[O passageiro tem uma corrida activa neste momento.]'
+    ? '\n[O utilizador tem uma corrida activa neste momento.]'
     : '';
 
   return `${quem}${localizacao}${corrida}`;
@@ -653,7 +652,7 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
     return this._callOpenAiCompatibleWithTools(
       'https://api.groq.com/openai/v1/chat/completions',
       FRONTEND_GROQ_KEY,
-      ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'],
+      ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
       message,
       context,
     );

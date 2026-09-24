@@ -495,7 +495,7 @@ async function callDirectGeminiChat(
 
   // 1. Motor Groq (ultra-rápido < 300ms, disponível imediatamente)
   if (FRONTEND_GROQ_KEY) {
-    const groqModels = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'groq/compound'];
+    const groqModels = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'];
     for (const model of groqModels) {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -638,7 +638,7 @@ async function callDirectJarvisChat(
 
   // 1. Motor Groq (ultra-rápido)
   if (FRONTEND_GROQ_KEY) {
-    const groqModels = ['qwen/qwen3.8-27b', 'groq/compound', 'openai/gpt-oss-120b'];
+    const groqModels = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'];
     for (const model of groqModels) {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {

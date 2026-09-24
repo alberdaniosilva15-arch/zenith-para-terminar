@@ -518,6 +518,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         // Passar pelo Kaze App Agent com protecção contra congelamento (máximo 6.5s)
         const agentPromise = kazeAppAgent.processUserMessage(userText, {
           userId,
+          userName: userName || undefined,
           userRole: role,
           userLocation: effectiveCoords,
           userAddress: effectiveAddress || undefined,

@@ -190,6 +190,7 @@ export default function KazePanel() {
 
   const chatRef = useRef<KazeChat | null>(null);
   const recognitionRef = useRef<MediaRecorder | null>(null);
+  const nativeSpeechRef = useRef<any>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recognitionRunningRef = useRef(false);
   const sessionActiveRef = useRef(false);
@@ -292,6 +293,15 @@ export default function KazePanel() {
     if (restartTimerRef.current) {
       window.clearTimeout(restartTimerRef.current);
       restartTimerRef.current = null;
+    }
+    if (nativeSpeechRef.current) {
+      try {
+        nativeSpeechRef.current.onresult = null;
+        nativeSpeechRef.current.onerror = null;
+        nativeSpeechRef.current.onend = null;
+        nativeSpeechRef.current.stop();
+      } catch { /* cleanup */ }
+      nativeSpeechRef.current = null;
     }
     const recorder = recognitionRef.current;
     if (recorder) {
@@ -436,6 +446,66 @@ export default function KazePanel() {
   }, [metrics, speakAndResume]);
 
   const startRecognition = useCallback(() => {
+    const SpeechRecClass = typeof window !== 'undefined' ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition) : null;
+
+    if (SpeechRecClass) {
+      stopRecognition();
+      try {
+        const speech = new SpeechRecClass();
+        speech.lang = 'pt-PT';
+        speech.continuous = true;
+        speech.interimResults = true;
+        speech.maxAlternatives = 1;
+
+        speech.onresult = (event: any) => {
+          let interim = '';
+          let final = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            const transcript = event.results[i][0].transcript;
+            if (event.results[i].isFinal) {
+              final += transcript;
+            } else {
+              interim += transcript;
+            }
+          }
+          if (interim) {
+            setDraftText(interim);
+          }
+          if (final.trim()) {
+            setDraftText('');
+            stopRecognition();
+            void sendTranscriptToHermes(final.trim());
+          }
+        };
+
+        speech.onerror = (event: any) => {
+          if (event.error !== 'no-speech') {
+            console.warn('[KazePanel] SpeechRecognition error:', event.error);
+          }
+        };
+
+        speech.onend = () => {
+          recognitionRunningRef.current = false;
+          if (sessionActiveRef.current && voiceStateRef.current === 'listening' && !processingRef.current) {
+            restartTimerRef.current = window.setTimeout(() => {
+              if (sessionActiveRef.current && voiceStateRef.current === 'listening' && !processingRef.current) {
+                startRecognition();
+              }
+            }, 300);
+          }
+        };
+
+        speech.start();
+        nativeSpeechRef.current = speech;
+        recognitionRunningRef.current = true;
+        failCountRef.current = 0;
+        setVoiceState('listening');
+        return true;
+      } catch (e) {
+        console.warn('[KazePanel] Fallback para MediaRecorder:', e);
+      }
+    }
+
     const stream = audioRef.current.stream;
     if (!stream || !stream.active) {
       return false;

@@ -106,8 +106,16 @@ const ContractCard: React.FC<ContractCardProps> = ({
           </div>
           <div>
             <p className="zr-kicker" style={{ margin: 0 }}>{CONTRACT_LABELS[c.contract_type]}</p>
-            <h3 className="zr-section-title" style={{ fontSize: '18px', margin: 0 }}>{c.title}</h3>
-            <p className="zr-meta" style={{ color: 'var(--gold)', marginTop: '4px' }}><span className="material-symbols-outlined" style={{fontSize: 'inherit', verticalAlign: 'middle'}}>location_on</span> {c.address}</p>
+            <div style={{ marginTop: '4px', fontSize: '11px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              {c.origin_address && (
+                <p className="zr-meta" style={{ color: '#22c55e', margin: 0 }}>
+                  <span className="material-symbols-outlined" style={{ fontSize: '13px', verticalAlign: 'middle' }}>trip_origin</span> <strong>Recolha:</strong> {c.origin_address}
+                </p>
+              )}
+              <p className="zr-meta" style={{ color: 'var(--gold)', margin: 0 }}>
+                <span className="material-symbols-outlined" style={{ fontSize: '13px', verticalAlign: 'middle' }}>location_on</span> <strong>Destino:</strong> {c.dest_address || c.address}
+              </p>
+            </div>
           </div>
         </div>
         <button onClick={onDeactivate} className="zr-icon-button" style={{ color: 'var(--danger-soft)' }}>

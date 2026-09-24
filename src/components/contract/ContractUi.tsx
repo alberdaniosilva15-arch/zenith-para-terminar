@@ -17,6 +17,10 @@ export interface Contract {
   contract_type: ContractType;
   title: string;
   address: string;
+  origin_address?: string;
+  dest_address?: string;
+  origin_lat?: number;
+  origin_lng?: number;
   dest_lat: number;
   dest_lng: number;
   time_start: string;
@@ -49,6 +53,12 @@ export interface KmBonus {
 export interface ContractFormState {
   title: string;
   address: string;
+  origin_address: string;
+  dest_address: string;
+  origin_lat?: number;
+  origin_lng?: number;
+  dest_lat?: number;
+  dest_lng?: number;
   time_start: string;
   time_end: string;
   parent_monitoring: boolean;
@@ -61,6 +71,12 @@ export interface ContractFormState {
 export const EMPTY_CONTRACT_FORM: ContractFormState = {
   title: '',
   address: '',
+  origin_address: '',
+  dest_address: '',
+  origin_lat: undefined,
+  origin_lng: undefined,
+  dest_lat: undefined,
+  dest_lng: undefined,
   time_start: '07:30',
   time_end: '13:00',
   parent_monitoring: true,

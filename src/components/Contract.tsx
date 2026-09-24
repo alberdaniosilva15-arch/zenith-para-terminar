@@ -78,16 +78,24 @@ const Contract: React.FC = () => {
         .eq('user_id', dbUser.id)
         .single();
 
-      const originLat = profileData?.last_known_lat ?? -8.8368;
-      const originLng = profileData?.last_known_lng ?? 13.2343;
+      const originAddr = contract.origin_address || 'Ponto de recolha do contrato';
+      const destAddr = contract.dest_address || contract.address;
+
+      if (!contract.dest_lat || !contract.dest_lng) {
+        showToast('Este contrato não tem coordenadas de destino válidas. Actualiza o contrato.', 'info');
+        return;
+      }
+
+      const originLat = contract.origin_lat ?? profileData?.last_known_lat ?? -8.8368;
+      const originLng = contract.origin_lng ?? profileData?.last_known_lng ?? 13.2343;
 
       const { error } = await supabase.from('rides').insert({
         passenger_id: dbUser.id,
         status: 'searching',
-        dest_address: contract.address,
+        dest_address: destAddr,
         dest_lat: contract.dest_lat,
         dest_lng: contract.dest_lng,
-        origin_address: 'A minha localização',
+        origin_address: originAddr,
         origin_lat: originLat,
         origin_lng: originLng,
         contract_id: contract.id,
@@ -107,25 +115,56 @@ const Contract: React.FC = () => {
   // ── Save new contract ────────────────────────────────────────────────────
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!dbUser?.id || !form.title || !form.address) { setSaveError('Preenche o nome e a morada.'); return; }
+    const effectiveDest = (form.dest_address || form.address || '').trim();
+    const effectiveOrigin = (form.origin_address || '').trim();
+    if (!dbUser?.id || !form.title.trim() || !effectiveDest || !effectiveOrigin) {
+      setSaveError('Preenche o título, o ponto de recolha e o ponto de destino.');
+      return;
+    }
+    if (effectiveDest.toLowerCase() === effectiveOrigin.toLowerCase()) {
+      setSaveError('O ponto de recolha e o ponto de destino têm de ser diferentes.');
+      return;
+    }
     setSaving(true); setSaveError(null);
     try {
-      const coords = await mapService.geocodeAddress(form.address);
-      const dest_lat = coords?.lat ?? -8.836;
-      const dest_lng = coords?.lng ?? 13.234;
+      let dest_lat = form.dest_lat;
+      let dest_lng = form.dest_lng;
+      let origin_lat = form.origin_lat;
+      let origin_lng = form.origin_lng;
+
+      if (dest_lat == null || dest_lng == null) {
+        const destCoords = await mapService.geocodeAddress(effectiveDest);
+        dest_lat = destCoords?.lat ?? -8.836;
+        dest_lng = destCoords?.lng ?? 13.234;
+      }
+
+      if (origin_lat == null || origin_lng == null) {
+        const originCoords = await mapService.geocodeAddress(effectiveOrigin);
+        origin_lat = originCoords?.lat ?? -8.838;
+        origin_lng = originCoords?.lng ?? 13.230;
+      }
 
       const insertPayload = {
         user_id: dbUser.id,
         contract_type: activeContractType,
-        title: form.title, address: form.address,
-        dest_lat, dest_lng,
-        time_start: form.time_start, time_end: form.time_end,
+        title: form.title.trim(),
+        address: effectiveDest,
+        origin_address: effectiveOrigin,
+        dest_address: effectiveDest,
+        origin_lat,
+        origin_lng,
+        dest_lat,
+        dest_lng,
+        time_start: form.time_start,
+        time_end: form.time_end,
         parent_monitoring: form.parent_monitoring,
         route_deviation_alert: form.route_deviation_alert,
         max_deviation_km: form.max_deviation_km,
         contact_name: form.contact_name || null,
         contact_phone: form.contact_phone || null,
-        active: true, km_accumulated: 0, bonus_kz: 0,
+        active: true,
+        km_accumulated: 0,
+        bonus_kz: 0,
       };
 
       const { data: inserted, error } = await supabase.from('contracts').insert(insertPayload).select().maybeSingle();

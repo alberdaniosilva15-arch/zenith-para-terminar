@@ -1,0 +1,2033 @@
+// supabase/functions/whatsapp-webhook/index.ts
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+// supabase/functions/_shared/cors.ts
+var DEFAULT_ALLOWED_HEADERS = "authorization, x-client-info, apikey, content-type";
+function normalizeOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+function parseConfiguredOrigins() {
+  const configured = /* @__PURE__ */ new Set();
+  const raw = Deno.env.get("ALLOWED_ORIGINS") ?? Deno.env.get("ALLOWED_ORIGIN") ?? "";
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed || trimmed === "*") {
+      continue;
+    }
+    const normalized = normalizeOrigin(trimmed);
+    if (normalized) {
+      configured.add(normalized);
+    }
+  }
+  return configured;
+}
+function isDevOrigin(origin) {
+  if (origin === "capacitor://localhost" || origin === "ionic://localhost") {
+    return true;
+  }
+  const allowDev = Deno.env.get("ALLOW_DEV_ORIGINS") === "true" || Deno.env.get("DENO_ENV") !== "production" && Deno.env.get("ENVIRONMENT") !== "production";
+  if (!allowDev) {
+    return false;
+  }
+  try {
+    const url = new URL(origin);
+    const isLocalHost = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    return isLocalHost && (url.protocol === "http:" || url.protocol === "https:");
+  } catch {
+    return false;
+  }
+}
+function isAllowedOrigin(origin) {
+  const normalized = normalizeOrigin(origin);
+  if (!normalized) {
+    return false;
+  }
+  const configuredOrigins = parseConfiguredOrigins();
+  if (configuredOrigins.has(normalized)) {
+    return true;
+  }
+  return isDevOrigin(normalized);
+}
+function resolveCorsHeaders(req, options) {
+  const headers = new Headers({
+    "Access-Control-Allow-Headers": options.headers ?? DEFAULT_ALLOWED_HEADERS,
+    "Access-Control-Allow-Methods": options.methods,
+    Vary: "Origin"
+  });
+  const origin = req.headers.get("Origin");
+  if (!origin) {
+    return options.allowNoOrigin === false ? null : headers;
+  }
+  if (!isAllowedOrigin(origin)) {
+    return null;
+  }
+  headers.set("Access-Control-Allow-Origin", normalizeOrigin(origin));
+  return headers;
+}
+function corsHeadersToObject(corsHeaders) {
+  return corsHeaders ? Object.fromEntries(corsHeaders.entries()) : {};
+}
+function corsForbidden(message = "Origin nao permitido.") {
+  return new Response(
+    JSON.stringify({
+      error: true,
+      message
+    }),
+    {
+      status: 403,
+      headers: {
+        "Content-Type": "application/json",
+        Vary: "Origin"
+      }
+    }
+  );
+}
+
+// supabase/functions/whatsapp-webhook/index.ts
+var SUPABASE_URL = Deno.env.get("SUPABASE_URL");
+var SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+var WHATSAPP_API_TOKEN = Deno.env.get("WA_ACCESS_TOKEN") ?? Deno.env.get("WHATSAPP_API_TOKEN") ?? "";
+var WHATSAPP_PHONE_NUMBER_ID = Deno.env.get("WA_PHONE_NUMBER_ID") ?? Deno.env.get("WHATSAPP_PHONE_NUMBER_ID") ?? "";
+var WHATSAPP_VERIFY_TOKEN = Deno.env.get("WHATSAPP_VERIFY_TOKEN") ?? Deno.env.get("WA_VERIFY_TOKEN") ?? "";
+var WHATSAPP_APP_SECRET = Deno.env.get("WHATSAPP_APP_SECRET") ?? "";
+var JANELA_MENSAGEM_SEGUNDOS = (() => {
+  const minutos = Number(Deno.env.get("WHATSAPP_JANELA_MENSAGEM_MIN") ?? "");
+  if (Number.isFinite(minutos) && minutos > 0) return Math.floor(minutos * 60);
+  return 15 * 60;
+})();
+var SESSAO_VALIDADE_MINUTOS = (() => {
+  const minutos = Number(Deno.env.get("WHATSAPP_SESSAO_MIN") ?? "");
+  if (Number.isFinite(minutos) && minutos > 0) return minutos;
+  return 30;
+})();
+var CORRIDA_VIVA = /* @__PURE__ */ new Set(["searching", "accepted", "picking_up", "in_progress"]);
+var MAPBOX_TOKEN = Deno.env.get("MAPBOX_TOKEN") ?? "";
+var CORS_OPTIONS = {
+  methods: "GET, POST, OPTIONS"
+};
+var ENGINE_PRECO_RPC = "calculate_fare_engine_pro";
+var LUANDA_ZONE_MAP = {
+  // Viana
+  "Viana": "Viana",
+  "Petrangol": "Viana",
+  "Cacuaco": "Viana",
+  "Km 30": "Viana",
+  "Catete": "Viana",
+  // Kilamba
+  "Kilamba": "Kilamba",
+  "Kilamba Kiaxi": "Kilamba",
+  "Zango": "Kilamba",
+  "Zango 1": "Kilamba",
+  "Zango 2": "Kilamba",
+  // Talatona
+  "Talatona": "Talatona",
+  "Benfica Sul": "Talatona",
+  "Camama": "Talatona",
+  "Golf": "Talatona",
+  "Belas": "Talatona",
+  "Belas Shopping": "Talatona",
+  // Centro / Ilha
+  "Centro": "Centro",
+  "Ilha de Luanda": "Centro",
+  "Ilha": "Centro",
+  "Ingombota": "Centro",
+  "Mutamba": "Centro",
+  "Largo do Kinaxixi": "Centro",
+  "Praia do Bispo": "Centro",
+  // Miramar
+  "Miramar": "Miramar",
+  "Alvalade": "Miramar",
+  "Maianga": "Maianga",
+  "Patrice Lumumba": "Maianga",
+  // Cazenga
+  "Cazenga": "Cazenga",
+  "Palanca": "Cazenga",
+  "Vila Alice": "Cazenga",
+  "Rocha Pinto": "Cazenga",
+  // Rangel
+  "Rangel": "Rangel",
+  "Hoji ya Henda": "Rangel",
+  "Golfe": "Rangel",
+  // Samba
+  "Samba": "Samba",
+  "Golf 2": "Samba",
+  "Camanga": "Samba",
+  // Benfica
+  "Benfica": "Benfica",
+  "Cacuaco Norte": "Benfica",
+  // Luanda Norte
+  "Luanda Norte": "Luanda Norte",
+  "Viana Norte": "Luanda Norte",
+  "Sequele": "Luanda Norte"
+};
+var ZONAS_POR_ESPECIFICIDADE = Object.entries(LUANDA_ZONE_MAP).sort((a, b) => b[0].length - a[0].length);
+var DEMANDA_PADRAO = 5;
+var OFERTA_PADRAO = 5;
+var TRANSITO_FACTOR = 1.2;
+var AEROPORTO = { lat: -8.8577, lng: 13.2312 };
+var AEROPORTO_RAIO_KM = 1;
+var LUANDA = { lat: -8.8383, lng: 13.2344 };
+function apenasDigitos(valor) {
+  return String(valor ?? "").replace(/\D/g, "");
+}
+function normalizarTelefone(telefone) {
+  const digitos = apenasDigitos(telefone);
+  if (digitos.length < 9) return "";
+  return digitos.startsWith("244") ? digitos : "244" + digitos;
+}
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const rad = (d) => d * Math.PI / 180;
+  const dLat = rad(lat2 - lat1);
+  const dLng = rad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+function horaEmLuanda() {
+  return Number(
+    new Intl.DateTimeFormat("en-GB", {
+      hour: "numeric",
+      hour12: false,
+      timeZone: "Africa/Luanda"
+    }).format(/* @__PURE__ */ new Date())
+  );
+}
+function escaparRegex(texto) {
+  return texto.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function detectarZona(endereco) {
+  const baixo = endereco.toLowerCase().trim();
+  const comEspacos = ` ${baixo} `;
+  for (const [palavra, zona] of ZONAS_POR_ESPECIFICIDADE) {
+    if (baixo === palavra.toLowerCase()) return zona;
+  }
+  for (const [palavra, zona] of ZONAS_POR_ESPECIFICIDADE) {
+    const alvo = palavra.toLowerCase();
+    if (alvo.length < 5) continue;
+    const re = new RegExp(`(^|[^a-z0-9])${escaparRegex(alvo)}([^a-z0-9]|$)`);
+    if (re.test(comEspacos)) return zona;
+  }
+  return null;
+}
+function kz(valor) {
+  return Number(valor).toLocaleString("pt-AO", { maximumFractionDigits: 0 });
+}
+async function verificarAssinaturaMeta(corpoCru, cabecalho, segredo) {
+  if (!cabecalho.startsWith("sha256=")) return false;
+  const recebido = cabecalho.slice("sha256=".length).toLowerCase();
+  const chave = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(segredo),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const assinatura = await crypto.subtle.sign(
+    "HMAC",
+    chave,
+    new TextEncoder().encode(corpoCru)
+  );
+  const esperado = Array.from(new Uint8Array(assinatura)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  if (esperado.length !== recebido.length) return false;
+  let diferenca = 0;
+  for (let i = 0; i < esperado.length; i += 1) {
+    diferenca |= esperado.charCodeAt(i) ^ recebido.charCodeAt(i);
+  }
+  return diferenca === 0;
+}
+async function sendWhatsAppMessage(to, text) {
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.error(
+      `[whatsapp-webhook] Credenciais WhatsApp ausentes (WA_ACCESS_TOKEN / WA_PHONE_NUMBER_ID). Mensagem NAO enviada para ${to}.`
+    );
+    return false;
+  }
+  const cleanPhone = normalizarTelefone(to);
+  if (!cleanPhone) {
+    console.error(`[whatsapp-webhook] Destino invalido, sem digitos: "${to}". Mensagem NAO enviada.`);
+    return false;
+  }
+  try {
+    const res = await fetch(
+      // v19.0 está obsoleta na Meta. As outras funções do projecto já usam
+      // v21.0/v22.0 — alinhado aqui para não haver duas versões do contrato.
+      `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: cleanPhone,
+          type: "text",
+          text: { preview_url: false, body: text }
+        })
+      }
+    );
+    if (!res.ok) {
+      const detalhe = await res.text().catch(() => "");
+      console.error(
+        `[whatsapp-webhook] A Meta recusou o envio para ${cleanPhone}: ${res.status} ${detalhe}`
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn("[whatsapp-webhook] Falha no envio WhatsApp API:", err);
+    return false;
+  }
+}
+async function marcarALer(msgId) {
+  if (!WHATSAPP_API_TOKEN || !WHATSAPP_PHONE_NUMBER_ID || !msgId) return;
+  try {
+    await fetch(
+      `https://graph.facebook.com/v22.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${WHATSAPP_API_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          status: "read",
+          message_id: msgId,
+          typing_indicator: { type: "text" }
+        })
+      }
+    );
+  } catch {
+  }
+}
+async function pausaHumana(texto) {
+  const ms = Math.min(2200, 450 + texto.length * 12);
+  await new Promise((r) => setTimeout(r, ms));
+}
+var NOMINATIM_URL = "https://nominatim.openstreetmap.org";
+var NOMINATIM_UA = "ZenithRide/1.0 (+https://zenith-ride-build.vercel.app)";
+var LUANDA_VIEWBOX = "12.95,-9.70,14.40,-8.55";
+var ultimoPedidoNominatim = 0;
+async function esperarNominatim() {
+  const agora = Date.now();
+  const decorrido = agora - ultimoPedidoNominatim;
+  const MIN_MS = 1100;
+  if (decorrido < MIN_MS) {
+    await new Promise((r) => setTimeout(r, MIN_MS - decorrido));
+  }
+  ultimoPedidoNominatim = Date.now();
+}
+function qualidadeTipoOsm(tipo) {
+  const ordem = {
+    neighbourhood: 0,
+    quarter: 1,
+    suburb: 2,
+    residential: 3,
+    village: 4,
+    hamlet: 5,
+    city_district: 6,
+    borough: 7,
+    town: 8,
+    municipality: 9,
+    administrative: 10,
+    city: 11,
+    locality: 12,
+    island: 13
+  };
+  if (tipo in ordem) return ordem[tipo];
+  if ([
+    "fuel",
+    "pub",
+    "marketplace",
+    "bus_station",
+    "shop",
+    "bank",
+    "pharmacy",
+    "restaurant",
+    "hotel",
+    "school",
+    "hospital"
+  ].includes(tipo)) return 30;
+  if (["trunk", "primary", "secondary", "tertiary", "unclassified", "residential"].includes(tipo)) return 40;
+  return 50;
+}
+function metrosEntre(lat1, lng1, lat2, lng2) {
+  return haversineKm(lat1, lng1, lat2, lng2) * 1e3;
+}
+var NOMES_GENERICOS = /* @__PURE__ */ new Set([
+  "rua",
+  "avenida",
+  "av",
+  "alameda",
+  "estrada",
+  "beco",
+  "travessa",
+  "bairro",
+  "zona",
+  "quarteirao",
+  "distrito",
+  "municipio",
+  "cidade",
+  "vila",
+  "escola",
+  "mercado",
+  "igreja",
+  "hospital",
+  "clinica",
+  "farmacia",
+  "loja",
+  "parque",
+  "praca",
+  "predio",
+  "edificio",
+  "casa",
+  "hotel",
+  "banco",
+  "restaurante",
+  "bar",
+  "campo",
+  "centro",
+  "terminal",
+  "posto",
+  "oficina"
+]);
+function normalizarNome(texto) {
+  return texto.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim().replace(/\s+/g, " ");
+}
+function ehNomeGenerico(nome) {
+  const n = normalizarNome(nome);
+  if (NOMES_GENERICOS.has(n)) return true;
+  return /^(rua|avenida|av|alameda|estrada|beco|travessa|bairro|zona|quarteirao|quarteirão)\s+\d+\s*[a-z]?$/i.test(n);
+}
+async function procurarNaTabela(supabaseAdmin, texto, ref) {
+  const normalizado = normalizarNome(texto);
+  if (NOMES_GENERICOS.has(normalizado)) {
+    console.log(`[whatsapp-webhook] "${texto}" e um nome generico \u2014 nao resolvo da tabela.`);
+    return null;
+  }
+  const { data, error } = await supabaseAdmin.rpc("resolver_local", {
+    p_texto: texto,
+    p_lat: ref?.lat ?? null,
+    p_lng: ref?.lng ?? null
+  });
+  if (error) {
+    console.error("[whatsapp-webhook] resolver_local falhou:", error.message);
+    return null;
+  }
+  const linha = Array.isArray(data) ? data[0] : data;
+  if (!linha) return null;
+  const sim = Number(linha.similaridade ?? 0);
+  const ok = linha.correspondencia === "exato" || // prefixo curto ("rua" -> "rua 1") só passa se o nome for longo
+  linha.correspondencia === "prefixo" && (sim >= 0.45 || normalizado.length >= 6) || linha.correspondencia === "contido" && sim >= 0.5 || sim >= 0.55;
+  if (!ok) {
+    console.log(
+      `[whatsapp-webhook] "${texto}": melhor candidato "${linha.nome}" (${linha.correspondencia}, ${sim.toFixed(2)}) \u2014 fraco demais, ignorado.`
+    );
+    return null;
+  }
+  return linha;
+}
+async function geocodificarNoNominatim(texto, ref) {
+  await esperarNominatim();
+  const url = new URL(`${NOMINATIM_URL}/search`);
+  url.searchParams.set("q", texto);
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("limit", "5");
+  url.searchParams.set("accept-language", "pt");
+  url.searchParams.set("countrycodes", "ao");
+  url.searchParams.set("viewbox", LUANDA_VIEWBOX);
+  url.searchParams.set("bounded", "1");
+  url.searchParams.set("addressdetails", "1");
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { "User-Agent": NOMINATIM_UA },
+      signal: AbortSignal.timeout(9e3)
+    });
+    if (!res.ok) {
+      console.error(`[whatsapp-webhook] Nominatim devolveu ${res.status} para "${texto}".`);
+      return null;
+    }
+    const dados = await res.json();
+    if (!Array.isArray(dados) || dados.length === 0) return null;
+    const pontuados = dados.filter((d) => d.lat && d.lon).map((d) => {
+      const lat = Number(d.lat), lng = Number(d.lon);
+      const tipo = d.type ?? "?";
+      const dist = ref ? metrosEntre(ref.lat, ref.lng, lat, lng) : 0;
+      return { lat, lng, tipo, dist, endereco: d.display_name ?? texto };
+    }).sort((a, b) => qualidadeTipoOsm(a.tipo) - qualidadeTipoOsm(b.tipo) || a.dist - b.dist);
+    const melhor = pontuados[0];
+    if (!melhor) return null;
+    return melhor;
+  } catch (err) {
+    console.warn("[whatsapp-webhook] Nominatim falhou:", err);
+    return null;
+  }
+}
+async function geocodificarNoMapbox(texto) {
+  if (!MAPBOX_TOKEN) return null;
+  const url = new URL(
+    `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(texto)}.json`
+  );
+  url.searchParams.set("access_token", MAPBOX_TOKEN);
+  url.searchParams.set("country", "ao");
+  url.searchParams.set("language", "pt");
+  url.searchParams.set("limit", "5");
+  url.searchParams.set("proximity", `${LUANDA.lng},${LUANDA.lat}`);
+  url.searchParams.set("bbox", "12.95,-9.70,14.40,-8.55");
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(8e3) });
+    if (!res.ok) {
+      console.error(`[whatsapp-webhook] Mapbox devolveu ${res.status} para "${texto}".`);
+      return null;
+    }
+    const dados = await res.json();
+    const features = (dados.features ?? []).filter((f) => f.center);
+    if (features.length === 0) return null;
+    const pontuados = features.map((f) => ({
+      lat: f.center[1],
+      lng: f.center[0],
+      endereco: f.place_name ?? texto,
+      tipo: (f.place_type ?? ["?"])[0] ?? "?",
+      rel: Number(f.relevance ?? 0)
+    })).sort((a, b) => qualidadeTipoOsm(a.tipo) - qualidadeTipoOsm(b.tipo) || b.rel - a.rel);
+    const melhor = pontuados[0];
+    if (melhor.tipo === "region") {
+      console.warn(`[whatsapp-webhook] Mapbox s\xF3 devolveu uma regi\xE3o para "${texto}" \u2014 rejeitado.`);
+      return null;
+    }
+    return melhor;
+  } catch (err) {
+    console.warn("[whatsapp-webhook] Mapbox falhou:", err);
+    return null;
+  }
+}
+async function aprenderDoOsm(supabaseAdmin, nome, lat, lng, endereco, tipo, telefone) {
+  try {
+    const { error } = await supabaseAdmin.rpc("registar_local", {
+      p_nome: nome,
+      p_lat: lat,
+      p_lng: lng,
+      p_raio_m: 500,
+      p_zona: null,
+      p_origem: "aprendido",
+      p_aprendido_de: telefone ?? null,
+      p_endereco: endereco,
+      p_osm_tipo: tipo,
+      p_categoria: null
+    });
+    if (error) {
+      console.warn("[whatsapp-webhook] Nao consegui guardar o local do OSM:", error.message);
+    }
+  } catch (err) {
+    console.warn("[whatsapp-webhook] Falha a guardar local do OSM:", err);
+  }
+}
+async function geocodificar(supabaseAdmin, texto, ref) {
+  const limpo = texto.trim();
+  if (limpo.length < 3) return null;
+  const daTabela = await procurarNaTabela(supabaseAdmin, limpo, ref);
+  if (daTabela) {
+    await supabaseAdmin.rpc("reforcar_local", { p_id: daTabela.id }).then(
+      () => {
+      },
+      () => {
+      }
+    );
+    return {
+      lat: Number(daTabela.lat),
+      lng: Number(daTabela.lng),
+      endereco: daTabela.endereco_completo || daTabela.nome,
+      zona: daTabela.zona,
+      categoria: daTabela.categoria,
+      origemLocal: daTabela.origem === "aprendido" ? "aprendido" : "tabela",
+      confianca: daTabela.confianca,
+      localId: daTabela.id
+    };
+  }
+  const doOsm = await geocodificarNoNominatim(limpo, ref);
+  if (doOsm) {
+    aprenderDoOsm(supabaseAdmin, limpo, doOsm.lat, doOsm.lng, doOsm.endereco, doOsm.tipo).catch(() => {
+    });
+    return {
+      lat: doOsm.lat,
+      lng: doOsm.lng,
+      endereco: doOsm.endereco,
+      zona: null,
+      categoria: null,
+      origemLocal: "osm",
+      confianca: 80,
+      localId: null
+    };
+  }
+  const doMapbox = await geocodificarNoMapbox(limpo);
+  if (doMapbox) {
+    return {
+      lat: doMapbox.lat,
+      lng: doMapbox.lng,
+      endereco: doMapbox.endereco,
+      zona: null,
+      categoria: null,
+      origemLocal: "mapbox",
+      confianca: 60,
+      localId: null
+    };
+  }
+  return null;
+}
+async function reverterCoordenadas(lat, lng) {
+  if (!MAPBOX_TOKEN) return null;
+  const url = new URL(
+    `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json`
+  );
+  url.searchParams.set("access_token", MAPBOX_TOKEN);
+  url.searchParams.set("language", "pt");
+  url.searchParams.set("limit", "1");
+  url.searchParams.set("types", "address,street,neighborhood,locality,place,district");
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(8e3) });
+    if (!res.ok) return null;
+    const dados = await res.json();
+    return dados.features?.[0]?.place_name ?? null;
+  } catch {
+    return null;
+  }
+}
+var ZONA_POR_ADMIN = {
+  "talatona": "Talatona",
+  "belas": "Talatona",
+  "camama": "Talatona",
+  "kifica": "Talatona",
+  "futungo": "Talatona",
+  "quifica": "Talatona",
+  "benfica": "Benfica",
+  "samba": "Samba",
+  "morro bento": "Samba",
+  "cazenga": "Cazenga",
+  "rocha pinto": "Cazenga",
+  "palanca": "Cazenga",
+  "tala hady": "Cazenga",
+  "tala-hady": "Cazenga",
+  "hoji ya henda": "Cazenga",
+  "kilamba": "Kilamba",
+  "kilamba kiaxi": "Kilamba",
+  "nova cidade de kilamba": "Kilamba",
+  "zango": "Kilamba",
+  "viana": "Viana",
+  "cacuaco": "Viana",
+  "estalagem": "Viana",
+  "sapu": "Viana",
+  "rangel": "Rangel",
+  "sambizanga": "Rangel",
+  "golf": "Rangel",
+  "golfe": "Rangel",
+  "maianga": "Maianga",
+  "prenda": "Maianga",
+  "cassenda": "Maianga",
+  "neves bendinha": "Maianga",
+  "alvalade": "Maianga",
+  "miramar": "Miramar",
+  "ingombota": "Centro",
+  "mutamba": "Centro",
+  "kinaxixi": "Centro",
+  "maculusso": "Centro",
+  "coqueiros": "Centro",
+  "ilha do cabo": "Centro",
+  "ilha de luanda": "Centro",
+  "praia do bispo": "Centro",
+  "sao paulo": "Centro",
+  "bairro operario": "Centro"
+};
+var PARTE_ADMIN = /^(munic[íi]pio|prov[íi]ncia|comuna|distrito|angola|luanda|cidade|urbano|peri-?urbano)\b/i;
+var NOMEIA_VIA = /\b(rua|avenida|av\.?|estrada|beco|travessa|alameda|largo|praça|praca)\b/i;
+function especificidade(endereco) {
+  if (!endereco) return 0;
+  const partes = endereco.split(",").map((p) => p.trim()).filter((p) => p !== "");
+  let n = 0;
+  for (const p of partes) if (!PARTE_ADMIN.test(p)) n++;
+  if (NOMEIA_VIA.test(endereco)) n += 1;
+  return n;
+}
+function melhorEndereco(doWhatsapp, doBot) {
+  const a = (doWhatsapp ?? "").trim();
+  const b = (doBot ?? "").trim();
+  if (!a) return b;
+  if (!b) return a;
+  return especificidade(a) > especificidade(b) ? a : b;
+}
+async function reverterNoNominatim(lat, lng) {
+  await esperarNominatim();
+  const url = new URL(`${NOMINATIM_URL}/reverse`);
+  url.searchParams.set("lat", String(lat));
+  url.searchParams.set("lon", String(lng));
+  url.searchParams.set("format", "jsonv2");
+  url.searchParams.set("zoom", "18");
+  url.searchParams.set("accept-language", "pt");
+  url.searchParams.set("addressdetails", "1");
+  try {
+    const res = await fetch(url.toString(), {
+      headers: { "User-Agent": NOMINATIM_UA },
+      signal: AbortSignal.timeout(9e3)
+    });
+    if (!res.ok) return null;
+    const d = await res.json();
+    const a = d.address ?? {};
+    const via = a["road"] ?? a["pedestrian"] ?? a["footway"] ?? null;
+    const area1 = a["neighbourhood"] ?? a["suburb"] ?? a["quarter"] ?? a["residential"] ?? null;
+    const area2 = a["city_district"] ?? a["village"] ?? a["hamlet"] ?? a["town"] ?? null;
+    const partes = [];
+    if (via) partes.push(via);
+    if (area1) partes.push(area1);
+    if (area2 && area2 !== area1 && area2 !== via) partes.push(area2);
+    const endereco = partes.length > 0 ? partes.join(", ") : a["city"] ?? a["county"] ?? d.display_name ?? "";
+    let zona = null;
+    for (const chave of [
+      "neighbourhood",
+      "suburb",
+      "quarter",
+      "city_district",
+      "village",
+      "town",
+      "county",
+      "city"
+    ]) {
+      const valor = a[chave];
+      if (valor && ZONA_POR_ADMIN[valor.toLowerCase().trim()]) {
+        zona = ZONA_POR_ADMIN[valor.toLowerCase().trim()];
+        break;
+      }
+    }
+    return { endereco: endereco || d.display_name || `${lat}, ${lng}`, zona };
+  } catch (err) {
+    console.warn("[whatsapp-webhook] Reverse Nominatim falhou:", err);
+    return null;
+  }
+}
+async function resolverPonto(supabaseAdmin, lat, lng) {
+  let zona = null;
+  let localConhecido = null;
+  let categoria = null;
+  try {
+    const { data } = await supabaseAdmin.rpc("locais_perto", {
+      p_lat: lat,
+      p_lng: lng,
+      p_raio_m: 1e3,
+      p_max: 5
+    });
+    const perto = data ?? [];
+    const comZona = perto.find((p) => !!p.zona);
+    if (comZona) zona = comZona.zona;
+    const melhor = perto.find(
+      (p) => Number(p.confianca) >= 70 && Number(p.distancia_m) <= 900 && !!p.nome && !ehNomeGenerico(p.nome)
+    );
+    if (melhor) localConhecido = melhor.nome;
+  } catch (err) {
+    console.warn("[whatsapp-webhook] locais_perto falhou:", err);
+  }
+  const osm = await reverterNoNominatim(lat, lng);
+  if (osm) {
+    if (!zona) zona = osm.zona;
+    if (osm.endereco) {
+      return {
+        endereco: localConhecido ? `${localConhecido} (${osm.endereco})` : osm.endereco,
+        zona,
+        localConhecido,
+        categoria
+      };
+    }
+  }
+  const mapbox = await reverterCoordenadas(lat, lng);
+  if (mapbox) {
+    return {
+      endereco: localConhecido ? `${localConhecido} (${mapbox})` : mapbox,
+      zona,
+      localConhecido,
+      categoria
+    };
+  }
+  return {
+    endereco: localConhecido ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+    zona,
+    localConhecido,
+    categoria
+  };
+}
+async function zonaPorCoordenadas(supabaseAdmin, lat, lng) {
+  try {
+    const { data } = await supabaseAdmin.rpc("locais_perto", {
+      p_lat: lat,
+      p_lng: lng,
+      p_raio_m: 3e3,
+      p_max: 8
+    });
+    const perto = data ?? [];
+    const comZona = perto.filter((p) => !!p.zona).sort((a, b) => Number(a.distancia_m) - Number(b.distancia_m));
+    return comZona[0]?.zona ?? null;
+  } catch (err) {
+    console.warn("[whatsapp-webhook] zonaPorCoordenadas falhou:", err);
+    return null;
+  }
+}
+async function registarLocalAprendido(supabaseAdmin, nome, lat, lng, telefone, endereco) {
+  try {
+    const { data, error } = await supabaseAdmin.rpc("registar_local", {
+      p_nome: nome,
+      p_lat: lat,
+      p_lng: lng,
+      p_raio_m: 1e3,
+      p_zona: null,
+      p_origem: "aprendido",
+      p_aprendido_de: telefone,
+      p_endereco: endereco ?? null,
+      p_osm_tipo: null,
+      p_categoria: null
+    });
+    if (error) {
+      console.error("[whatsapp-webhook] registar_local falhou:", error.message);
+      return null;
+    }
+    return data ?? null;
+  } catch (err) {
+    console.error("[whatsapp-webhook] Falha a registar local aprendido:", err);
+    return null;
+  }
+}
+async function calcularRota(origem, destino) {
+  const distanciaReta = haversineKm(origem.lat, origem.lng, destino.lat, destino.lng);
+  if (MAPBOX_TOKEN) {
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${origem.lng},${origem.lat};${destino.lng},${destino.lat}?geometries=geojson&overview=false&access_token=${MAPBOX_TOKEN}`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8e3) });
+      if (res.ok) {
+        const dados = await res.json();
+        const rota = dados.routes?.[0];
+        if (rota?.distance != null && rota?.duration != null) {
+          return {
+            distanceKm: Math.round(rota.distance / 1e3 * 10) / 10,
+            durationMin: Math.round(rota.duration / 60),
+            trafficFactor: TRANSITO_FACTOR,
+            real: true
+          };
+        }
+        console.warn("[whatsapp-webhook] Mapbox Directions sem rotas \u2014 a usar Haversine.");
+      } else {
+        console.warn(
+          `[whatsapp-webhook] Mapbox Directions devolveu ${res.status} \u2014 a usar Haversine.`
+        );
+      }
+    } catch (err) {
+      console.warn("[whatsapp-webhook] Mapbox Directions falhou \u2014 a usar Haversine:", err);
+    }
+  } else {
+    console.warn("[whatsapp-webhook] MAPBOX_TOKEN ausente \u2014 a usar Haversine.");
+  }
+  return {
+    distanceKm: Math.round(distanciaReta * 10) / 10,
+    durationMin: Math.ceil(distanciaReta / 30 * 60),
+    trafficFactor: TRANSITO_FACTOR,
+    real: false
+  };
+}
+function ehNoiteEmLuanda() {
+  const hora = horaEmLuanda();
+  return hora >= 22 || hora < 6;
+}
+function ehAeroporto(destino) {
+  const graus = Math.sqrt(
+    (destino.lat - AEROPORTO.lat) ** 2 + (destino.lng - AEROPORTO.lng) ** 2
+  );
+  return graus * 111 < AEROPORTO_RAIO_KM;
+}
+async function calcularPreco(supabaseAdmin, origem, destino) {
+  const rota = await calcularRota(origem, destino);
+  const zonaOrigem = origem.zona ?? detectarZona(origem.endereco);
+  const zonaDestino = destino.zona ?? detectarZona(destino.endereco);
+  if (zonaOrigem && zonaDestino && zonaOrigem !== zonaDestino) {
+    const { data: zp, error: erroZp } = await supabaseAdmin.from("zone_prices").select("price_kz, distance_km").eq("active", true).or(
+      `and(origin_zone.eq.${zonaOrigem},dest_zone.eq.${zonaDestino}),and(origin_zone.eq.${zonaDestino},dest_zone.eq.${zonaOrigem})`
+    ).limit(1).maybeSingle();
+    if (erroZp) {
+      console.error("[whatsapp-webhook] Erro a ler zone_prices:", erroZp.message);
+    } else if (zp) {
+      return {
+        price_kz: Number(zp.price_kz),
+        distance_km: Math.round((Number(zp.distance_km) || rota.distanceKm) * 100) / 100,
+        duration_min: rota.durationMin,
+        surge_multiplier: 1,
+        is_zone_price: true,
+        origem_do_preco: "zona",
+        badges: [`Pre\xE7o fixo ${zonaOrigem} \u2192 ${zonaDestino}`]
+      };
+    }
+  }
+  const { data, error } = await supabaseAdmin.rpc(ENGINE_PRECO_RPC, {
+    p_distance_km: rota.distanceKm,
+    p_duration_min: rota.durationMin,
+    p_origin_lat: origem.lat,
+    p_origin_lng: origem.lng,
+    p_dest_lat: destino.lat,
+    p_dest_lng: destino.lng,
+    p_service_tier: "standard",
+    p_demand_count: DEMANDA_PADRAO,
+    p_supply_count: OFERTA_PADRAO,
+    p_is_night: ehNoiteEmLuanda(),
+    p_is_airport: ehAeroporto(destino),
+    p_traffic_factor: rota.trafficFactor
+  });
+  if (error || !data) {
+    console.error(
+      `[whatsapp-webhook] ${ENGINE_PRECO_RPC} falhou:`,
+      error?.message ?? "sem dados"
+    );
+    return null;
+  }
+  const resultado = data;
+  const precoFinal = Number(resultado.fare_kz);
+  if (!Number.isFinite(precoFinal) || precoFinal <= 0) {
+    console.error(`[whatsapp-webhook] ${ENGINE_PRECO_RPC} devolveu preco invalido:`, data);
+    return null;
+  }
+  return {
+    price_kz: precoFinal,
+    distance_km: rota.distanceKm,
+    duration_min: rota.durationMin,
+    surge_multiplier: Number(resultado.surge_factor ?? 1),
+    is_zone_price: false,
+    origem_do_preco: "motor",
+    badges: Array.isArray(resultado.badges) ? resultado.badges : []
+  };
+}
+async function temCorridaViva(supabaseAdmin, sessao) {
+  if (!sessao.ride_id) return false;
+  try {
+    const { data } = await supabaseAdmin.from("rides").select("status").eq("id", sessao.ride_id).maybeSingle();
+    return CORRIDA_VIVA.has(String(data?.status ?? ""));
+  } catch (err) {
+    console.warn("[whatsapp-webhook] temCorridaViva falhou:", err);
+    return true;
+  }
+}
+async function carregarSessao(supabaseAdmin, telefone) {
+  const { data, error } = await supabaseAdmin.from("bot_conversations").select("*").eq("phone", telefone).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+  if (error) {
+    console.error("[whatsapp-webhook] Erro a carregar sessao:", error.message);
+    return null;
+  }
+  if (!data) return null;
+  const sessao = data;
+  const marca = new Date(sessao.updated_at ?? sessao.created_at ?? "").getTime();
+  if (!Number.isFinite(marca)) return sessao;
+  const idadeMin = (Date.now() - marca) / 6e4;
+  if (idadeMin <= SESSAO_VALIDADE_MINUTOS) return sessao;
+  if (await temCorridaViva(supabaseAdmin, sessao)) return sessao;
+  console.log(
+    `[whatsapp-webhook] Sessao de ${telefone} com ${Math.floor(idadeMin)} min (estado ${sessao.state}) \u2014 expirada, a comecar do zero.`
+  );
+  const limpa = {
+    state: "idle",
+    origin_address: null,
+    origin_lat: null,
+    origin_lng: null,
+    dest_address: null,
+    dest_lat: null,
+    dest_lng: null,
+    estimated_price: null,
+    ride_id: null,
+    dispatch_attempt: null,
+    aprendendo_nome: null,
+    aprendendo_texto: null,
+    aprendendo_slot: null
+  };
+  const { error: erroLimpeza } = await supabaseAdmin.from("bot_conversations").update(limpa).eq("id", sessao.id);
+  if (erroLimpeza) {
+    console.error("[whatsapp-webhook] Erro a expirar sessao:", erroLimpeza.message);
+  }
+  return { ...sessao, ...limpa };
+}
+async function guardarSessao(supabaseAdmin, telefone, campos, sessaoExistente) {
+  const agora = (/* @__PURE__ */ new Date()).toISOString();
+  if (sessaoExistente?.id) {
+    const { error: error2 } = await supabaseAdmin.from("bot_conversations").update({ ...campos, updated_at: agora }).eq("id", sessaoExistente.id);
+    if (error2) console.error("[whatsapp-webhook] Erro a actualizar sessao:", error2.message);
+    return;
+  }
+  const { error } = await supabaseAdmin.from("bot_conversations").insert({ phone: telefone, ...campos, updated_at: agora });
+  if (error) console.error("[whatsapp-webhook] Erro a criar sessao:", error.message);
+}
+async function resolverUtilizador(supabaseAdmin, telefone, nome) {
+  const digitos = normalizarTelefone(telefone);
+  if (!digitos) return null;
+  const ultimos9 = digitos.slice(-9);
+  const { data: existente } = await supabaseAdmin.from("profiles").select("user_id, phone").ilike("phone", `%${ultimos9}`);
+  if (existente && existente.length > 0) {
+    const ids = existente.map((c) => c.user_id);
+    const { data: contas } = await supabaseAdmin.from("users").select("id, role").in("id", ids);
+    const conta = contas?.find((u) => u.role !== "driver") ?? contas?.[0];
+    if (conta?.id) return conta.id;
+    if (ids[0]) return ids[0];
+  }
+  const email = `wa_${digitos}@passageiro.zenithride.ao`;
+  const { data: criado, error } = await supabaseAdmin.auth.admin.createUser({
+    email,
+    email_confirm: true,
+    password: crypto.randomUUID() + crypto.randomUUID(),
+    user_metadata: { nome, origem: "whatsapp" }
+  });
+  if (error) {
+    console.error("[whatsapp-webhook] Nao consegui criar utilizador:", error.message);
+    return null;
+  }
+  const userId = criado?.user?.id;
+  if (!userId) return null;
+  const { error: erroPerfil } = await supabaseAdmin.from("profiles").update({ phone: `+${digitos}`, name: nome || `Passageiro ${ultimos9}` }).eq("user_id", userId);
+  if (erroPerfil) {
+    console.warn("[whatsapp-webhook] Perfil criado sem telefone:", erroPerfil.message);
+  }
+  console.log(`[whatsapp-webhook] Conta de passageiro criada para ${digitos}.`);
+  return userId;
+}
+async function resolverMotorista(supabaseAdmin, telefone) {
+  const digitos = normalizarTelefone(telefone);
+  if (!digitos) return null;
+  const ultimos9 = digitos.slice(-9);
+  const { data: candidatos } = await supabaseAdmin.from("profiles").select("user_id, phone").ilike("phone", `%${ultimos9}`);
+  if (!candidatos || candidatos.length === 0) return null;
+  const { data: contas } = await supabaseAdmin.from("users").select("id, role").in("id", candidatos.map((c) => c.user_id));
+  const motorista = contas?.find((u) => u.role === "driver");
+  return motorista?.id ? motorista.id : null;
+}
+var h3Carregado = null;
+async function carregarH3() {
+  if (h3Carregado !== null) return h3Carregado;
+  try {
+    const mod = await import("https://cdn.jsdelivr.net/npm/h3-js@3.7.2/dist/h3-js.es.js");
+    const lib = mod?.default ?? mod;
+    if (typeof lib?.geoToH3 !== "function") throw new Error("geoToH3 em falta");
+    h3Carregado = lib;
+    console.log("[whatsapp-webhook] h3-js carregado \u2014 a usar indexacao H3.");
+  } catch (err) {
+    console.warn(
+      "[whatsapp-webhook] h3-js indisponivel neste runtime \u2014 a usar PostGIS por raio:",
+      err
+    );
+    h3Carregado = false;
+  }
+  return h3Carregado;
+}
+async function encontrarMotoristasPorH3(supabaseAdmin, lat, lng) {
+  const h3 = await carregarH3();
+  if (!h3) return null;
+  let celulas;
+  try {
+    celulas = h3.kRing(h3.geoToH3(lat, lng, 9), 1);
+  } catch (err) {
+    console.warn("[whatsapp-webhook] Falha a calcular celulas H3:", err);
+    return null;
+  }
+  const { data, error } = await supabaseAdmin.rpc("find_drivers_h3", {
+    p_h3_indexes: celulas,
+    // A origem é obrigatória: sem ela a função não mede a distância real até
+    // ao ponto de recolha e devolveria um valor fixo.
+    p_origin_lat: lat,
+    p_origin_lng: lng,
+    p_limit: 8
+  });
+  if (error) {
+    console.error("[whatsapp-webhook] find_drivers_h3 falhou:", error.message);
+    return null;
+  }
+  const candidatos = data ?? [];
+  if (candidatos.length === 0) return [];
+  const { data: perfis } = await supabaseAdmin.from("profiles").select("user_id, phone").in("user_id", candidatos.map((c) => c.driver_id));
+  const telefonePorId = /* @__PURE__ */ new Map();
+  for (const p of perfis ?? []) {
+    if (apenasDigitos(p.phone).length >= 9) telefonePorId.set(p.user_id, String(p.phone));
+  }
+  const semTelefone = candidatos.filter((c) => !telefonePorId.has(c.driver_id)).length;
+  if (semTelefone > 0) {
+    console.warn(
+      `[whatsapp-webhook] ${semTelefone} motorista(s) no H3 sem telefone em profiles \u2014 excluidos.`
+    );
+  }
+  return candidatos.filter((c) => telefonePorId.has(c.driver_id)).map((c) => ({
+    driver_id: c.driver_id,
+    driver_name: c.driver_name,
+    phone: telefonePorId.get(c.driver_id),
+    distance_m: null,
+    timeout_sec: 8
+  }));
+}
+async function encontrarMotoristasPorRaio(supabaseAdmin, lat, lng) {
+  for (const raio of [5, 7, 12]) {
+    const { data, error } = await supabaseAdmin.rpc("get_cascade_drivers", {
+      p_lat: lat,
+      p_lng: lng,
+      p_radius_km: raio,
+      p_limit: 5
+    });
+    if (error) {
+      console.error(`[whatsapp-webhook] get_cascade_drivers(${raio}km) falhou:`, error.message);
+      continue;
+    }
+    const lista = data ?? [];
+    const comTelefone = lista.filter((d) => apenasDigitos(d.phone).length >= 9);
+    if (comTelefone.length > 0) return comTelefone;
+  }
+  return [];
+}
+async function encontrarMotoristas(supabaseAdmin, lat, lng) {
+  const porH3 = await encontrarMotoristasPorH3(supabaseAdmin, lat, lng);
+  if (porH3 && porH3.length > 0) {
+    console.log(`[whatsapp-webhook] H3 encontrou ${porH3.length} motorista(s).`);
+    return porH3;
+  }
+  const porRaio = await encontrarMotoristasPorRaio(supabaseAdmin, lat, lng);
+  if (porH3 === null) {
+    console.log("[whatsapp-webhook] H3 indisponivel \u2014 cascata por raio.");
+  } else if (porH3.length === 0 && porRaio.length > 0) {
+    console.log("[whatsapp-webhook] H3 sem resultados \u2014 cascata por raio encontrou motorista(s).");
+  }
+  return porRaio;
+}
+async function notificarMotoristas(supabaseAdmin, rideId, origem, destino, precoKz, distanciaKm, lat, lng) {
+  const motoristas = await encontrarMotoristas(supabaseAdmin, lat, lng);
+  const codigo = rideId.slice(0, 8).toUpperCase();
+  let enviados = 0;
+  for (const m of motoristas) {
+    const texto = [
+      "\u{1F697} *Nova corrida Zenith Ride*",
+      `Ol\xE1 ${m.driver_name}, tens uma corrida perto de ti!`,
+      "",
+      `\u{1F4CD} *Origem:* ${origem}`,
+      `\u{1F3C1} *Destino:* ${destino}`,
+      `\u{1F4B0} *Valor:* ${kz(precoKz)} Kz`,
+      `\u{1F4CF} *Dist\xE2ncia:* ${distanciaKm} km`,
+      // A distância só aparece quando é real. O caminho H3 não a traz, e é
+      // melhor omitir a linha do que mostrar "a 0,0 km de ti".
+      ...typeof m.distance_m === "number" && m.distance_m > 0 ? [`\u{1F6E3}\uFE0F *A ${(m.distance_m / 1e3).toFixed(1)} km de ti*`] : [],
+      "",
+      `Responde *ACEITAR ${codigo}* para ficar com a viagem.`
+    ].join("\n");
+    if (await sendWhatsAppMessage(m.phone, texto)) enviados += 1;
+  }
+  if (enviados === 0) {
+    console.warn(
+      `[whatsapp-webhook] Corrida ${rideId}: ${motoristas.length} motorista(s) disponivel(is) com telefone, 0 notificados.`
+    );
+  }
+  return { enviados, candidatos: motoristas.length };
+}
+var PEDIDO_DE_CORRIDA = /\b(pedir|chamar|marcar|quero|preciso de)\s+(uma\s+)?(corrida|moto|t[áa]xi|transporte|viagem|carro)\b|^corrida$|^t[áa]xi$|^taxi$|^(leva-me|me leva)\s+a/i;
+var CONFIRMA = /^(1|sim|s|ok|okay|confirmo|confirmar|aceito|aceitar|vamos|bora|yes)\b/i;
+var RECUSA = /^(2|n[ãa]o|nao|cancelar|cancela|desistir|no)\b/i;
+function ehPedidoDeCorrida(texto) {
+  return PEDIDO_DE_CORRIDA.test(texto.trim());
+}
+function variar(opcoes, semente) {
+  if (opcoes.length === 0) return "";
+  if (opcoes.length === 1) return opcoes[0];
+  let h = 0;
+  for (let i = 0; i < semente.length; i += 1) h = h * 31 + semente.charCodeAt(i) | 0;
+  return opcoes[Math.abs(h) % opcoes.length];
+}
+function primeiroNome(nome) {
+  const bruto = (nome ?? "").trim().split(/\s+/)[0] ?? "";
+  if (bruto.length < 2 || bruto.length > 20) return "";
+  if (!/^[A-Za-zÀ-ÿ'’-]+$/.test(bruto)) return "";
+  return bruto.charAt(0).toUpperCase() + bruto.slice(1).toLowerCase();
+}
+function comNome(nome) {
+  const n = primeiroNome(nome);
+  return n ? `, ${n}` : "";
+}
+var CUMPRIMENTO = /^(ol[áa]|oi+|hey|hello|hi|bom dia|boa tarde|boa noite|boas|tudo bem|como est[áa]s?|como vai|sauda[çc][õo]es)(?!\p{L})/iu;
+var AGRADECIMENTO = /^(obrigad[oa]s?|valeu|vlw|agradecido|thanks|thank you|obg)(?!\p{L})/iu;
+var DESPEDIDA = /^(adeus|at[ée] (logo|breve|amanh[ãa])|fica bem|boa sorte|xau|bye)(?!\p{L})/iu;
+var AJUDA_ABERTURAS = [
+  "Oi{no}! Sou o Luk\xE9ni, da Zenith Ride \u{1F44B}",
+  "Ol\xE1{no}! Aqui \xE9 o Luk\xE9ni, da Zenith Ride \u{1F44B}",
+  "Boas{no}! Luk\xE9ni, da Zenith Ride \u{1F44B}",
+  "Ei{no}! Sou o Luk\xE9ni, da Zenith Ride \u{1F44B}"
+];
+var AJUDA_CORPO = [
+  "Diz-me s\xF3 *corrida* e eu trato do resto \u2014 pergunto-te de onde sais e para onde vais.",
+  "",
+  "Se preferires, toca em \u{1F4CE} \u2192 *Localiza\xE7\xE3o* e eu uso logo onde est\xE1s, sem escreveres nada.",
+  "",
+  "Conhe\xE7o os bairros, ruas, hospitais, escolas e mercados de Luanda. Se me disseres um s\xEDtio que ainda n\xE3o conhe\xE7o, pe\xE7o-te a localiza\xE7\xE3o e guardo-o para a pr\xF3xima vez."
+].join("\n");
+function textoAjuda(nome, semente) {
+  const abertura = variar(AJUDA_ABERTURAS, semente).replace("{no}", comNome(nome));
+  return [abertura, "", AJUDA_CORPO].join("\n");
+}
+async function tratarConversaSolta(telefone, texto, nome, sessao) {
+  const t = texto.trim();
+  if (!t) return false;
+  const semente = telefone + t;
+  if (CUMPRIMENTO.test(t)) {
+    const aMeio = sessao?.state === "awaiting_origin" || sessao?.state === "awaiting_dest";
+    await sendWhatsAppMessage(
+      telefone,
+      aMeio ? variar([
+        `Oi${comNome(nome)}! Continuo \xE0 espera da tua resposta \u{1F447}`,
+        `Boas${comNome(nome)}! Estou aqui \u2014 falta s\xF3 aquilo que te pedi \u{1F447}`
+      ], semente) : textoAjuda(nome, semente)
+    );
+    return true;
+  }
+  if (AGRADECIMENTO.test(t)) {
+    await sendWhatsAppMessage(
+      telefone,
+      variar([
+        `De nada${comNome(nome)} \u{1F64C}`,
+        `Sempre \xE0s ordens${comNome(nome)} \u{1F44A}`,
+        `Ora essa${comNome(nome)}, \xE9 para isso que estou aqui.`
+      ], semente)
+    );
+    return true;
+  }
+  if (DESPEDIDA.test(t)) {
+    await sendWhatsAppMessage(
+      telefone,
+      variar([
+        `At\xE9 \xE0 pr\xF3xima${comNome(nome)} \u{1F44B}`,
+        `Fica bem${comNome(nome)}! Quando precisares, \xE9 s\xF3 chamar.`
+      ], semente)
+    );
+    return true;
+  }
+  return false;
+}
+async function processarDestino(supabaseAdmin, telefone, sessao, origem, destino) {
+  const preco = await calcularPreco(supabaseAdmin, origem, destino);
+  if (!preco) {
+    await sendWhatsAppMessage(
+      telefone,
+      "\u26A0\uFE0F N\xE3o consegui calcular o pre\xE7o agora. A tua localiza\xE7\xE3o j\xE1 est\xE1 guardada \u2014 reenvia o destino dentro de um minuto, por favor."
+    );
+    return;
+  }
+  await guardarSessao(supabaseAdmin, telefone, {
+    state: "awaiting_confirm",
+    dest_address: destino.endereco,
+    dest_lat: destino.lat,
+    dest_lng: destino.lng,
+    estimated_price: preco.price_kz,
+    aprendendo_slot: null,
+    aprendendo_texto: null,
+    aprendendo_nome: null
+  }, sessao);
+  const linhas = [
+    "Aqui est\xE1 o resumo \u{1F9FE}",
+    "",
+    `De \u2014 ${origem.endereco}`,
+    `Para \u2014 ${destino.endereco}`,
+    `Dist\xE2ncia \u2014 ${preco.distance_km} km (~${preco.duration_min} min)`,
+    `Pre\xE7o \u2014 *${kz(preco.price_kz)} Kz*${preco.is_zone_price ? " _(pre\xE7o fixo da zona)_" : ""}`,
+    "",
+    variar([
+      "Confirmas? Responde *1* para seguir ou *2* para deixar estar.",
+      "Digo ao motorista? *1* para avan\xE7ar, *2* para cancelar."
+    ], telefone + String(preco.price_kz))
+  ];
+  await sendWhatsAppMessage(telefone, linhas.join("\n"));
+}
+async function continuarComLocal(supabaseAdmin, telefone, sessao, slot, coords) {
+  if (slot === "origem") {
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "awaiting_dest",
+      origin_address: coords.endereco,
+      origin_lat: coords.lat,
+      origin_lng: coords.lng,
+      aprendendo_slot: null,
+      aprendendo_texto: null,
+      aprendendo_nome: null
+    }, sessao);
+    await sendWhatsAppMessage(telefone, `\u{1F4CD} *${coords.endereco}*
+
+\u{1F3C1} Para onde queres ir?`);
+    return;
+  }
+  const origemLat = Number(sessao?.origin_lat);
+  const origemLng = Number(sessao?.origin_lng);
+  const origem = {
+    lat: origemLat,
+    lng: origemLng,
+    endereco: sessao?.origin_address ?? "Origem",
+    zona: Number.isFinite(origemLat) && Number.isFinite(origemLng) ? await zonaPorCoordenadas(supabaseAdmin, origemLat, origemLng) : null
+  };
+  await processarDestino(supabaseAdmin, telefone, sessao, origem, coords);
+}
+async function iniciarAprendizagem(supabaseAdmin, telefone, texto, slot, sessao, nomePessoa = "") {
+  await guardarSessao(supabaseAdmin, telefone, {
+    state: "aprendendo_nome",
+    aprendendo_slot: slot,
+    aprendendo_texto: texto,
+    aprendendo_nome: null
+  }, sessao);
+  await sendWhatsAppMessage(
+    telefone,
+    [
+      `Hmm${comNome(nomePessoa)} \u2014 ainda n\xE3o conhe\xE7o *\xAB${texto}\xBB* \u{1F914}`,
+      "",
+      "Manda-me a *localiza\xE7\xE3o* desse s\xEDtio (\u{1F4CE} \u2192 *Localiza\xE7\xE3o*) e eu guardo-o com esse nome e cerca de 1 km \xE0 volta. A partir da\xED nunca mais te pergunto.",
+      "",
+      "Ou escreve o nome completo, ex.: _Zango 3, Viana_."
+    ].join("\n")
+  );
+}
+var DESISTIR = /^(cancelar|cancela|desistir|parar|stop|sair|nada|esquece)$/i;
+async function tratarAprendizagem(supabaseAdmin, msg, sessao, estado) {
+  const telefone = normalizarTelefone(msg.telefone);
+  const texto = msg.texto.trim();
+  const slot = sessao?.aprendendo_slot ?? "origem";
+  const veioLocalizacao = msg.lat !== null && msg.lng !== null;
+  if (!veioLocalizacao && DESISTIR.test(texto)) {
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "awaiting_origin",
+      origin_address: null,
+      origin_lat: null,
+      origin_lng: null,
+      dest_address: null,
+      dest_lat: null,
+      dest_lng: null,
+      estimated_price: null,
+      ride_id: null,
+      aprendendo_slot: null,
+      aprendendo_texto: null,
+      aprendendo_nome: null
+    }, sessao);
+    await sendWhatsAppMessage(
+      telefone,
+      "\u{1F44C} Sem problema. Escreve *corrida* quando quiseres tentar outra vez."
+    );
+    return;
+  }
+  if (estado === "aprendendo_nome") {
+    if (veioLocalizacao) {
+      const nome = (sessao?.aprendendo_texto ?? texto).trim() || texto;
+      const ponto = await resolverPonto(supabaseAdmin, msg.lat, msg.lng);
+      const id = await registarLocalAprendido(
+        supabaseAdmin,
+        nome,
+        msg.lat,
+        msg.lng,
+        telefone,
+        ponto.endereco
+      );
+      if (!id) {
+        await sendWhatsAppMessage(
+          telefone,
+          "\u26A0\uFE0F N\xE3o consegui guardar esse s\xEDtio agora. Manda a localiza\xE7\xE3o outra vez, por favor."
+        );
+        return;
+      }
+      await sendWhatsAppMessage(
+        telefone,
+        `\u2705 Guardei *${nome}* (~1 km \xE0 volta). J\xE1 n\xE3o volto a perguntar.`
+      );
+      await continuarComLocal(supabaseAdmin, telefone, sessao, slot, {
+        lat: msg.lat,
+        lng: msg.lng,
+        endereco: ponto.endereco,
+        zona: ponto.zona,
+        origemLocal: "aprendido"
+      });
+      return;
+    }
+    if (!texto) {
+      await sendWhatsAppMessage(
+        telefone,
+        "Manda o nome do s\xEDtio, ou a localiza\xE7\xE3o em \u{1F4CE} \u2192 *Localiza\xE7\xE3o*."
+      );
+      return;
+    }
+    const resolvido = await geocodificar(supabaseAdmin, texto, null);
+    if (resolvido) {
+      const nome = (sessao?.aprendendo_texto ?? texto).trim() || texto;
+      await registarLocalAprendido(
+        supabaseAdmin,
+        nome,
+        resolvido.lat,
+        resolvido.lng,
+        telefone,
+        resolvido.endereco
+      );
+      await sendWhatsAppMessage(
+        telefone,
+        `\u2705 Guardei *${nome}*.
+\u{1F4CD} ${resolvido.endereco}`
+      );
+      await continuarComLocal(supabaseAdmin, telefone, sessao, slot, resolvido);
+      return;
+    }
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "aprendendo_pin",
+      aprendendo_nome: texto
+    }, sessao);
+    await sendWhatsAppMessage(
+      telefone,
+      [
+        `Ainda n\xE3o encontro *\xAB${texto}\xBB* no mapa.`,
+        "",
+        "Manda a *localiza\xE7\xE3o* exacta (\u{1F4CE} \u2192 *Localiza\xE7\xE3o*) e eu guardo esse s\xEDtio com esse nome.",
+        "",
+        "Ou escreve *cancelar*."
+      ].join("\n")
+    );
+    return;
+  }
+  if (veioLocalizacao) {
+    const nome = (sessao?.aprendendo_nome ?? sessao?.aprendendo_texto ?? texto).trim() || texto;
+    const ponto = await resolverPonto(supabaseAdmin, msg.lat, msg.lng);
+    const id = await registarLocalAprendido(
+      supabaseAdmin,
+      nome,
+      msg.lat,
+      msg.lng,
+      telefone,
+      ponto.endereco
+    );
+    if (!id) {
+      await sendWhatsAppMessage(
+        telefone,
+        "\u26A0\uFE0F N\xE3o consegui guardar esse s\xEDtio agora. Manda a localiza\xE7\xE3o outra vez, por favor."
+      );
+      return;
+    }
+    await sendWhatsAppMessage(
+      telefone,
+      `\u2705 Guardei *${nome}* (~1 km \xE0 volta). J\xE1 n\xE3o volto a perguntar.`
+    );
+    await continuarComLocal(supabaseAdmin, telefone, sessao, slot, {
+      lat: msg.lat,
+      lng: msg.lng,
+      endereco: ponto.endereco,
+      zona: ponto.zona,
+      origemLocal: "aprendido"
+    });
+    return;
+  }
+  await sendWhatsAppMessage(
+    telefone,
+    "Preciso da *localiza\xE7\xE3o* para fixar esse s\xEDtio. Toca em \u{1F4CE} \u2192 *Localiza\xE7\xE3o*.\n\nOu escreve *cancelar*."
+  );
+}
+async function tratarPassageiro(supabaseAdmin, msg) {
+  const telefone = normalizarTelefone(msg.telefone);
+  const sessao = await carregarSessao(supabaseAdmin, telefone);
+  const texto = msg.texto.trim();
+  const veioLocalizacao = msg.lat !== null && msg.lng !== null;
+  let estado = sessao?.state ?? null;
+  if (estado === "idle") estado = null;
+  if (/^(cancelar|cancela|desistir|parar|stop)$/i.test(texto)) {
+    if (sessao?.ride_id) {
+      await supabaseAdmin.from("rides").update({ status: "cancelled" }).eq("id", sessao.ride_id).eq("status", "searching");
+    }
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "awaiting_origin",
+      origin_address: null,
+      origin_lat: null,
+      origin_lng: null,
+      dest_address: null,
+      dest_lat: null,
+      dest_lng: null,
+      estimated_price: null,
+      ride_id: null
+    }, sessao);
+    await sendWhatsAppMessage(
+      telefone,
+      variar([
+        `Pronto${comNome(msg.nome)}, cancelei o pedido \u{1F44D} Quando quiseres, escreve *corrida*.`,
+        `J\xE1 est\xE1${comNome(msg.nome)}, pedido cancelado. \xC9 s\xF3 escreveres *corrida* quando precisares.`
+      ], telefone + texto)
+    );
+    return;
+  }
+  if (estado === "aprendendo_nome" || estado === "aprendendo_pin") {
+    await tratarAprendizagem(supabaseAdmin, msg, sessao, estado);
+    return;
+  }
+  if (estado === "dispatching" && sessao?.ride_id) {
+    const { data: corrida } = await supabaseAdmin.from("rides").select("status").eq("id", sessao.ride_id).maybeSingle();
+    const estadoCorrida = corrida?.status ?? null;
+    if (estadoCorrida === "searching") {
+      await sendWhatsAppMessage(
+        telefone,
+        `Ainda estou \xE0 procura de motorista para ti${comNome(msg.nome)} \u23F3
+
+C\xF3digo da viagem: *${sessao.ride_id.slice(0, 8).toUpperCase()}*. Se quiseres desistir, escreve *cancelar*.`
+      );
+      return;
+    }
+    if (estadoCorrida === "accepted" || estadoCorrida === "picking_up" || estadoCorrida === "in_progress") {
+      await sendWhatsAppMessage(
+        telefone,
+        variar([
+          "J\xE1 tens um motorista a caminho \u{1F697} Est\xE1 tudo na mensagem anterior.",
+          `Boa not\xEDcia${comNome(msg.nome)} \u2014 o motorista j\xE1 vem a caminho \u{1F697} V\xEA os dados acima.`
+        ], telefone)
+      );
+      return;
+    }
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "awaiting_origin",
+      origin_address: null,
+      origin_lat: null,
+      origin_lng: null,
+      dest_address: null,
+      dest_lat: null,
+      dest_lng: null,
+      estimated_price: null,
+      ride_id: null
+    }, sessao);
+    estado = "awaiting_origin";
+  }
+  if (estado === null || estado === "awaiting_origin" || estado === "awaiting_dest") {
+    if (await tratarConversaSolta(telefone, texto, msg.nome, sessao)) return;
+  }
+  if (estado === null && !veioLocalizacao && !ehPedidoDeCorrida(texto)) {
+    await sendWhatsAppMessage(telefone, textoAjuda(msg.nome, telefone + texto));
+    return;
+  }
+  if (estado === null) {
+    if (veioLocalizacao) {
+      const ponto = await resolverPonto(supabaseAdmin, msg.lat, msg.lng);
+      const endereco = melhorEndereco(msg.descricaoLocal, ponto.endereco);
+      await guardarSessao(supabaseAdmin, telefone, {
+        state: "awaiting_dest",
+        origin_address: endereco,
+        origin_lat: msg.lat,
+        origin_lng: msg.lng,
+        dest_address: null,
+        dest_lat: null,
+        dest_lng: null,
+        estimated_price: null,
+        ride_id: null
+      }, sessao);
+      await sendWhatsAppMessage(
+        telefone,
+        `Recebi${comNome(msg.nome)} \u{1F4CD} Est\xE1s em *${endereco}*.
+
+` + variar([
+          "Para onde vamos?",
+          "E para onde \xE9 que te levo?",
+          "Diz-me s\xF3 o destino."
+        ], telefone + endereco)
+      );
+      return;
+    }
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "awaiting_origin",
+      origin_address: null,
+      origin_lat: null,
+      origin_lng: null,
+      dest_address: null,
+      dest_lat: null,
+      dest_lng: null,
+      estimated_price: null,
+      ride_id: null
+    }, sessao);
+    await sendWhatsAppMessage(
+      telefone,
+      `${variar(["Vamos a isso", "Bora", "Perfeito"], telefone + texto)}${comNome(msg.nome)} \u{1F695}
+
+*De onde \xE9 que sais?*
+
+O mais r\xE1pido \xE9 tocares em \u{1F4CE} \u2192 *Localiza\xE7\xE3o* e eu uso logo onde est\xE1s. Tamb\xE9m podes escrever (ex.: _Belas_, _Talatona_, _Kilamba_).`
+    );
+    return;
+  }
+  if (estado === "awaiting_origin") {
+    if (ehPedidoDeCorrida(texto)) {
+      await sendWhatsAppMessage(
+        telefone,
+        `J\xE1 estou nisso${comNome(msg.nome)} \u2014 falta s\xF3 saber *de onde sais* \u{1F4CD}
+
+Toca em \u{1F4CE} \u2192 *Localiza\xE7\xE3o* e eu uso logo onde est\xE1s, ou escreve (ex.: _Belas_, _Talatona_).`
+      );
+      return;
+    }
+    if (veioLocalizacao) {
+      const ponto = await resolverPonto(supabaseAdmin, msg.lat, msg.lng);
+      const endereco = melhorEndereco(msg.descricaoLocal, ponto.endereco);
+      await guardarSessao(supabaseAdmin, telefone, {
+        state: "awaiting_dest",
+        origin_address: endereco,
+        origin_lat: msg.lat,
+        origin_lng: msg.lng
+      }, sessao);
+      await sendWhatsAppMessage(
+        telefone,
+        `Anotado \u{1F4CD} *${endereco}*
+
+` + variar(["Para onde vamos?", "E o destino?", "Diz-me para onde \xE9."], telefone + endereco)
+      );
+      return;
+    }
+    const coords = await geocodificar(supabaseAdmin, texto);
+    if (!coords) {
+      await iniciarAprendizagem(supabaseAdmin, telefone, texto, "origem", sessao, msg.nome);
+      return;
+    }
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "awaiting_dest",
+      origin_address: coords.endereco,
+      origin_lat: coords.lat,
+      origin_lng: coords.lng
+    }, sessao);
+    await sendWhatsAppMessage(
+      telefone,
+      `Anotado \u{1F4CD} *${coords.endereco}*
+
+` + variar(["Para onde vamos?", "E o destino?", "Diz-me para onde \xE9."], telefone + coords.endereco)
+    );
+    return;
+  }
+  if (estado === "awaiting_dest") {
+    let destino = null;
+    const origemLat = Number(sessao.origin_lat);
+    const origemLng = Number(sessao.origin_lng);
+    const origemRef = Number.isFinite(origemLat) && Number.isFinite(origemLng) ? { lat: origemLat, lng: origemLng } : null;
+    if (veioLocalizacao) {
+      const ponto = await resolverPonto(supabaseAdmin, msg.lat, msg.lng);
+      destino = {
+        lat: msg.lat,
+        lng: msg.lng,
+        endereco: melhorEndereco(msg.descricaoLocal, ponto.endereco),
+        zona: ponto.zona
+      };
+    } else {
+      destino = await geocodificar(supabaseAdmin, texto, origemRef);
+    }
+    if (!destino) {
+      await iniciarAprendizagem(supabaseAdmin, telefone, texto, "destino", sessao, msg.nome);
+      return;
+    }
+    const origem = {
+      lat: origemLat,
+      lng: origemLng,
+      endereco: sessao.origin_address ?? "Origem",
+      // A zona da origem é recalculada pela coordenada: a sessão só guarda
+      // lat/lng/endereço, e a zona tem de vir da base para o preço de zona
+      // bater certo com o que o app mostraria.
+      zona: await zonaPorCoordenadas(supabaseAdmin, origemLat, origemLng)
+    };
+    await processarDestino(supabaseAdmin, telefone, sessao, origem, destino);
+    return;
+  }
+  if (estado === "awaiting_confirm") {
+    if (RECUSA.test(texto)) {
+      await guardarSessao(supabaseAdmin, telefone, {
+        state: "awaiting_origin",
+        origin_address: null,
+        origin_lat: null,
+        origin_lng: null,
+        dest_address: null,
+        dest_lat: null,
+        dest_lng: null,
+        estimated_price: null,
+        ride_id: null
+      }, sessao);
+      await sendWhatsAppMessage(
+        telefone,
+        variar([
+          `Sem problema${comNome(msg.nome)} \u{1F44C} Quando precisares, \xE9 s\xF3 escreveres *corrida*.`,
+          `Fica \xE0 vontade${comNome(msg.nome)}. Escreve *corrida* quando quiseres.`
+        ], telefone + texto)
+      );
+      return;
+    }
+    if (!CONFIRMA.test(texto)) {
+      await sendWhatsAppMessage(
+        telefone,
+        variar([
+          "S\xF3 preciso de um *1* para confirmar ou *2* para cancelar \u{1F44D}",
+          "Diz-me *1* para seguir com a viagem ou *2* para deixar estar."
+        ], telefone + texto)
+      );
+      return;
+    }
+    const userId = sessao.user_id ?? await resolverUtilizador(supabaseAdmin, telefone, msg.nome);
+    if (!userId) {
+      await sendWhatsAppMessage(
+        telefone,
+        "\u26A0\uFE0F N\xE3o consegui abrir a tua conta para registar a corrida. Tenta outra vez dentro de um minuto."
+      );
+      return;
+    }
+    const origemLat = Number(sessao.origin_lat);
+    const origemLng = Number(sessao.origin_lng);
+    if (Number.isFinite(origemLat) && Number.isFinite(origemLng)) {
+      const candidatosAgora = await encontrarMotoristas(supabaseAdmin, origemLat, origemLng);
+      if (candidatosAgora.length === 0) {
+        await sendWhatsAppMessage(
+          telefone,
+          `N\xE3o te vou mentir${comNome(msg.nome)} \u2014 neste momento n\xE3o tenho nenhum motorista dispon\xEDvel perto de ti \u{1F6AB}
+
+O trajecto *${sessao.origin_address} \u2192 ${sessao.dest_address}* fica em *${kz(Number(sessao.estimated_price))} Kz*.
+
+N\xE3o criei a viagem, para n\xE3o te dar um c\xF3digo que n\xE3o serve para nada. Responde *1* dentro de pouco tempo e eu volto a procurar.`
+        );
+        return;
+      }
+    }
+    const { data: ride, error: erroCorrida } = await supabaseAdmin.from("rides").insert({
+      passenger_id: userId,
+      origin_address: sessao.origin_address,
+      origin_lat: sessao.origin_lat,
+      origin_lng: sessao.origin_lng,
+      dest_address: sessao.dest_address,
+      dest_lat: sessao.dest_lat,
+      dest_lng: sessao.dest_lng,
+      price_kz: sessao.estimated_price,
+      status: "searching",
+      vehicle_type: "standard"
+    }).select("id").single();
+    if (erroCorrida || !ride) {
+      console.error("[whatsapp-webhook] Nao consegui criar a corrida:", erroCorrida?.message);
+      await sendWhatsAppMessage(telefone, "\u26A0\uFE0F N\xE3o consegui registar a corrida. Tenta novamente.");
+      return;
+    }
+    const rideId = ride.id;
+    await guardarSessao(supabaseAdmin, telefone, {
+      state: "dispatching",
+      ride_id: rideId,
+      user_id: userId,
+      dispatch_attempt: 1
+    }, sessao);
+    await sendWhatsAppMessage(
+      telefone,
+      `Feito${comNome(msg.nome)} \u2705 J\xE1 estou a procurar o motorista mais pr\xF3ximo.
+
+C\xF3digo da viagem: *${rideId.slice(0, 8).toUpperCase()}* \u2014 guarda-o, \xE9 o que o motorista vai pedir.
+
+Aviso-te assim que algu\xE9m aceitar.`
+    );
+    const resultado = await notificarMotoristas(
+      supabaseAdmin,
+      rideId,
+      sessao.origin_address ?? "Origem",
+      sessao.dest_address ?? "Destino",
+      Number(sessao.estimated_price),
+      Number(
+        haversineKm(
+          Number(sessao.origin_lat),
+          Number(sessao.origin_lng),
+          Number(sessao.dest_lat),
+          Number(sessao.dest_lng)
+        ).toFixed(1)
+      ),
+      Number(sessao.origin_lat),
+      Number(sessao.origin_lng)
+    );
+    if (resultado.enviados === 0) {
+      await supabaseAdmin.from("rides").update({ status: "cancelled" }).eq("id", rideId).eq("status", "searching");
+      await guardarSessao(supabaseAdmin, telefone, {
+        state: "awaiting_confirm",
+        ride_id: null,
+        dispatch_attempt: null
+      }, sessao);
+      await sendWhatsAppMessage(
+        telefone,
+        `Pois${comNome(msg.nome)}, neste momento n\xE3o tenho motorista por perto \u{1F614}
+
+O trajecto *${sessao.origin_address} \u2192 ${sessao.dest_address}* continua guardado por *${kz(Number(sessao.estimated_price))} Kz*.
+
+Responde *1* daqui a pouco e eu volto a procurar \u2014 n\xE3o precisas de repetir as moradas.`
+      );
+    }
+    return;
+  }
+  await sendWhatsAppMessage(telefone, textoAjuda(msg.nome, telefone + texto));
+}
+async function tratarMotorista(supabaseAdmin, msg) {
+  const telefone = normalizarTelefone(msg.telefone);
+  const texto = msg.texto.trim();
+  const aceitar = texto.match(/^aceitar\s+([0-9a-f]{4,8})$/i);
+  const recusar = texto.match(/^recusar\s+([0-9a-f]{4,8})$/i);
+  if (!aceitar && !recusar) return false;
+  const driverId = await resolverMotorista(supabaseAdmin, telefone);
+  if (!driverId) {
+    await sendWhatsAppMessage(
+      telefone,
+      "\u26A0\uFE0F Este n\xFAmero n\xE3o est\xE1 registado como motorista Zenith Ride. Entra na app para activares a tua conta."
+    );
+    return true;
+  }
+  const codigo = (aceitar?.[1] ?? recusar?.[1]).toLowerCase();
+  const { data: corrida } = await supabaseAdmin.from("rides").select("id, status, driver_id, passenger_id, origin_address, dest_address, price_kz").ilike("id", `${codigo}%`).eq("status", "searching").is("driver_id", null).limit(1).maybeSingle();
+  if (!corrida) {
+    await sendWhatsAppMessage(
+      telefone,
+      `\u26A0\uFE0F A corrida *${codigo.toUpperCase()}* j\xE1 n\xE3o est\xE1 dispon\xEDvel \u2014 foi atribu\xEDda a outro motorista ou cancelada.`
+    );
+    return true;
+  }
+  if (recusar) {
+    await sendWhatsAppMessage(telefone, "\u{1F44C} Registado. Fico \xE0 espera que aceites a pr\xF3xima.");
+    return true;
+  }
+  const { data: atribuida } = await supabaseAdmin.from("rides").update({ driver_id: driverId, status: "accepted" }).eq("id", corrida.id).eq("status", "searching").is("driver_id", null).select("id").maybeSingle();
+  if (!atribuida) {
+    await sendWhatsAppMessage(
+      telefone,
+      `\u26A0\uFE0F Chegaste tarde \u2014 a corrida *${codigo.toUpperCase()}* foi para outro motorista.`
+    );
+    return true;
+  }
+  const { data: perfil } = await supabaseAdmin.from("profiles").select("name, phone, rating").eq("user_id", driverId).maybeSingle();
+  await sendWhatsAppMessage(
+    telefone,
+    [
+      "\u2705 *Corrida aceite!*",
+      "",
+      `\u{1F4CD} *Recolha:* ${corrida.origin_address}`,
+      `\u{1F3C1} *Destino:* ${corrida.dest_address}`,
+      `\u{1F4B0} *Valor:* ${kz(Number(corrida.price_kz))} Kz`,
+      "",
+      "Abre a app Zenith Ride para iniciar a navega\xE7\xE3o."
+    ].join("\n")
+  );
+  const { data: passageiro } = await supabaseAdmin.from("profiles").select("phone").eq("user_id", corrida.passenger_id).maybeSingle();
+  if (passageiro?.phone) {
+    await sendWhatsAppMessage(
+      passageiro.phone,
+      [
+        "\u{1F389} *A tua corrida foi aceite!*",
+        "",
+        `\u{1F468}\u200D\u2708\uFE0F *Motorista:* ${perfil?.name ?? "Motorista Zenith"}`,
+        `\u{1F4DE} *Contacto:* ${perfil?.phone ?? "Ver na app"}`,
+        `\u2B50 *Avalia\xE7\xE3o:* ${perfil?.rating ?? "\u2014"}`,
+        `\u{1F4B0} *Pre\xE7o:* ${kz(Number(corrida.price_kz))} Kz`,
+        "",
+        "O motorista j\xE1 est\xE1 a caminho do ponto de recolha."
+      ].join("\n")
+    );
+  }
+  return true;
+}
+Deno.serve(async (req) => {
+  const resolvedCorsHeaders = resolveCorsHeaders(req, CORS_OPTIONS);
+  if (req.headers.get("Origin") && !resolvedCorsHeaders) {
+    return corsForbidden();
+  }
+  const corsHeaders = corsHeadersToObject(resolvedCorsHeaders);
+  if (req.method === "GET") {
+    if (!WHATSAPP_VERIFY_TOKEN) {
+      console.error("[whatsapp-webhook] WHATSAPP_VERIFY_TOKEN nao definida \u2014 a recusar.");
+      return new Response("Servico mal configurado", { status: 503 });
+    }
+    const url = new URL(req.url);
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+    if (mode === "subscribe" && token === WHATSAPP_VERIFY_TOKEN) {
+      return new Response(challenge ?? "ok", { status: 200 });
+    }
+    return new Response("Token de verifica\xE7\xE3o inv\xE1lido", { status: 403 });
+  }
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+  const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const corpoCru = await req.text();
+  const cabecalhoAssinatura = req.headers.get("x-hub-signature-256") ?? "";
+  const assinaturaMetaValida = WHATSAPP_APP_SECRET ? await verificarAssinaturaMeta(corpoCru, cabecalhoAssinatura, WHATSAPP_APP_SECRET) : false;
+  let jwtUtilizadorValido = false;
+  if (!assinaturaMetaValida) {
+    const cabecalhoAuth = req.headers.get("Authorization") ?? "";
+    if (cabecalhoAuth.startsWith("Bearer ")) {
+      const { data, error } = await supabaseAdmin.auth.getUser(
+        cabecalhoAuth.slice("Bearer ".length)
+      );
+      jwtUtilizadorValido = !error && !!data?.user;
+    }
+  }
+  if (!assinaturaMetaValida && !jwtUtilizadorValido) {
+    console.warn("[whatsapp-webhook] POST recusado: sem assinatura Meta nem JWT valido.");
+    return new Response(JSON.stringify({ error: "Nao autorizado." }), {
+      status: 401,
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
+  }
+  try {
+    const body = corpoCru ? JSON.parse(corpoCru) : {};
+    const action = body.action;
+    if (action === "driver_fallback_for_ride") {
+      const rideId = body.ride_id;
+      if (!rideId) {
+        return new Response(JSON.stringify({ error: "ride_id em falta" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      const { data: ride } = await supabaseAdmin.from("rides").select("*").eq("id", rideId).single();
+      if (!ride) {
+        return new Response(JSON.stringify({ error: "Corrida n\xE3o encontrada" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      const resultado = await notificarMotoristas(
+        supabaseAdmin,
+        rideId,
+        ride.origin_address,
+        ride.dest_address,
+        Number(ride.price_kz),
+        Number(ride.distance_km ?? 0),
+        Number(ride.origin_lat),
+        Number(ride.origin_lng)
+      );
+      if (resultado.enviados === 0) {
+        console.warn(
+          `[whatsapp-webhook] Nenhuma notificacao enviada para a corrida ${rideId}. Motoristas com telefone: ${resultado.candidatos}.`
+        );
+        return new Response(
+          JSON.stringify({
+            success: false,
+            reason: resultado.candidatos === 0 ? "sem_motoristas_com_telefone" : "envio_falhou",
+            dispatched_count: 0,
+            drivers_available: resultado.candidatos,
+            ride_id: rideId
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          success: true,
+          dispatched_count: resultado.enviados,
+          ride_id: rideId
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (action === "passenger_ride_accepted") {
+      const rideId = body.ride_id;
+      if (!rideId) {
+        return new Response(JSON.stringify({ error: "ride_id em falta" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      const { data: ride } = await supabaseAdmin.from("rides").select("id, driver_id, passenger_id, price_kz, origin_address, dest_address").eq("id", rideId).maybeSingle();
+      if (!ride) {
+        return new Response(JSON.stringify({ error: "Corrida n\xE3o encontrada" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+      const ids = [ride.driver_id, ride.passenger_id].filter(Boolean);
+      const { data: perfis } = await supabaseAdmin.from("profiles").select("user_id, name, phone, rating").in("user_id", ids);
+      const perfilMotorista = perfis?.find((p) => p.user_id === ride.driver_id);
+      const perfilPassageiro = perfis?.find((p) => p.user_id === ride.passenger_id);
+      if (!perfilPassageiro?.phone) {
+        console.warn(
+          `[whatsapp-webhook] Corrida ${rideId}: passageiro sem telefone em profiles \u2014 nada enviado.`
+        );
+        return new Response(
+          JSON.stringify({ success: false, reason: "passageiro_sem_telefone" }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      const msg = [
+        "\u{1F389} *A tua corrida Zenith Ride foi aceite!*",
+        "",
+        `\u{1F468}\u200D\u2708\uFE0F *Motorista:* ${perfilMotorista?.name ?? "Motorista Zenith"}`,
+        `\u{1F4DE} *Contacto:* ${perfilMotorista?.phone ?? "Ver na App"}`,
+        `\u2B50 *Avalia\xE7\xE3o:* ${perfilMotorista?.rating ?? "\u2014"}`,
+        `\u{1F697} *Pre\xE7o:* ${kz(Number(ride.price_kz))} Kz`,
+        "",
+        "O motorista j\xE1 est\xE1 a caminho do ponto de recolha. Acompanha em tempo real na app!"
+      ].join("\n");
+      const enviado = await sendWhatsAppMessage(perfilPassageiro.phone, msg);
+      return new Response(
+        JSON.stringify({ success: enviado, notified: enviado }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    const entries = body.entry;
+    if (!Array.isArray(entries)) {
+      return new Response(JSON.stringify({ success: true, ignored: "payload_desconhecido" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      });
+    }
+    for (const entry of entries) {
+      const changes = entry?.changes;
+      if (!Array.isArray(changes)) continue;
+      for (const change of changes) {
+        const value = change?.value;
+        const mensagens = value?.messages;
+        if (!Array.isArray(mensagens)) continue;
+        const contacto = value?.contacts?.[0];
+        const nome = contacto?.profile?.name ?? "";
+        for (const m of mensagens) {
+          const telefone = String(m?.from ?? "");
+          if (!telefone) continue;
+          if (m?.id) {
+            const chaveDedup = `wa_${m.id}`;
+            const { data: jaVisto } = await supabaseAdmin.from("message_dedup").select("id").eq("message_id", chaveDedup).limit(1).maybeSingle();
+            if (jaVisto) {
+              console.log(`[whatsapp-webhook] Mensagem ${m.id} repetida \u2014 ignorada.`);
+              continue;
+            }
+            await supabaseAdmin.from("message_dedup").insert({ message_id: chaveDedup });
+          }
+          const tsMensagem = Number(m?.timestamp ?? 0);
+          if (tsMensagem > 0) {
+            const idadeSeg = Math.floor(Date.now() / 1e3) - tsMensagem;
+            if (idadeSeg > JANELA_MENSAGEM_SEGUNDOS) {
+              console.log(
+                `[whatsapp-webhook] Mensagem ${m?.id ?? "?"} com ${Math.floor(idadeSeg / 60)} min \u2014 ignorada (fora da janela).`
+              );
+              continue;
+            }
+          }
+          const tipo = String(m?.type ?? "text");
+          const texto = String(
+            m?.text?.body ?? m?.interactive?.button_reply?.title ?? m?.interactive?.list_reply?.title ?? m?.button?.text ?? ""
+          ).trim();
+          const msg = {
+            telefone,
+            nome,
+            texto,
+            tipo,
+            lat: tipo === "location" ? Number(m?.location?.latitude) : null,
+            lng: tipo === "location" ? Number(m?.location?.longitude) : null,
+            descricaoLocal: tipo === "location" ? m?.location?.address ?? m?.location?.name ?? null : null,
+            msgId: m?.id ?? null
+          };
+          await marcarALer(m?.id ?? null);
+          const tratadoComoMotorista = await tratarMotorista(supabaseAdmin, msg);
+          if (tratadoComoMotorista) continue;
+          if (!texto && msg.lat === null) {
+            await sendWhatsAppMessage(
+              telefone,
+              "Recebi a tua mensagem, mas ainda n\xE3o sei ler esse tipo de conte\xFAdo. Escreve *corrida* ou manda a tua localiza\xE7\xE3o em \u{1F4CE} \u2192 *Localiza\xE7\xE3o*."
+            );
+            continue;
+          }
+          await pausaHumana(texto);
+          await tratarPassageiro(supabaseAdmin, msg);
+        }
+      }
+    }
+    return new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
+  } catch (error) {
+    console.error("[whatsapp-webhook] Erro:", error);
+    return new Response(JSON.stringify({ success: false, error: error?.message || "Erro interno" }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" }
+    });
+  }
+});

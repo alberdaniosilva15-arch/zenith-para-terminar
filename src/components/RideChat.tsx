@@ -1,17 +1,26 @@
 // =============================================================================
-// ZENITH RIDE v3.2 — RideChat.tsx
+// ZENITH RIDE v3.4 — RideChat.tsx (Chat Fiável e Idempotente)
 // Chat em tempo real entre motorista e passageiro com persistência e Realtime
+// ✅ Idempotência com client_id (UUID único por mensagem)
+// ✅ Broadcast APENAS após persistência com sucesso (sem mensagens fantasma)
+// ✅ Identificação de remetente em cache (sem roundtrip auth a cada envio)
+// ✅ Tratamento de erro visível na UI com retry sem duplicar
+// ✅ Deduplicação exata por ID/client_id (permite mensagens idênticas consecutivas)
+// ✅ Polling inteligente condicional (só em modo degradado/foco)
 // =============================================================================
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import KazeCreditsBadge from './KazeCreditsBadge';
 
 interface Msg {
   id: string;
+  client_id?: string;
   sender_id: string;
   text: string;
   created_at: string;
+  state?: 'sending' | 'sent' | 'failed';
 }
 
 interface RideChatProps {
@@ -27,12 +36,16 @@ export default function RideChat({
   peerName,
   phonePrivacyMode = false,
 }: RideChatProps) {
+  const { session } = useAuth();
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
   const [unread, setUnread] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const openRef = useRef(false);
+  const lastSeenAtRef = useRef<string>(new Date(0).toISOString());
+  const channelRef = useRef<any>(null);
+  const isSubscribedRef = useRef(false);
 
   const quickReplies = [
     'Estou a caminho',
@@ -42,40 +55,105 @@ export default function RideChat({
     'Onde estás exactamente?',
   ];
 
+  // Identificação do remetente sem chamada de rede extra
+  const senderId = session?.user?.id || myId;
+
   useEffect(() => {
     openRef.current = open;
     if (open) {
       setUnread(0);
+      void fetchMessages();
     }
   }, [open]);
+
+  const fetchMessages = useCallback(async (onlyIncremental = false) => {
+    if (!rideId) return;
+    try {
+      let query = supabase
+        .from('ride_messages')
+        .select('*')
+        .eq('ride_id', rideId)
+        .order('created_at', { ascending: true });
+
+      if (onlyIncremental && lastSeenAtRef.current) {
+        query = query.gt('created_at', lastSeenAtRef.current);
+      }
+
+      const { data, error } = await query;
+
+      if (!error && data && data.length > 0) {
+        setMsgs((prev) => {
+          let updated = [...prev];
+          for (const item of data) {
+            const m = item as Msg;
+            const idx = updated.findIndex(
+              (x) => (m.client_id && x.client_id === m.client_id) || x.id === m.id
+            );
+            const msgWithState: Msg = { ...m, state: 'sent' };
+            if (idx === -1) {
+              updated.push(msgWithState);
+            } else {
+              updated[idx] = { ...updated[idx], ...msgWithState };
+            }
+          }
+          updated.sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+          const lastItem = updated[updated.length - 1];
+          if (lastItem) {
+            lastSeenAtRef.current = lastItem.created_at;
+          }
+          return updated;
+        });
+      }
+    } catch (err) {
+      console.warn('[RideChat] Erro ao carregar mensagens:', err);
+    }
+  }, [rideId]);
 
   useEffect(() => {
     if (!rideId) return;
 
     let active = true;
+    void fetchMessages(false);
 
-    // 1. Carregar histórico inicial de mensagens
-    const fetchMessages = async () => {
-      try {
-        const { data, error } = await supabase
-          .from('ride_messages')
-          .select('*')
-          .eq('ride_id', rideId)
-          .order('created_at', { ascending: true });
+    const handleIncomingMsg = (nextMsg: Msg) => {
+      if (!nextMsg || !nextMsg.id || !active) return;
 
-        if (active && !error && data) {
-          setMsgs(data as Msg[]);
+      setMsgs((prev) => {
+        const i = prev.findIndex(
+          (x) => (nextMsg.client_id && x.client_id === nextMsg.client_id) || x.id === nextMsg.id
+        );
+        const confirmedMsg: Msg = { ...nextMsg, state: 'sent' };
+        if (i === -1) {
+          const next: Msg[] = [...prev, confirmedMsg];
+          next.sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+          );
+          const lastMsg = next[next.length - 1];
+          if (lastMsg) lastSeenAtRef.current = lastMsg.created_at;
+          return next;
         }
-      } catch (err) {
-        console.warn('[RideChat] Erro ao carregar mensagens:', err);
+        const next: Msg[] = [...prev];
+        next[i] = { ...next[i], ...confirmedMsg };
+        const lastMsg = next[next.length - 1];
+        if (lastMsg) lastSeenAtRef.current = lastMsg.created_at;
+        return next;
+      });
+
+      if (nextMsg.sender_id !== senderId && !openRef.current) {
+        setUnread((count) => count + 1);
       }
     };
 
-    void fetchMessages();
-
-    // 2. Canal Realtime WebSocket para novas mensagens
+    // Canal Realtime WebSocket (Broadcast com tópico restrito + Postgres Changes)
     const channel = supabase
       .channel(`ride_chat_${rideId}`)
+      .on('broadcast', { event: 'NEW_MESSAGE' }, (payload) => {
+        if (payload.payload) {
+          handleIncomingMsg(payload.payload as Msg);
+        }
+      })
       .on(
         'postgres_changes',
         {
@@ -85,35 +163,38 @@ export default function RideChat({
           filter: `ride_id=eq.${rideId}`,
         },
         (payload) => {
-          const nextMsg = payload.new as Msg;
-          if (!nextMsg || !nextMsg.id) return;
-
-          setMsgs((prev) => {
-            // Evita duplicados (caso tenha sido adicionada optimistically)
-            if (prev.some((m) => m.id === nextMsg.id || (m.sender_id === nextMsg.sender_id && m.text === nextMsg.text && Math.abs(new Date(m.created_at).getTime() - new Date(nextMsg.created_at).getTime()) < 3000))) {
-              return prev.map((m) => (m.text === nextMsg.text && m.sender_id === nextMsg.sender_id ? nextMsg : m));
-            }
-            return [...prev, nextMsg];
-          });
-
-          if (nextMsg.sender_id !== myId && !openRef.current) {
-            setUnread((count) => count + 1);
-          }
-        },
+          handleIncomingMsg(payload.new as Msg);
+        }
       )
-      .subscribe();
+      .subscribe((status) => {
+        isSubscribedRef.current = status === 'SUBSCRIBED';
+      });
 
-    // 3. Polling de contingência a cada 4s enquanto o chat estiver aberto ou activo
+    channelRef.current = channel;
+
+    // Polling inteligente: apenas em modo degradado ou a cada 10s se realtime estiver inactivo
     const pollInterval = setInterval(() => {
-      if (active) void fetchMessages();
-    }, 4000);
+      if (active && (!isSubscribedRef.current || document.visibilityState === 'visible')) {
+        void fetchMessages(true);
+      }
+    }, 8000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && active) {
+        void fetchMessages(true);
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
       active = false;
       clearInterval(pollInterval);
+      window.removeEventListener('visibilitychange', handleVisibility);
+      channelRef.current = null;
+      isSubscribedRef.current = false;
       supabase.removeChannel(channel);
     };
-  }, [myId, rideId]);
+  }, [fetchMessages, rideId, senderId]);
 
   useEffect(() => {
     if (open) {
@@ -121,36 +202,82 @@ export default function RideChat({
     }
   }, [msgs, open]);
 
-  const send = async (msgToSend: string) => {
+  const send = async (msgToSend: string, existingClientId?: string) => {
     const value = msgToSend.trim();
-    if (!value || !rideId || !myId) return;
+    if (!value || !rideId || !senderId) return;
 
-    // Mensagem optimista instantânea
-    const tempId = `temp-${Date.now()}`;
-    const optimisticMsg: Msg = {
-      id: tempId,
-      sender_id: myId,
-      text: value,
-      created_at: new Date().toISOString(),
-    };
+    const clientId = existingClientId || crypto.randomUUID();
+    const tempId = `client-${clientId}`;
 
-    setMsgs((prev) => [...prev, optimisticMsg]);
-    setText('');
-
-    try {
-      const { data, error } = await supabase.from('ride_messages').insert({
-        ride_id: rideId,
-        sender_id: myId,
+    if (!existingClientId) {
+      const optimisticMsg: Msg = {
+        id: tempId,
+        client_id: clientId,
+        sender_id: senderId,
         text: value,
-      }).select().single();
+        created_at: new Date().toISOString(),
+        state: 'sending',
+      };
+
+      setMsgs((prev) => [...prev, optimisticMsg]);
+      setText('');
+    } else {
+      setMsgs((prev) =>
+        prev.map((m) =>
+          m.client_id === clientId ? { ...m, state: 'sending' } : m
+        )
+      );
+    }
+
+    // 1. Gravar PRIMEIRO na Base de Dados (evita mensagem fantasma)
+    try {
+      const { data, error } = await supabase
+        .from('ride_messages')
+        .insert({
+          ride_id: rideId,
+          sender_id: senderId,
+          text: value,
+          client_id: clientId,
+        })
+        .select()
+        .single();
 
       if (error) {
-        console.error('[RideChat] Erro ao enviar mensagem na BD:', error);
-      } else if (data) {
-        setMsgs((prev) => prev.map((m) => (m.id === tempId ? (data as Msg) : m)));
+        console.warn('[RideChat] chat_send_failed:', error.code, error.message);
+        setMsgs((prev) =>
+          prev.map((m) =>
+            m.client_id === clientId ? { ...m, state: 'failed' } : m
+          )
+        );
+        return;
       }
-    } catch (e) {
+
+      if (data) {
+        setMsgs((prev) =>
+          prev.map((m) =>
+            m.client_id === clientId ? { ...(data as Msg), state: 'sent' } : m
+          )
+        );
+        lastSeenAtRef.current = data.created_at;
+
+        // 2. Broadcast APENAS após gravação confirmada
+        try {
+          channelRef.current?.send({
+            type: 'broadcast',
+            event: 'NEW_MESSAGE',
+            payload: data,
+          });
+        } catch (bErr) {
+          console.warn('[RideChat] Broadcast notification warning:', bErr);
+        }
+      }
+    } catch (e: any) {
       console.error('[RideChat] Excepção ao enviar:', e);
+      setMsgs((prev) =>
+        prev.map((m) =>
+          m.client_id === clientId ? { ...m, state: 'failed' } : m
+        )
+      );
     }
   };
 
@@ -230,24 +357,42 @@ export default function RideChat({
             </div>
           )}
           {msgs.map((msg) => {
-            const isMe = msg.sender_id === myId;
+            const isMe = msg.sender_id === senderId;
+            const isFailed = msg.state === 'failed';
+            const isSending = msg.state === 'sending';
+
             return (
               <div
-                key={msg.id}
+                key={msg.client_id || msg.id}
                 className={`flex flex-col max-w-[80%] ${isMe ? 'self-end items-end' : 'self-start items-start'}`}
               >
                 <div
                   className={`px-4 py-2.5 rounded-2xl text-xs leading-relaxed ${
-                    isMe
-                      ? 'golden-gradient text-black font-semibold rounded-br-xs shadow-md'
-                      : 'bg-white/10 text-white rounded-bl-xs border border-white/5'
-                  }`}
+                    isFailed
+                      ? 'bg-red-950/60 text-red-200 border border-red-500/40 rounded-br-xs'
+                      : isMe
+                        ? 'golden-gradient text-black font-semibold rounded-br-xs shadow-md'
+                        : 'bg-white/10 text-white rounded-bl-xs border border-white/5'
+                  } ${isSending ? 'opacity-70' : ''}`}
                 >
                   {msg.text}
                 </div>
-                <span className="text-[9px] text-white/40 mt-1 px-1 font-mono">
-                  {new Date(msg.created_at).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
-                </span>
+                <div className="flex items-center gap-1.5 mt-1 px-1">
+                  <span className="text-[9px] text-white/40 font-mono">
+                    {new Date(msg.created_at).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  {isMe && isSending && (
+                    <span className="text-[9px] text-primary/70 font-mono">· a enviar...</span>
+                  )}
+                  {isMe && isFailed && (
+                    <button
+                      onClick={() => void send(msg.text, msg.client_id)}
+                      className="text-[9px] text-red-400 font-bold underline hover:text-red-300 transition-colors"
+                    >
+                      Falhou · Tocar para reenviar
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}

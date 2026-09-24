@@ -62,6 +62,7 @@ export function useRide(): UseRideReturn {
   const prevStatusRef  = useRef<RideStatus>(RideStatus.IDLE);
   const autoSharedRideRef = useRef<string | null>(null);
   const lastDeviationAlertRef = useRef<number>(0);
+  const lastVersionRef = useRef<number>(-1);
   // Ref para guardar distância e duração da corrida activa (para PostRideReview)
   const rideDetailsRef = useRef<{ distanceKm: number | null; durationMin: number | null }>({
     distanceKm:  null,
@@ -73,27 +74,45 @@ export function useRide(): UseRideReturn {
     rideDetailsRef.current = { distanceKm: null, durationMin: null };
   }, []);
 
+  const resolveDriverConfirmed = useCallback((r: DbRide): boolean => {
+    if ((r as any).ride_type === 'auction') return r.driver_confirmed === true;
+    return r.driver_confirmed !== false;
+  }, []);
+
   // ── Carregar corrida activa ao iniciar sessão ────────────────────────────
   useEffect(() => {
     if (!dbUser?.id) return;
-    (async () => {
+    const syncActiveRide = async () => {
       // SECURITY: get_active_ride usa auth.uid() internamente
       const active = await rideService.getActiveRide();
       if (active) {
         applyDbRideRef.current(active);
         subscribeToRideRef.current(active.id, active.driver_id ?? undefined);
-      } else {
+      } else if (!ride.rideId) {
         clearRideDetails();
         resetRide();
       }
-    })();
+    };
+
+    void syncActiveRide();
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void syncActiveRide();
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
 
     return () => {
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
       unsubRef.current?.();
       driverLocUnsub.current?.();
       clearRideDetails();
     };
-  }, [dbUser?.id, clearRideDetails, resetRide]);
+  }, [dbUser?.id, clearRideDetails, resetRide, ride.rideId]);
 
   // ── Detectar transição para COMPLETED → activar review ──────────────────
   // ✅ BUG #5 CORRIGIDO: setTimeout com cleanup e guarda de montagem
@@ -221,12 +240,27 @@ export function useRide(): UseRideReturn {
 
   // ── applyDbRide ──────────────────────────────────────────────────────────
   applyDbRideRef.current = useCallback((r: DbRide & { driver_name?: string; passenger_name?: string }) => {
+    const incVersion = (r as any).version;
+    if (typeof incVersion === 'number' && incVersion <= lastVersionRef.current) {
+      return; // evento obsoleto
+    }
+    if (typeof incVersion === 'number') {
+      lastVersionRef.current = Math.max(lastVersionRef.current, incVersion);
+    }
+
     rideDetailsRef.current = {
       distanceKm:  r.distance_km  ?? null,
       durationMin: r.duration_min ?? null,
     };
+
+    let rawStatus = (r.status || '').toLowerCase() as RideStatus;
+    if (r.driver_id && rawStatus === RideStatus.SEARCHING) {
+      console.error('[useRide] ride_state_impossible detectado em applyDbRide:', { rideId: r.id, version: incVersion });
+      rawStatus = RideStatus.ACCEPTED;
+    }
+
     setRide({
-      status:          r.status as RideStatus,
+      status:          rawStatus,
       rideId:          r.id,
       passengerId:     r.passenger_id,
       pickup:          r.origin_address,
@@ -236,11 +270,11 @@ export function useRide(): UseRideReturn {
       surgeMultiplier: r.surge_multiplier,
       priceKz:         r.price_kz,
       driverId:        r.driver_id ?? undefined,
-      driverConfirmed: r.driver_confirmed,
+      driverConfirmed: resolveDriverConfirmed(r),
       driverName:      r.driver_name    ?? undefined,
       passengerName:   r.passenger_name ?? undefined,
     });
-  }, [setRide]);
+  }, [setRide, resolveDriverConfirmed]);
 
   // ── subscribeToRide ──────────────────────────────────────────────────────
   subscribeToRideRef.current = useCallback((rideId: string, driverId?: string) => {
@@ -249,6 +283,14 @@ export function useRide(): UseRideReturn {
     driverLocUnsub.current = null;
 
     unsubRef.current = rideService.subscribeToRide(rideId, async (updated) => {
+      const incVersion = (updated as any).version;
+      if (typeof incVersion === 'number' && incVersion <= lastVersionRef.current) {
+        return; // Evento velho ou duplicado: ignora
+      }
+      if (typeof incVersion === 'number') {
+        lastVersionRef.current = Math.max(lastVersionRef.current, incVersion);
+      }
+
       // BUG 2 FIX: quando motorista é atribuído, buscar o nome do perfil imediatamente
       let resolvedDriverName: string | undefined;
       if (updated.driver_id && !(updated as any).driver_name) {
@@ -264,8 +306,15 @@ export function useRide(): UseRideReturn {
         resolvedDriverName = (updated as any).driver_name ?? undefined;
       }
 
+      let rawStatus = (updated.status || '').toLowerCase() as RideStatus;
+      // Rede de segurança: se há driver_id e ainda está 'searching', logar e forçar accepted
+      if (updated.driver_id && rawStatus === RideStatus.SEARCHING) {
+        console.error('[useRide] ride_state_impossible detectado:', { rideId: updated.id, version: incVersion });
+        rawStatus = RideStatus.ACCEPTED;
+      }
+
       setRide({
-        status:          updated.status as RideStatus,
+        status:          rawStatus,
         rideId:          updated.id,
         passengerId:     updated.passenger_id,
         pickup:          updated.origin_address,
@@ -275,7 +324,7 @@ export function useRide(): UseRideReturn {
         surgeMultiplier: updated.surge_multiplier,
         priceKz:         updated.price_kz,
         driverId:        updated.driver_id ?? undefined,
-        driverConfirmed: updated.driver_confirmed,
+        driverConfirmed: resolveDriverConfirmed(updated),
         ...(resolvedDriverName ? { driverName: resolvedDriverName } : {}),
       });
 

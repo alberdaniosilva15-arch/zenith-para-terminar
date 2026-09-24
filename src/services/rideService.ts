@@ -831,6 +831,8 @@ class RideService {
           driver_not_available: 'Ativa o teu estado Online para aceitar corridas.',
           not_a_driver:         'Conta não configurada como motorista.',
           race_condition_lost:  'Outro motorista aceitou um milésimo antes.',
+          RIDE_ALREADY_TAKEN:   'Esta corrida já foi aceite por outro condutor.',
+          NOT_AUTHENTICATED:    'Sessão expirada. Inicia sessão novamente.',
         };
         const friendlyMessage = messages[failureReason] || failureReason;
         return { data: null, error: { code: failureReason, message: friendlyMessage } };

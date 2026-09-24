@@ -64,11 +64,68 @@ const AddContractForm: React.FC<AddContractFormProps> = ({
           onChange={v => onFormChange(p => ({ ...p, title: v }))}
           placeholder="ex: Creche Estrelinhas"
         />
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+            <span className="zr-label" style={{ margin: 0 }}>Ponto de Recolha (Onde vão lhe pegar)</span>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!navigator.geolocation) return;
+                navigator.geolocation.getCurrentPosition(
+                  async (pos) => {
+                    const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                    try {
+                      const { mapService } = await import('../../services/mapService');
+                      const addr = await mapService.reverseGeocode(coords);
+                      onFormChange(p => ({
+                        ...p,
+                        origin_address: addr || 'Minha localização actual',
+                        origin_lat: coords.lat,
+                        origin_lng: coords.lng,
+                      }));
+                    } catch {
+                      onFormChange(p => ({
+                        ...p,
+                        origin_address: `Coordenadas: ${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`,
+                        origin_lat: coords.lat,
+                        origin_lng: coords.lng,
+                      }));
+                    }
+                  },
+                  (err) => console.warn('[AddContractForm] Geolocation error:', err),
+                  { enableHighAccuracy: true, timeout: 8000 }
+                );
+              }}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                color: '#D4AF37',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: '13px' }}>my_location</span>
+              Usar localização actual
+            </button>
+          </div>
+          <input
+            className="zr-input"
+            value={form.origin_address}
+            onChange={e => onFormChange(p => ({ ...p, origin_address: e.target.value }))}
+            placeholder="Ex: Rua Direita da Samba, Casa 12, Luanda"
+            required
+          />
+        </div>
+
         <ZField
-          label="Morada de Destino"
-          value={form.address}
-          onChange={v => onFormChange(p => ({ ...p, address: v }))}
-          placeholder="Rua, Bairro, Luanda"
+          label="Ponto de Destino (Onde vão lhe deixar)"
+          value={form.dest_address}
+          onChange={v => onFormChange(p => ({ ...p, dest_address: v, address: v }))}
+          placeholder="Ex: Colégio São Francisco / Escola Internacional, Talatona"
         />
 
         {showGuardianFields && (

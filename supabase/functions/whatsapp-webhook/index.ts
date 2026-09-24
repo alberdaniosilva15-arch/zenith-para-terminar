@@ -2298,14 +2298,43 @@ async function tratarPassageiro(
       estadoCorrida === 'picking_up' ||
       estadoCorrida === 'in_progress'
     ) {
-      await sendWhatsAppMessage(
-        telefone,
-        variar([
-          'Já tens um motorista a caminho 🚗 Está tudo na mensagem anterior.',
-          `Boa notícia${comNome(msg.nome)} — o motorista já vem a caminho 🚗 Vê os dados acima.`,
-        ], telefone),
-      );
-      return;
+      if (!/^cancelar\b/i.test(texto)) {
+        // O passageiro está a mandar mensagem durante a corrida: o bot é o intermediário!
+        const { data: rideData } = await supabaseAdmin
+          .from('rides')
+          .select('driver_id')
+          .eq('id', sessao.ride_id)
+          .maybeSingle();
+
+        if (rideData?.driver_id) {
+          const { data: driverProfile } = await supabaseAdmin
+            .from('profiles')
+            .select('phone, name')
+            .eq('user_id', rideData.driver_id)
+            .maybeSingle();
+
+          if (driverProfile?.phone) {
+            await sendWhatsAppMessage(
+              driverProfile.phone,
+              `💬 *Mensagem do Passageiro (${msg.nome || 'Passageiro'}):*\n"${texto}"`,
+            );
+            await sendWhatsAppMessage(
+              telefone,
+              `✅ A tua mensagem foi entregue ao motorista ${driverProfile.name || ''}:\n"${texto}"`,
+            );
+            return;
+          }
+        }
+
+        await sendWhatsAppMessage(
+          telefone,
+          variar([
+            'O teu motorista já vem a caminho 🚗 Acompanha tudo em directo no mapa da app!',
+            `Boa notícia${comNome(msg.nome)} — o motorista já vem a caminho 🚗 Vê os dados acima.`,
+          ], telefone),
+        );
+        return;
+      }
     }
     // A corrida morreu (cancelada ou concluída) — limpar e seguir para um pedido novo.
     await guardarSessao(supabaseAdmin, telefone, {
@@ -2732,17 +2761,21 @@ async function tratarMotorista(
     .maybeSingle();
 
   if (passageiro?.phone) {
+    const cleanPhone = (perfil?.phone || '').replace(/\D/g, '');
+    const waLink = cleanPhone ? `https://wa.me/${cleanPhone.startsWith('244') ? cleanPhone : '244' + cleanPhone}` : '';
+
     await sendWhatsAppMessage(
       passageiro.phone,
       [
         '🎉 *A tua corrida foi aceite!*',
         '',
         `👨‍✈️ *Motorista:* ${perfil?.name ?? 'Motorista Zenith'}`,
-        `📞 *Contacto:* ${perfil?.phone ?? 'Ver na app'}`,
+        `📞 *Contacto do Motorista:* ${perfil?.phone ?? 'Ver na app'}`,
+        ...(waLink ? [`💬 *WhatsApp Directo:* ${waLink}`] : []),
         `⭐ *Avaliação:* ${perfil?.rating ?? '—'}`,
         `💰 *Preço:* ${kz(Number(corrida.price_kz))} Kz`,
         '',
-        'O motorista já está a caminho do ponto de recolha.',
+        '💡 *Intermediário Zenith:* Podes responder directamente a este bot que eu entrego as tuas mensagens ao motorista!',
       ].join('\n'),
     );
   }
@@ -2945,15 +2978,19 @@ Deno.serve(async (req: Request) => {
         );
       }
 
+      const cleanDriverPhone = (perfilMotorista?.phone || '').replace(/\D/g, '');
+      const waDriverLink = cleanDriverPhone ? `https://wa.me/${cleanDriverPhone.startsWith('244') ? cleanDriverPhone : '244' + cleanDriverPhone}` : '';
+
       const msg = [
         '🎉 *A tua corrida Zenith Ride foi aceite!*',
         '',
         `👨‍✈️ *Motorista:* ${perfilMotorista?.name ?? 'Motorista Zenith'}`,
         `📞 *Contacto:* ${perfilMotorista?.phone ?? 'Ver na App'}`,
+        ...(waDriverLink ? [`💬 *WhatsApp Directo:* ${waDriverLink}`] : []),
         `⭐ *Avaliação:* ${perfilMotorista?.rating ?? '—'}`,
         `🚗 *Preço:* ${kz(Number(ride.price_kz))} Kz`,
         '',
-        'O motorista já está a caminho do ponto de recolha. Acompanha em tempo real na app!',
+        '💡 *Intermediário Zenith:* Podes responder directamente aqui para enviar mensagens ao motorista durante a corrida.',
       ].join('\n');
 
       const enviado = await sendWhatsAppMessage(perfilPassageiro.phone, msg);
