@@ -152,8 +152,25 @@ export default function RideChat({
     };
 
     // Canal Realtime WebSocket (Broadcast com tópico restrito + Postgres Changes)
+    //
+    // ⚠️ `private: true` NÃO é decorativo — é o que faz a RLS contar.
+    //
+    // Num canal PÚBLICO as políticas de `realtime.messages` são **inertes**: com a
+    // anon key (que é pública, vai no bundle) qualquer pessoa que soubesse o id da
+    // corrida podia subscrever `ride_chat_<id>` e ler a conversa. As políticas
+    // `ride participants can receive/send` já existem e cobrem exactamente este
+    // tópico, mas só passam a valer com o canal privado.
+    //
+    // O envio deste cliente (`.send({ type: 'broadcast' })`) passa a ser verificado
+    // pelo `WITH CHECK` da política de INSERT — que exige ser passageiro ou
+    // motorista daquela corrida. É por isso que a mensagem é transmitida **depois**
+    // de gravada: se a gravação falhar, não há broadcast nenhum.
+    //
+    // Risco contido: este broadcast é o caminho RÁPIDO, não o único. Por baixo
+    // ficam o `postgres_changes` sobre `ride_messages` e o polling de 8 s — se o
+    // canal privado falhar, a mensagem chega na mesma, só menos instantânea.
     const channel = supabase
-      .channel(`ride_chat_${rideId}`)
+      .channel(`ride_chat_${rideId}`, { config: { private: true } })
       .on('broadcast', { event: 'NEW_MESSAGE' }, (payload) => {
         if (payload.payload) {
           handleIncomingMsg(payload.payload as Msg);

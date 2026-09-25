@@ -1233,7 +1233,22 @@ class RideService {
     };
 
     // 1. Canal Realtime WebSocket (Broadcast instantâneo + Postgres Changes)
-    this.rideChannel = supabase.channel(`ride:${rideId}`)
+    //
+    // ⚠️ `private: true` faz a RLS contar. Num canal público as políticas de
+    // `realtime.messages` são inertes e qualquer pessoa com a anon key (pública,
+    // está no bundle) e o id da corrida podia seguir estado, motorista e preço.
+    // A política `ride participants can receive` já cobre este tópico e só deixa
+    // entrar o passageiro ou o motorista daquela corrida.
+    //
+    // Do lado da BD, o `broadcast_ride_change` passou a enviar com
+    // `private => true` (migração 20260925140000) — os dois lados têm de
+    // concordar, senão a mensagem não é entregue.
+    //
+    // Risco contido: este broadcast é o caminho RÁPIDO, não o único. Por baixo
+    // ficam o `postgres_changes` sobre `rides` (protegido por RLS) e o polling de
+    // contingência de 2 s — se o canal privado falhar, a actualização chega na
+    // mesma.
+    this.rideChannel = supabase.channel(`ride:${rideId}`, { config: { private: true } })
       .on('broadcast', { event: 'RIDE_UPDATED' }, (p) => {
         if (!isSubscribed) return;
         if (p.payload) {
