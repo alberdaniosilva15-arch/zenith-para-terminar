@@ -8,6 +8,43 @@
 
 ---
 
+## ✅ ACTUALIZAÇÃO — o que já foi corrigido (25/09, mesmo dia)
+
+O bloqueio central deste relatório **já não existe**. Foi corrigido e aplicado:
+
+| O que | Onde | Prova |
+|---|---|---|
+| Migração v3.4 corrigida (3 alterações) e **aplicada** | `20260924220000_plano_v34_correcoes_criticas.sql` | Dry-run + aplicação + verificação objecto a objecto |
+| Colunas premium dos contratos + Zenith Pass | `20260925110000_contratos_premium_e_zenith_pass.sql` (nova) | `contracts` e `profiles` conferidos |
+
+**Já a funcionar em produção, sem deploy de cliente:**
+
+- **Chat** — `ride_messages.client_id` existe. O `insert` do cliente foi testado contra a API real:
+  devolveu `401 row-level security` (a anon key não é participante da corrida), **não** `42703 coluna
+  inexistente`. É a prova de que o PostgREST aceita o payload.
+- **Contratos** — a lista carrega (`select` → **HTTP 200**). Havia um **segundo** bug, de 07/05/2026,
+  independente do v3.4: o `Contract.tsx:49` pedia quatro colunas de crédito que nunca existiram, e o
+  `:50` pedia três colunas do Zenith Pass. Os dois selects devolviam 400 e o ecrã não abria.
+- **`accept_ride_atomic` confirmada intacta** — a versão viva (melhor) não foi substituída.
+- **Backfill** — as 15 linhas de `contracts` ficaram com `dest_address` preenchido e
+  `payment_status = 'pending'`.
+- **Três problemas de segurança fechados pelo caminho:** `rides_status_audit` e
+  `notifications_outbox` ficavam sem RLS (expostas à anon key, que é pública), e o
+  `broadcast_ride_change` falhava em silêncio absoluto — agora deixa `WARNING` no log.
+
+**Verificado a disparar:** `bump_ride_version` (0→1), `audit_rides_status` (registou
+`cancelled → searching`) e `realtime.send` da BD (executa sem erro).
+
+**Continua por fazer** — o resto deste relatório mantém-se válido: canais Realtime privados
+(as políticas existem mas o cliente ainda subscreve público), `senderId || myId` no `RideChat`,
+`broadcastRideUpdated` vivo, a frase falsa do Kaze, o circuit breaker inerte, a Fase 6 e a
+observabilidade. Ver a secção 5 para a ordem.
+
+> Nota: `notifications_outbox` continua a ser **só esquema** — não existe worker que a consuma.
+> As linhas acumulam-se sem serem processadas.
+
+---
+
 ## Veredicto em uma linha
 
 **Não.** O plano está implementado no **código do cliente**, mas os objectos de base de dados de que esse código depende **nunca foram criados**. Como o cliente já está em produção, há **duas funcionalidades partidas neste momento** — o chat e a criação de contratos.
@@ -208,4 +245,8 @@ O cliente sabe lidar com as duas formas (normaliza `{success}` e `DbRide`), por 
 - A BD foi consultada directamente (`information_schema`, `pg_class`, `pg_proc`, `pg_policies`) — não por leitura de migrações.
 - A migração foi testada num **dry-run com `rollback`**, para provar os dois bloqueios sem alterar nada.
 - O bundle de produção foi descarregado e comparado com o `dist/` local: o hash de entrada é **igual** (`index-C14S4VTE.js`), logo produção = repo actual.
-- Ficheiros temporários desta verificação: `.tmp-v34-verificar.sql`, `.tmp-dryrun.sql`, `.tmp-prova-politica.sql`, `.tmp-prova-rpc.sql`.
+- Para testar um `select` ou um `insert` sem browser: extrair a `anon key` do bundle público (é
+  pública por desenho) e bater na API REST. Um `400 / 42703` acusa coluna inexistente; um
+  `401 / 42501` prova que o payload foi aceite e só a RLS travou. É essa a diferença que interessa.
+- Ficheiros de rascunho da verificação já removidos. Os artefactos que ficam são as duas migrações
+  e este relatório.
