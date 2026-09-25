@@ -60,6 +60,66 @@ const WHATSAPP_VERIFY_TOKEN =
 // Já estava configurado no Supabase, mas o código nunca o usava.
 const WHATSAPP_APP_SECRET = Deno.env.get('WHATSAPP_APP_SECRET') ?? '';
 
+// Segredo partilhado dos jobs de cron (Vault: `cron_secret`).
+//
+// Os outros jobs do projecto autenticam-se assim, com o cabeçalho
+// `x-cron-secret` (ver a migração 20260917120100). O webhook só aceitava
+// assinatura da Meta ou JWT de utilizador — um cron não tem nenhum dos dois, e
+// por isso não conseguia accionar `passenger_ride_accepted` a partir da fila
+// `notifications_outbox`.
+//
+// FAIL-CLOSED: sem nenhuma variável definida, este caminho simplesmente não
+// existe. Nunca "aceita tudo" por omissão.
+//
+// ⚠️ ARMADILHA JÁ PAGA (2026-09-25) — ler só o `CRON_SECRET` NÃO chega.
+//
+// O Vault guarda o valor do cron sob o nome `cron_secret`, mas esse valor é o
+// do `SOS_CRON_SECRET` — não o do `CRON_SECRET`. Os dois existem no projecto
+// com valores DIFERENTES. Uma versão anterior deste caminho lia apenas o
+// `CRON_SECRET`: o worker levava 401 a cada minuto, para sempre, em silêncio.
+//
+// Provado por digest, sem revelar o segredo: o sha256 do valor guardado no
+// Vault é igual ao digest do `SOS_CRON_SECRET` (e diferente do `CRON_SECRET`).
+// O digest exacto NÃO fica escrito aqui — o repositório é público, e publicar a
+// impressão de um segredo vivo dá a qualquer um uma forma de o confirmar por
+// tentativa.
+//
+// Aceitam-se os dois candidatos, como faz o `sos-escalation` (`segredoValido`).
+const SEGREDOS_CRON_ACEITES = [
+  Deno.env.get('SOS_CRON_SECRET') ?? '',
+  Deno.env.get('CRON_SECRET') ?? '',
+].filter((s) => s.length > 0);
+
+/**
+ * Comparação de segredos em tempo constante.
+ *
+ * Um `===` normal sai assim que encontra o primeiro byte diferente, e o tempo
+ * dessa saída revela quantos bytes foram acertados — o que permite descobrir o
+ * segredo byte a byte. Aqui percorre-se sempre o comprimento máximo e acumula-se
+ * a diferença, sem saídas antecipadas.
+ */
+function compararSegredo(recebido: string, esperado: string): boolean {
+  if (!esperado) return false;
+  const a = new TextEncoder().encode(recebido);
+  const b = new TextEncoder().encode(esperado);
+  let diferenca = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    diferenca |= (a[i] ?? 0) ^ (b[i] ?? 0);
+  }
+  return diferenca === 0;
+}
+
+/**
+ * O segredo recebido bate com ALGUM dos candidatos configurados?
+ *
+ * Compara contra todos, sem saída antecipada — e devolve `false` quando não há
+ * nenhum candidato, que é o caso fail-closed.
+ */
+function segredoCronValido(recebido: string): boolean {
+  if (!recebido) return false;
+  return SEGREDOS_CRON_ACEITES.some((s) => compararSegredo(recebido, s));
+}
+
 // Janela de tolerância para mensagens recebidas.
 //
 // Quando o bot está desligado, a Meta guarda as mensagens e entrega-as todas de
@@ -2847,8 +2907,16 @@ Deno.serve(async (req: Request) => {
     }
   }
 
+  // 3. Segredo de cron — é por aqui que a fila `notifications_outbox` entra.
+  //    Só se testa quando os outros dois falharam. Fail-closed: sem nenhum
+  //    candidato configurado, `segredoCronValido()` devolve false.
+  let veioDoCron = false;
   if (!assinaturaMetaValida && !jwtUtilizadorValido) {
-    console.warn('[whatsapp-webhook] POST recusado: sem assinatura Meta nem JWT valido.');
+    veioDoCron = segredoCronValido(req.headers.get('x-cron-secret') ?? '');
+  }
+
+  if (!assinaturaMetaValida && !jwtUtilizadorValido && !veioDoCron) {
+    console.warn('[whatsapp-webhook] POST recusado: sem assinatura Meta, JWT valido nem segredo de cron.');
     return new Response(JSON.stringify({ error: 'Nao autorizado.' }), {
       status: 401,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -2994,6 +3062,40 @@ Deno.serve(async (req: Request) => {
       ].join('\n');
 
       const enviado = await sendWhatsAppMessage(perfilPassageiro.phone, msg);
+
+      // ── Fechar a fila para a mensagem não sair a dobrar ────────────────────
+      //
+      // O trigger `trg_enqueue_ride_accepted` (migração 20260924220000) já pôs
+      // uma linha em `notifications_outbox` no instante em que a corrida passou
+      // a `accepted`. Existem agora DOIS caminhos para a mesma mensagem: este
+      // (o telemóvel do motorista, instantâneo) e o worker do cron.
+      //
+      // Se esta entrega resultou, fecha-se a linha para o worker não repetir.
+      // Se FALHOU, a linha fica `pending` de propósito — é exactamente para
+      // isso que a fila existe: o worker apanha-a e entrega-a mais tarde.
+      //
+      // O filtro `status = 'pending'` torna isto inofensivo quando é o próprio
+      // worker a chamar esta acção: nesse caso a linha está `processing` e quem
+      // manda no estado é o worker.
+      if (enviado) {
+        const { error: erroFecho } = await supabaseAdmin
+          .from('notifications_outbox')
+          .update({
+            status: 'sent',
+            last_error: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('ride_id', rideId)
+          .eq('kind', 'ride_accepted_passenger')
+          .eq('status', 'pending');
+
+        if (erroFecho) {
+          console.warn(
+            `[whatsapp-webhook] Corrida ${rideId}: entrega feita mas nao fechei a linha da fila ` +
+              `(${erroFecho.message}) — o worker pode repetir a mensagem.`,
+          );
+        }
+      }
 
       return new Response(
         JSON.stringify({ success: enviado, notified: enviado }),

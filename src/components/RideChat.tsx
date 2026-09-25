@@ -55,8 +55,13 @@ export default function RideChat({
     'Onde estás exactamente?',
   ];
 
-  // Identificação do remetente sem chamada de rede extra
-  const senderId = session?.user?.id || myId;
+  // Identificação do remetente sem chamada de rede extra.
+  //
+  // ⚠️ NÃO reintroduzir `|| myId` como recurso. Se a sessão não estiver
+  // disponível, a mensagem não é enviada — e é isso que se quer. Com o fallback,
+  // um `senderId` errado ia para o `insert` e a RLS rejeitava-o do lado do
+  // servidor, ficando o utilizador sem perceber porquê. Falhar fechado.
+  const senderId = session?.user?.id ?? null;
 
   useEffect(() => {
     openRef.current = open;

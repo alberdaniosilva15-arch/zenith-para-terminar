@@ -864,11 +864,28 @@ export const geminiService = {
     const history: Array<{ role: 'user' | 'ai'; text: string }> = [];
     let consecutiveFailures = 0;
 
+    // ── Circuit breaker (v3.4, 25/09/2026) ───────────────────────────────────
+    //
+    // `consecutiveFailures` já existia: era incrementado, reposto a 0 no
+    // sucesso… e NUNCA lido. Ou seja, o travão não travava nada. Com o motor
+    // primário em baixo, cada mensagem voltava a pagar até 35 s de espera antes
+    // de cair para o seguinte — e o utilizador ficava a olhar para o vazio.
+    //
+    // Agora, ao fim de 3 falhas seguidas, o primário fica de fora durante 30 s
+    // e a resposta sai pelo secundário logo à primeira.
+    const LIMITE_FALHAS_SEGUIDAS = 3;
+    const ESPERA_CIRCUITO_MS = 30_000;
+    let primarioBloqueadoAte = 0;
+
     return {
       async sendMessage(message: string, currentContext?: any): Promise<{
         text: string;
         route: 'admin-ai-proxy' | 'hermes-tool' | 'gemini-proxy' | 'emergency-local';
         local?: boolean;
+        /** `true` quando todos os motores falharam e o texto é um aviso, não uma resposta. */
+        degraded?: boolean;
+        /** Motivo legível da degradação, para o log e para o ecrã. */
+        reason?: string;
         toolName?: string;
         toolArgs?: any;
         toolResult?: any;
@@ -881,7 +898,12 @@ export const geminiService = {
         };
 
         let lastPrimaryErr: any = null;
+        const primarioEmCircuitoAberto = Date.now() < primarioBloqueadoAte;
+        if (primarioEmCircuitoAberto) {
+          console.warn('[geminiService.createHermesKazeChat] Circuit breaker aberto — motor primário saltado.');
+        }
         try {
+          if (primarioEmCircuitoAberto) throw new Error('CIRCUIT_BREAKER_OPEN');
           const requestId = crypto.randomUUID();
           const primary = await callAdminProxy<any>({
             action: 'sentinel_chat',
@@ -941,21 +963,38 @@ export const geminiService = {
           console.warn('[geminiService.createHermesKazeChat] gemini-proxy falhou, ativando IA direta JARVIS:', fallbackErr);
         }
 
-        // 3. Fallback Direto de Alta Inteligência (Google Gemini 2.5 Flash / JARVIS)
-        try {
-          const jarvisText = await callDirectJarvisChat(message, history, context);
-          history.push({ role: 'user', text: message });
-          history.push({ role: 'ai', text: jarvisText });
-          consecutiveFailures = 0;
-          return { text: jarvisText, route: 'admin-ai-proxy', local: false };
-        } catch (directErr: any) {
-          console.warn('[geminiService.createHermesKazeChat] Falha também na IA direta JARVIS:', directErr?.message);
-          consecutiveFailures += 1;
-          const text = `Sistemas operacionais online, Comandante. O Cluster de Luanda está activo e pronto para as suas instruções.`;
-          history.push({ role: 'user', text: message });
-          history.push({ role: 'ai', text });
-          return { text, route: 'emergency-local', local: true };
+        // 3. Motores esgotados.
+        //
+        // Aqui havia um terceiro passo — `callDirectJarvisChat` — que corria no
+        // browser com a chave do Groq/Gemini. Essa chave foi removida do
+        // frontend (ia no bundle, que é público), portanto `FRONTEND_GROQ_KEY`
+        // e `FRONTEND_GEMINI_KEY` devolvem `''` e a função falhava SEMPRE. Não
+        // era um fallback: era uma promessa que nunca se cumpria, a custar um
+        // `console.warn` a anunciar "ativando IA direta JARVIS" para uma
+        // capacidade que já não existe. Removido.
+        //
+        // E a resposta de recurso era pior do que o silêncio: dizia
+        // "Sistemas operacionais online, Comandante" — afirmava que estava tudo
+        // bem quando nada estava. Isso escondia a avaria de quem opera o painel.
+        // Agora a UI recebe `degraded: true` com um motivo, e mostra-o.
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= LIMITE_FALHAS_SEGUIDAS) {
+          primarioBloqueadoAte = Date.now() + ESPERA_CIRCUITO_MS;
+          console.warn(
+            `[geminiService] Circuit breaker aberto por ${ESPERA_CIRCUITO_MS / 1000}s após ${consecutiveFailures} falhas seguidas.`,
+          );
         }
+
+        const motivo = lastPrimaryErr?.message || 'motores primário e secundário sem resposta';
+        console.error('[geminiService.createHermesKazeChat] Kaze indisponível.', {
+          route: 'emergency-local',
+          falhasSeguidas: consecutiveFailures,
+          motivo,
+        });
+        const texto = `O Kaze está indisponível neste momento (${motivo}). Tenta novamente dentro de instantes.`;
+        history.push({ role: 'user', text: message });
+        history.push({ role: 'ai', text: texto });
+        return { text: texto, route: 'emergency-local', local: true, degraded: true, reason: motivo };
       },
       getHistory: () => [...history],
       clearHistory: () => {

@@ -612,30 +612,24 @@ class RideService {
     }
   }
 
-  async broadcastRideUpdated(rideId: string, ride: DbRide): Promise<void> {
-    try {
-      const channel = supabase.channel(`ride:${rideId}`);
-      const sendPayload = async () => {
-        await channel.send({
-          type: 'broadcast',
-          event: 'RIDE_UPDATED',
-          payload: ride,
-        });
-      };
-
-      if ((channel as any).state === 'joined') {
-        await sendPayload();
-      } else {
-        channel.subscribe(async (status) => {
-          if (status === 'SUBSCRIBED') {
-            await sendPayload();
-          }
-        });
-      }
-    } catch (err) {
-      console.warn('[rideService.broadcastRideUpdated] Broadcast warning:', err);
-    }
-  }
+  // ── broadcastRideUpdated — REMOVIDO (v3.4, 25/09/2026) ────────────────────
+  //
+  // Aqui vivia um método que abria `supabase.channel('ride:' + rideId)` e
+  // enviava um evento `RIDE_UPDATED`. Tinha dois problemas:
+  //
+  //  1. Criava um canal NOVO a cada chamada e nunca o removia. Ao fim de algumas
+  //     corridas havia dezenas de sockets abertos no browser, cada um a receber
+  //     os eventos de todas as corridas.
+  //  2. Era redundante. Só era chamado DEPOIS de a RPC ter regressado, ou seja,
+  //     depois do commit — e nessa altura o trigger `trg_broadcast_ride_change`
+  //     já tinha emitido o mesmo evento a partir da base de dados, para o mesmo
+  //     tópico. O cliente estava a repetir um evento que já tinha recebido.
+  //
+  // Quem emite agora é só a base de dados, que é o que se quer: não depende de o
+  // telemóvel do motorista ter rede no momento certo. O payload do trigger foi
+  // alargado (migração 20260925120000) para incluir accepted_at, started_at e
+  // completed_at, que o `subscribeToRide` abaixo usa para detectar mudanças —
+  // sem isso, o broadcast traria menos campos do que o caminho antigo.
 
   // ── driverConfirmRide ──────────────────────────────────────────────────────
   private async notifyPassengerRideAccepted(rideId: string): Promise<void> {
@@ -841,7 +835,8 @@ class RideService {
       // Corrida aceite com sucesso absoluto!
       void this.broadcastRideDismissed(rideId);
       void this.notifyPassengerRideAccepted(rideId);
-      void this.broadcastRideUpdated(rideId, acceptedRide);
+      // O evento RIDE_UPDATED é emitido pela base de dados (trigger
+      // trg_broadcast_ride_change) no commit da RPC acima. Não repetir aqui.
       return { data: acceptedRide, error: null };
     } catch (err: any) {
       console.error('[rideService.acceptRide] Excepção:', err);
@@ -928,7 +923,6 @@ class RideService {
         try { await supabase.rpc('recharge_chat_quota', { amount: 10 }); } catch (e) { console.error('[rideService.rechargeChatQuota]', e); logError('rideService.rechargeChatQuota', e); }
       }
 
-      void this.broadcastRideUpdated(rideId, updatedRide as DbRide);
       return { data: updatedRide as DbRide, error: null };
     } catch (err) {
       console.error('[rideService.updateRideStatus] Excepção:', err);
