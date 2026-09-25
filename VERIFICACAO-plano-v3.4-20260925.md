@@ -2,7 +2,7 @@
 
 **Data:** 25 de Setembro de 2026
 **Documento verificado:** `Plano-Correcoes-Zenith-Ride-v3.4tttt.pdf` (24/09/2026)
-**Commit em análise:** `6d3f071` — *"fix: correcoes criticas v3.4 - chat, chamadas, contratos, kaze AI, whatsapp webhook"*
+**Commit inicial em análise:** `6d3f071` · **estado final do dia:** `f232eef` (enviado para `main`)
 **Produção verificada:** `zenith-ride-build.vercel.app` (bundle `index-C14S4VTE.js` — igual ao `dist/` local)
 **BD verificada:** `mhahnhnsaquqgqvnnwld.supabase.co` (consulta directa)
 
@@ -35,13 +35,70 @@ O bloqueio central deste relatório **já não existe**. Foi corrigido e aplicad
 **Verificado a disparar:** `bump_ride_version` (0→1), `audit_rides_status` (registou
 `cancelled → searching`) e `realtime.send` da BD (executa sem erro).
 
-**Continua por fazer** — o resto deste relatório mantém-se válido: canais Realtime privados
-(as políticas existem mas o cliente ainda subscreve público), `senderId || myId` no `RideChat`,
-`broadcastRideUpdated` vivo, a frase falsa do Kaze, o circuit breaker inerte, a Fase 6 e a
-observabilidade. Ver a secção 5 para a ordem.
+### Segunda passagem (25/09, tarde) — Fase 6 fechada e provada
 
-> Nota: `notifications_outbox` continua a ser **só esquema** — não existe worker que a consuma.
-> As linhas acumulam-se sem serem processadas.
+Commit **`f232eef`**, enviado para `main`. Além deste, foram enviados os dois commits que estavam
+**presos localmente** (`84ea59f`, `3015467`) — até então a Vercel nunca tinha visto nem a correcção da
+migração nem a dos contratos.
+
+| Item da lista | Estado |
+|---|---|
+| Fase 6 — fila de notificações com worker real | ✅ **feita e provada ponta-a-ponta** |
+| `senderId \|\| myId` no `RideChat` | ✅ `?? null` (falhava aberto) |
+| `broadcastRideUpdated` vivo | ✅ removido; payload do trigger alargado |
+| Frase falsa do Kaze | ✅ `degraded: true` + razão |
+| Circuit breaker inerte | ✅ passa a ser lido |
+| Canais Realtime privados | ❌ por fazer — ver abaixo |
+| Observabilidade | ❌ por fazer |
+
+**O que a Fase 6 ganhou:**
+
+- `notifications-worker` (Edge Function nova) — despachante da fila, com *claim* atómico, recuo
+  exponencial (1 min → 30 min), limite de tentativas e recuperação de linhas presas.
+- Job de cron `notifications_outbox_worker`, **activo**, a cada minuto (`* * * * *`).
+- `whatsapp-webhook` passou a aceitar o segredo de cron — era o único caminho que faltava para a fila
+  o poder accionar.
+
+**⚠️ O bug que ia matar a Fase 6 em silêncio** (apanhado só porque se testou a sério):
+
+O Vault guarda `cron_secret` com o valor do **`SOS_CRON_SECRET`**, **não** do `CRON_SECRET`. Os dois
+existem no projecto, com valores **diferentes**. A primeira versão do worker lia apenas o
+`CRON_SECRET`: o cron batia-lhe a cada minuto e levava **401 sempre, para sempre**, sem erro visível e
+sem a fila andar. Provado por **digest** (o sha256 do valor no Vault coincide com o digest do
+`SOS_CRON_SECRET` na lista de segredos), sem revelar o valor. Passou a aceitar os dois candidatos,
+como o `sos-escalation`.
+
+**Sem mensagens a dobrar.** O caminho do telemóvel do motorista **não foi removido** — continua a ser
+o principal (entrega em segundos) e passou a **fechar a linha da fila** quando entrega. O worker só
+apanha linhas com **mais de 30 s**: é a rede de segurança para quando o motorista perde rede no
+instante do aceite. Sem essa carência, o cron podia chegar primeiro e o passageiro recebia a mensagem
+duas vezes.
+
+**Provas (sem enviar uma única mensagem a ninguém):**
+
+1. Accionado pelo mesmo caminho do cron (`net.http_post` + segredo lido do Vault, que nunca sai da
+   BD). Resposta: `{"enviados":0,"falhados":1,"adiados":0,"lidas":1}` — `lidas:1` prova que a
+   carência travou a linha fresca e que a antiga foi reclamada e falhada de imediato.
+2. Passados 35 s, a linha fresca apareceu `failed`/`attempts=1` com `next_retry_at` = hora+60 s —
+   apanhada **pelo cron verdadeiro**. A carência é um atraso, não um bloqueio.
+3. `whatsapp-webhook` com o segredo certo → **404 `Corrida não encontrada`** (passou a autenticação e
+   chegou ao handler); com o segredo errado → **401**. Antes da correcção, ambos davam 401.
+4. Fila final: **0 linhas**. Linhas de teste apagadas.
+
+**O que continua por fazer — e porque não se fez agora:**
+
+- **Canais Realtime privados.** As políticas em `realtime.messages` **existem e estão certas** (2
+  políticas, `{authenticated}`), mas cobrem apenas **5 tópicos**: `ride:`, `ride_chat_`,
+  `ride_chat:`, `call:`, `call-signal:`. O cliente subscreve **~15** (`driver-notifs:`, `wallet:`,
+  `panic_alerts_live`, `zenith-available-rides`, `ridetalk_zone_`, `safety-check-`, `contract-perk:`,
+  `kaze-quota:`, `escolar-monitor:`, `social_feed_user_`, `perk:`, `emergency_audio_`,
+  `admin-sos-panel`). Virar `private: true` sem escrever política para cada um **parte ~10 canais de
+  notificação**. É uma fase com migração de políticas + cliente + `realtime.send(..., private =>
+  true)` do lado da BD — não um `sed`.
+  **Enquanto forem públicos, o RLS de `realtime.messages` não é aplicado**: com a anon key (pública,
+  está no bundle) qualquer pessoa pode subscrever `ride_chat_<id>` e ler o chat. Exposição real.
+- **Observabilidade** — não começada.
+
 
 ---
 
