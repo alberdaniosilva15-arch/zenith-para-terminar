@@ -145,6 +145,22 @@ export function levarAbaPara(janela: Window | null, url: string): boolean {
  *
  * Devolve `true` só quando o SMS saiu mesmo.
  */
+/**
+ * Assinatura do plugin de SMS do Capacitor.
+ *
+ * Estava escrito como `Function`, que o ESLint recusa (`ban-types`): aceita
+ * qualquer coisa que se possa chamar e não diz nada sobre os argumentos. Com a
+ * assinatura real, o call site passa a ser verificado — e é aqui que se vê que
+ * os dois últimos parâmetros são os callbacks de sucesso e de erro.
+ */
+type SmsSendFn = (
+  telefone: string,
+  mensagem: string,
+  opcoes: { replaceLineBreaks: boolean; android: { intent: string } },
+  aoSucesso: () => void,
+  aoErro: (err: unknown) => void,
+) => void;
+
 export async function enviarSmsNativo(params: {
   telefone: string;
   mensagem: string;
@@ -152,7 +168,7 @@ export async function enviarSmsNativo(params: {
   if (!Capacitor.isNativePlatform()) return false;
 
   try {
-    const smsPlugin = (window as unknown as { SMS?: { send?: Function } }).SMS;
+    const smsPlugin = (window as unknown as { SMS?: { send?: SmsSendFn } }).SMS;
     if (!smsPlugin?.send) return false;
 
     await new Promise<void>((resolve, reject) => {

@@ -88,7 +88,7 @@ export default function RideChat({
 
       if (!error && data && data.length > 0) {
         setMsgs((prev) => {
-          let updated = [...prev];
+          const updated = [...prev];
           for (const item of data) {
             const m = item as Msg;
             const idx = updated.findIndex(
