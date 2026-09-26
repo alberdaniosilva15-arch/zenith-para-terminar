@@ -309,7 +309,9 @@ export const KAZE_AGENT_SYSTEM_PROMPT = `Tu és o KAZE, o assistente de intelig�
 - Quem és tu: Tu és o KAZE, a Inteligência Artificial e assistente de mobilidade da Zenith Ride.
 - Onde estás / onde estamos: Estás em Luanda, Angola, integrado na plataforma Zenith Ride e pronto para apoiar o utilizador na sua jornada urbana.
 - Quem é o utilizador: Se souberes o nome no bloco [ESTÁS A FALAR COM: …], trata a pessoa pelo nome próprio ("Tu és o [nome]"). Se não tiveres o nome confirmado, trata com respeito e proximidade ("mano", "parceiro").
-- Onde está o utilizador: Se te perguntarem "onde estou?", responde com o que está no bloco de localização. Se estiverem em Luanda, confirma que estão em Luanda, Angola, e indica o bairro/endereço exacto disponível.
+- Se o bloco disser "nome não especificado no perfil", NÃO inventes nome nenhum e NÃO trates a pessoa por um nome inventado. Podes perguntar uma vez, com naturalidade ("Como te chamas? Assim trato-te pelo nome."). Se a pessoa não disser, segue a conversa sem nome. Inventar o nome de uma pessoa real é grave.
+- Onde está o utilizador: Se te perguntarem "onde estou?", responde com o que está no bloco [BAIRRO/ZONA DO UTILIZADOR: …] ou no bloco de localização. Se estiverem em Luanda, confirma que estão em Luanda, Angola, e diz o bairro pelo nome ("estás no Kilamba", "estás na Talatona").
+- O bairro é informação REAL e confirmada — usa-o com confiança e naturalidade, como faria um luandense. NÃO leias coordenadas em voz alta, NÃO digas "segundo os meus dados GPS" e NÃO transformes o bairro numa lista de números. Se só tiveres coordenadas e nenhum bairro, diz que a localização está a sincronizar em vez de recitar os números.
 - Se houver corrida activa e te perguntarem pela corrida, usa as ferramentas do app para agir sobre ela (cancelar, ver histórico) em vez de descreveres de memória.
 - Sobre o tempo de chegada ou a posição exacta do motorista: quem sabe é o ecrã da corrida, em tempo real. Não inventes minutos nem distâncias.
 
@@ -352,6 +354,16 @@ export interface ContextoDeVoz {
   userName?: string | null;
   userLocation?: LatLng | null;
   userAddress?: string | null;
+  /**
+   * Bairro/zona, quando conhecido (ex.: "Kilamba", "Viana", "Talatona").
+   *
+   * Separado do `userAddress` de propósito. São coisas diferentes e servem
+   * para coisas diferentes: o endereço completo é bom para geocodificar e para
+   * o motor de preços; o bairro é o que um humano de Luanda diz. O modelo
+   * responde "estás no Kilamba" — que soa a gente — em vez de recitar uma
+   * morada comprida ou largar duas coordenadas.
+   */
+  userDistrict?: string | null;
   hasActiveRide?: boolean;
 }
 
@@ -382,11 +394,25 @@ export function blocoDeContexto(context: ContextoDeVoz): string {
     ? `\n[ESTÁS A FALAR COM: ${context.userName}]`
     : '\n[QUEM ESTÁ A FALAR: utilizador da Zenith Ride (nome não especificado no perfil).]';
 
-  const localizacao = context.userAddress
-    ? `\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: "${context.userAddress}", Luanda, Angola]`
-    : context.userLocation
-      ? `\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)}), Luanda, Angola]`
-      : '\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: Luanda, Angola (coordenadas GPS a sincronizar com o mapa).]';
+  // O bairro entra PRIMEIRO, e como linha própria. Sem ele, quem tem GPS mas
+  // não tem morada recebia duas coordenadas em bruto — e o modelo, sem nada
+  // humano a que se agarrar, inventava um sítio de Luanda à sorte. Com o
+  // bairro na linha, o endereço comprido passa a ser o detalhe e não o todo.
+  const bairro = context.userDistrict
+    ? `\n[BAIRRO/ZONA DO UTILIZADOR: ${context.userDistrict}]`
+    : '';
+
+  // Tripla ordem de confiança: bairro > endereço completo > coordenadas.
+  // São todos a mesma localização, mas com utilidade diferente para o modelo.
+  const localizacao = bairro
+    ? context.userAddress
+      ? `${bairro}\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: "${context.userAddress}", Luanda, Angola]`
+      : bairro
+    : context.userAddress
+      ? `\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: "${context.userAddress}", Luanda, Angola]`
+      : context.userLocation
+        ? `\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: GPS (${context.userLocation.lat.toFixed(4)}, ${context.userLocation.lng.toFixed(4)}), Luanda, Angola]`
+        : '\n[LOCALIZAÇÃO ACTUAL DO UTILIZADOR: Luanda, Angola (coordenadas GPS a sincronizar com o mapa).]';
 
   const corrida = context.hasActiveRide
     ? '\n[O utilizador tem uma corrida activa neste momento.]'

@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useRide } from '../hooks/useRide';
@@ -8,6 +8,7 @@ import Toast from '../components/Toast';
 import ErrorBoundary from '../components/ErrorBoundary';
 import ScreamGuard from '../components/ScreamGuard';
 import { TabType, UserRole, RideStatus } from '../types';
+import { mapService } from '../services/mapService';
 
 const PassengerHome = React.lazy(() => import('../components/PassengerHome'));
 const DriverHome = React.lazy(() => import('../components/DriverHome'));
@@ -166,6 +167,35 @@ export default function AuthenticatedApp() {
   const kazeActive = !kazeSilent;
   const showKaze = kazeActive && effectiveRole !== UserRole.FLEET_OWNER;
 
+  // ── Contexto de localização do Kaze: calculado UMA vez, aqui ───────────────
+  //
+  // Antes, estes dois valores eram literais soltos dentro do JSX do
+  // `KazeMascot`, e não havia um terceiro. Consequência real: o Kaze sabia as
+  // coordenadas e nada mais, e respondia "onde estou?" com dois números em
+  // bruto — ou, pior, inventava um sítio de Luanda à sorte.
+  //
+  // Passam a viver na mesma expressão que alimenta o bairro, para que os três
+  // não possam divergir: se o `pickupCoords` mudar, o bairro muda com ele.
+  //
+  // `districtFromCoords` é síncrono e não toca na rede (procura na lista de
+  // bairros já carregada); o `useMemo` evita repetir a procura em cada render
+  // do `AuthenticatedApp`, que é o componente com mais re-renders da app.
+  const contextoLocalizacao = useMemo(() => {
+    const coords = ride.pickupCoords
+      || (profile?.last_known_lat && profile?.last_known_lng
+        ? { lat: profile.last_known_lat, lng: profile.last_known_lng }
+        : null);
+    let bairro: string | null = null;
+    if (coords) {
+      try { bairro = mapService.districtFromCoords(coords); } catch { bairro = null; }
+    }
+    return {
+      coords,
+      address: ride.pickup || null,
+      district: bairro,
+    };
+  }, [ride.pickupCoords, ride.pickup, profile?.last_known_lat, profile?.last_known_lng]);
+
   return (
     <Layout
       role={effectiveRole}
@@ -278,7 +308,16 @@ export default function AuthenticatedApp() {
               onRequestRide={requestRide}
               onCancelRide={cancelRide}
               onNavigate={(path) => navigate(path)}
-              userLocation={ride.pickupCoords || (profile?.last_known_lat && profile?.last_known_lng ? { lat: profile.last_known_lat, lng: profile.last_known_lng } : null)}
+              userLocation={contextoLocalizacao.coords}
+              /* O endereço em texto do ponto de recolha. Sem isto, o Kaze só
+                 sabia onde o utilizador estava se o GPS respondesse durante a
+                 conversa — e com uma corrida a decorrer o ponto de recolha é
+                 uma resposta melhor do que duas coordenadas em bruto. */
+              userAddress={contextoLocalizacao.address}
+              /* O bairro, para o Kaze dizer "estás no Kilamba" em vez de
+                 recitar coordenadas. Derivado das mesmas coordenadas acima,
+                 por isso nunca discorda delas. */
+              userDistrict={contextoLocalizacao.district}
             />
           </Suspense>
         </ErrorBoundary>

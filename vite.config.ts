@@ -106,6 +106,11 @@ export default defineConfig({
           if (normalizedId.includes('/h3-js/')) return 'h3';
           if (normalizedId.includes('/@supabase/supabase-js/')) return 'supabase';
           if (normalizedId.includes('/lucide-react/')) return 'icons';
+          // O `three` é pesado e só é preciso quando o avatar do Kaze aparece
+          // (ou no mapa 3D). Com chunk próprio, quem nunca abre o painel de voz
+          // nunca o descarrega — e o `KazeMascot` deixa de o arrastar atrás.
+          if (normalizedId.includes('/three/')) return 'three';
+          if (normalizedId.includes('/@met4citizen/talkinghead/')) return 'talkinghead';
           if (
             normalizedId.includes('/react-router-dom/') ||
             normalizedId.includes('/react-dom/') ||

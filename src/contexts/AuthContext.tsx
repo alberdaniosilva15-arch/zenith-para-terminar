@@ -233,7 +233,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signInAsLocalGuest = useCallback((targetRole: UserRole = UserRole.PASSENGER, customName?: string) => {
     const isDriver = targetRole === UserRole.DRIVER;
     const email = isDriver ? 'alberdaniosilva16@gmail.com' : 'alberdaniosilva15@gmail.com';
-    const name = customName || (isDriver ? 'alberdaniosilva16' : 'alberdaniosilva15');
+    // ⚠️ O nome do convidado NÃO pode ser o email truncado.
+    //
+    // Era `alberdaniosilva15` / `alberdaniosilva16` — o e-mail sem o domínio.
+    // Como este nome vai para o prompt do Kaze como "estás a falar com X", ele
+    // cumprimentava a pessoa por um endereço de correio. Numa demo a
+    // investidores, isso é o primeiro segundo da conversa.
+    //
+    // Agora: se ninguém deu um nome, usa-se um nome apresentável. O email fica
+    // onde deve ficar — no campo `email`, que não é falado.
+    const name = customName?.trim() || (isDriver ? 'Motorista Convidado' : 'Passageiro Convidado');
     const guestId = isDriver
       ? '00000000-0000-0000-0000-000000000002'
       : '00000000-0000-0000-0000-000000000001';
@@ -439,14 +448,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 console.warn('[AuthContext] Auto-repair safety timeout (30s)');
               }, 30_000);
               try {
+                // ⚠️ O nome que vai para a BD não pode ser uma string vazia.
+                //
+                // `user_metadata.name` só existe quando o fornecedor o manda.
+                // Com magic link não vem; com Google vem às vezes. O
+                // `?? ''` gravava então nome VAZIO no perfil — e um perfil sem
+                // nome é o que faz o Kaze responder "não sei com quem falo" e,
+                // pior, inventar um nome (foi de onde veio o "Jão Silva").
+                //
+                // Ordem: metadados → parte local do email → recurso neutro.
+                // A parte local do email é má como nome de pessoa (o
+                // "alberdaniosilva15"), por isso só se usa se não houver mais
+                // nada — e o último recurso é apresentável, não um endereço.
                 const metaName = (authU.user_metadata?.name as string) ?? '';
+                const emailLocal = (authU.email ?? '').split('@')[0] ?? '';
+                const nomeFinal =
+                  metaName.trim() ||
+                  // Só aceita a parte local se parecer um nome (sem dígitos
+                  // nem pontos), senão também soa a endereço de correio.
+                  (/^[a-zà-ú]+$/i.test(emailLocal) ? emailLocal : '') ||
+                  'Utilizador Zenith Ride';
+
                 const metaRole = (authU.user_metadata?.role as string) ?? 'passenger';
-                
+
                 const { error: ensureErr } = await timeoutAfter(
                   supabase.rpc('ensure_user_exists', {
                     p_user_id: authU.id,
                     p_email: authU.email ?? '',
-                    p_name: metaName,
+                    p_name: nomeFinal,
                     p_role: metaRole,
                   }) as unknown as Promise<{ error: any }>,
                   10000,

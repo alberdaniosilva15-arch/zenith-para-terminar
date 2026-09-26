@@ -27,12 +27,38 @@ import {
 } from '../lib/kazeAudioRecorder';
 import { startKazeLiveSession, KazeLiveSession, KazeAudioStats } from '../lib/kazeLiveClient';
 
+/**
+ * O avatar 3D é carregado só quando o modo de voz abre.
+ *
+ * Traz o `three` (~600 KB) e o TalkingHead atrás; quem abre o Kaze para
+ * escrever uma mensagem não tem de os descarregar. `React.lazy` mantém-nos
+ * fora do chunk do `KazeMascot`, que é carregado sempre que a app arranca.
+ */
+const KazeAvatar = React.lazy(() => import('./KazeAvatar'));
+
 interface KazeMascotProps {
   role:            UserRole;
   rideStatus:      RideStatus;
   dataSaver:       boolean;
   userName?:       string;
   userId?:         string;
+  /**
+   * Endereço já conhecido do utilizador — ponto de recolha da corrida activa,
+   * ou morada do perfil.
+   *
+   * ⚠️ Sem isto, o Kaze só sabe onde o utilizador está se o GPS responder
+   * durante a sessão. Com uma corrida a decorrer, o ponto de recolha é uma
+   * resposta melhor do que o GPS em bruto — e não custa uma chamada de rede.
+   */
+  userAddress?:    string | null;
+  /**
+   * Bairro/zona do utilizador, quando conhecido.
+   *
+   * Existe porque o Gemini responde melhor a "estás no Kilamba" do que a
+   * "estás em (-8.9976, 13.2670)". O endereço completo é bom para o
+   * geocoder; o bairro é o que um humano diria.
+   */
+  userDistrict?:   string | null;
   onRequestRide?:  (
     pickup: string,
     pickupCoords: LatLng,
@@ -114,6 +140,8 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
   dataSaver,
   userName,
   userId,
+  userAddress,
+  userDistrict,
   onRequestRide,
   onCancelRide,
   onNavigate,
@@ -490,7 +518,14 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
       } else {
         // Obter GPS de forma ultra-rápida (sem bloquear 15s)
         let effectiveCoords = liveGpsCoords || userLocation || null;
-        let effectiveAddress = liveGpsAddress || null;
+        // ⚠️ O endereço parte de TRÊS fontes, por ordem de confiança:
+        //   1. o que o GPS já resolveu nesta sessão (mais fresco)
+        //   2. o `userAddress` que vem de fora (ponto de recolha da corrida
+        //      activa, ou morada do perfil) — antes era descartado aqui
+        //   3. nada, e o bloco de contexto diz ao Kaze que não a tem
+        // Sem o passo 2, quem tem uma corrida com ponto de recolha definido
+        // continuava a ser localizado por coordenadas em bruto ou por nada.
+        let effectiveAddress = liveGpsAddress || userAddress || null;
         if (!effectiveCoords) {
           try {
             const gpsPromise = mapService.getCurrentPosition();
@@ -515,6 +550,14 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           effectiveAddress = null;
         }
 
+        // O bairro, a partir do `userDistrict` que vem de fora, ou derivado das
+        // coordenadas. É síncrono (pesquisa numa lista em memória), por isso
+        // não atrasa o pedido ao agente — e dá ao Kaze o nome do sítio em vez
+        // de duas coordenadas.
+        const effectiveDistrict =
+          userDistrict ||
+          (effectiveCoords ? mapService.districtFromCoords(effectiveCoords) : null);
+
         // Passar pelo Kaze App Agent com protecção contra congelamento (máximo 6.5s)
         const agentPromise = kazeAppAgent.processUserMessage(userText, {
           userId,
@@ -522,6 +565,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
           userRole: role,
           userLocation: effectiveCoords,
           userAddress: effectiveAddress || undefined,
+          userDistrict: effectiveDistrict,
           hasActiveRide: rideStatus !== RideStatus.IDLE,
           pendingAction,
         });
@@ -976,7 +1020,8 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     // sessão nova o apanha. Por isso espera-se aqui, com tecto, em vez de
     // aceitar o que estiver no estado neste instante.
     let effectiveCoords = liveGpsCoords || userLocation || null;
-    let effectiveAddress = liveGpsAddress || null;
+    // Mesma ordem de confiança do `handleSend` — ver o comentário lá.
+    let effectiveAddress = liveGpsAddress || userAddress || null;
 
     if (!effectiveCoords) {
       try {
@@ -1009,12 +1054,20 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
     // Centro" falso seria o mesmo erro que o bot do WhatsApp fazia ao responder
     // "Município do Belas" a um pin exacto.
 
+    // O bairro — mesma derivação do caminho de texto. Ver o comentário lá.
+    // Na voz isto nota-se ainda mais: sem o bairro, o Kaze a falar ou recita
+    // coordenadas ou não diz sítio nenhum.
+    const districtVoz =
+      userDistrict ||
+      (effectiveCoords ? mapService.districtFromCoords(effectiveCoords) : null);
+
     const toolContext = {
       userId,
       userRole: role,
       userName,
       userLocation: effectiveCoords,
       userAddress: effectiveAddress,
+      userDistrict: districtVoz,
       hasActiveRide: rideStatus !== RideStatus.IDLE,
     };
 
@@ -1023,6 +1076,7 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
         userId: userId || 'anonimo',
         userName,
         userAddress: effectiveAddress,
+        userDistrict: districtVoz,
         userLocation: effectiveCoords,
         hasActiveRide: rideStatus !== RideStatus.IDLE,
         voiceName: 'Aoede',
@@ -1448,17 +1502,40 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                     }}
                   />
                   <div style={{ width: '110px', height: '110px', borderRadius: '50%', background: 'var(--surface-3)', border: isLive ? '2px solid var(--gold)' : '2px solid transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
-                    <span
-                      className="material-symbols-outlined"
-                      style={{
-                        fontSize: '50px', color: 'var(--gold)',
-                        transform: isLive ? (kazeSpeaking ? 'scale(1.18)' : 'scale(1.05)') : 'scale(0.9)',
-                        transition: 'transform 0.4s',
-                        opacity: isLive ? 1 : 0.6,
-                      }}
-                    >
-                      {isLive ? (kazeSpeaking ? 'graphic_eq' : 'mic') : 'graphic_eq'}
-                    </span>
+                    {isLive ? (
+                      /* Cara 3D do Kaze. A boca segue a energia real da voz —
+                         ver `KazeAvatar.tsx`. Substitui o ícone `graphic_eq`,
+                         que era só uma onda a pulsar e não dizia nada.
+                         O `Suspense` cobre o instante do `import()` — as
+                         propriedades do 3D são o último sítio onde se quer um
+                         ecrã em branco. */
+                      <React.Suspense
+                        fallback={
+                          <span className="material-symbols-outlined animate-pulse" style={{ fontSize: '44px', color: 'var(--gold)', opacity: 0.75 }}>
+                            auto_awesome
+                          </span>
+                        }
+                      >
+                        <KazeAvatar
+                          getOutputLevel={() => kazeLiveRef.current?.getOutputLevel() ?? 0}
+                          speaking={kazeSpeaking}
+                          listening={isLive && !kazeSpeaking}
+                          size={106}
+                        />
+                      </React.Suspense>
+                    ) : (
+                      <span
+                        className="material-symbols-outlined"
+                        style={{
+                          fontSize: '50px', color: 'var(--gold)',
+                          transform: 'scale(0.9)',
+                          transition: 'transform 0.4s',
+                          opacity: 0.6,
+                        }}
+                      >
+                        graphic_eq
+                      </span>
+                    )}
                   </div>
                 </div>
 

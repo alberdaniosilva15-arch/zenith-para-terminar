@@ -188,6 +188,11 @@ export interface KazeLiveOptions {
    */
   userName?: string | null;
   userAddress?: string | null;
+  /**
+   * Bairro/zona. Vai para o prompt como linha própria — o modelo fala de
+   * "Kilamba" e não de duas coordenadas. Ver `blocoDeContexto`.
+   */
+  userDistrict?: string | null;
   userLocation?: LatLng | null;
   hasActiveRide?: boolean;
   /** Nome da voz prebuilt do Gemini. Default: 'Aoede'. */
@@ -322,6 +327,7 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
   const {
     userName,
     userAddress,
+    userDistrict,
     userLocation,
     hasActiveRide,
     voiceName = 'Aoede',
@@ -628,7 +634,7 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
   // OpenAI-compatible texto — enviem exactamente a mesma informação. Antes
   // estava duplicado aqui e nos outros dois, e um deles esquecia o bloco da
   // corrida activa.
-  const contextoReal = blocoDeContexto({ userName, userAddress, userLocation, hasActiveRide });
+  const contextoReal = blocoDeContexto({ userName, userAddress, userDistrict, userLocation, hasActiveRide });
 
   const conexao = ai.live.connect({
     model,

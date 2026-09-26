@@ -411,6 +411,30 @@ export const mapService = {
     return nearestNeighbourhood(coords);
   },
 
+  /**
+   * Só o nome do bairro/zona — sem rua, sem número, sem cidade.
+   *
+   * Existe porque "Kilamba" e `"Rua 21 de Janeiro, Kilamba, Luanda"` servem
+   * para coisas diferentes. O endereço comprido é bom para geocodificar e
+   * para o motor de preços; o bairro é o que um humano diz, e é o que o Kaze
+   * deve usar quando fala.
+   *
+   * Custo zero: `nearestNeighbourhood` é uma pesquisa linear numa lista em
+   * memória. Não faz chamada de rede nenhuma, ao contrário do `reverseGeocode`.
+   */
+  districtFromCoords(coords: LatLng): string | null {
+    try {
+      const nome = nearestNeighbourhood(coords);
+      // `nearestNeighbourhood` devolve "Luanda" ou "Angola (perto de X)" quando
+      // o ponto está longe de tudo. Isso não é um bairro — é uma desistência.
+      // Devolver null é mais honesto do que dar ao Kaze um falso bairro.
+      if (!nome || nome.startsWith('Luanda (') || nome.startsWith('Angola (')) return null;
+      return nome === 'Luanda' ? null : nome;
+    } catch {
+      return null;
+    }
+  },
+
   // ── calculateDistance — Haversine (exportado para uso rápido em UI) ────────
   calculateDistance(origin: LatLng, dest: LatLng): number {
     return haversineKm(origin, dest);
