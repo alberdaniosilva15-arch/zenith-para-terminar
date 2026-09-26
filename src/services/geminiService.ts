@@ -495,7 +495,12 @@ async function callDirectGeminiChat(
 
   // 1. Motor Groq (ultra-rápido < 300ms, disponível imediatamente)
   if (FRONTEND_GROQ_KEY) {
-    const groqModels = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'];
+    // ⚠️ Modelos ACTUAIS do Groq (conferidos com a chave do projecto, 26/09).
+    // A lista anterior (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`,
+    // `mixtral-8x7b-32768`) dava 404 `model_not_found` — os llama/mixtral
+    // foram descontinuados. `qwen/qwen3.8-27b` é o único com resposta directa;
+    // os `gpt-oss-*` gastam tudo em `reasoning` e devolvem `content` vazio.
+    const groqModels = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
     for (const model of groqModels) {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -638,7 +643,9 @@ async function callDirectJarvisChat(
 
   // 1. Motor Groq (ultra-rápido)
   if (FRONTEND_GROQ_KEY) {
-    const groqModels = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'];
+    // ⚠️ Modelos ACTUAIS do Groq — ver a nota no `callDirectGeminiChat`.
+    // Os llama/mixtral foram descontinuados (404 `model_not_found`).
+    const groqModels = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
     for (const model of groqModels) {
       try {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {

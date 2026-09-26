@@ -649,10 +649,20 @@ Responde SEMPRE e OBRIGATORIAMENTE em formato JSON válido com esta estrutura ex
     message: string,
     context: ContextoDoAgente
   ): Promise<KazeAgentResult | null> {
+    // ⚠️ Os modelos têm de ser os que a chave REALMENTE tem acesso. A lista
+    // anterior (`llama-3.3-70b-versatile`, `llama-3.1-8b-instant`,
+    // `mixtral-8x7b-32768`) dava HTTP 404 `model_not_found` — o Groq
+    // descontinuou-os. Como esta é a rota primária do chat, o resultado era o
+    // Kaze parecer offline. Conferido contra `GET /openai/v1/models` com a
+    // chave do projecto (26/09): `qwen/qwen3.8-27b` responde limpo.
+    //
+    // ⚠️ `openai/gpt-oss-*` também existe, mas NÃO serve para o Kaze: gastam o
+    // orçamento em `reasoning` e devolvem `content` vazio com `max_tokens`
+    // baixo — um chat que responde em branco. Não os repor aqui.
     return this._callOpenAiCompatibleWithTools(
       'https://api.groq.com/openai/v1/chat/completions',
       FRONTEND_GROQ_KEY,
-      ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
+      ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'],
       message,
       context,
     );

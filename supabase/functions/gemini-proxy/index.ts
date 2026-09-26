@@ -143,6 +143,25 @@ const GROQ_PROMPT_MAX_BYTES = 896;
 /** Abaixo disto é cabeçalho WebM sem fala, não uma frase curta. */
 const MIN_AUDIO_BYTES = 800;
 
+// ── Modelo de chat do Groq ───────────────────────────────────────────────────
+//
+// ⚠️ NÃO voltar a pôr `llama-3.1-8b-instant`, `llama-3.3-70b-versatile` nem
+// `mixtral-8x7b-32768`. O Groq descontinuou-os: `GET /openai/v1/models` com a
+// chave deste projecto (26/09) lista 11 modelos e NENHUM é um llama/mixtral.
+// O pedido devolvia `404 model_not_found` e, como este é o **fallback** quando o
+// Gemini falha, o Kaze respondia sempre com a frase genérica de "oscilação da
+// rede" — parecia offline, mas era um modelo que já não existia.
+//
+// `qwen/qwen3.8-27b` é o escolhido: responde em português correcto, sem bloco de
+// `reasoning` e em ~5 ms.
+//
+// ⚠️ `openai/gpt-oss-120b` / `gpt-oss-20b` existem mas NÃO servem aqui: são
+// modelos de raciocínio e, com `max_tokens` baixo, gastam o orçamento todo em
+// `reasoning` e devolvem `content: ""`. Fica só como segunda tentativa, com
+// orçamento suficiente para ele ainda escrever algo.
+const GROQ_DEFAULT_MODEL = 'qwen/qwen3.8-27b';
+const GROQ_MODELOS_FALLBACK = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b'];
+
 /** Corta no último espaço antes de `maxBytes`, contados em UTF-8. */
 function truncarPorBytesUtf8(texto: string, maxBytes: number): string {
   const encoder = new TextEncoder();
@@ -587,7 +606,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
           aiConfig.model
           || modelOverride
           || (activeProvider === 'groq'
-            ? 'llama-3.1-8b-instant'
+            ? GROQ_DEFAULT_MODEL
             : activeProvider === 'openai'
               ? 'gpt-4o'
               : activeProvider === 'anthropic'
@@ -733,7 +752,7 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
               method: 'POST',
               headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
-                model: 'llama-3.1-8b-instant',
+                model: GROQ_DEFAULT_MODEL,
                 messages: [
                   { role: 'system', content: finalPreamble },
                   ...mappedHistory,
@@ -744,7 +763,12 @@ JSON: { text: string, type: "info"|"motivation"|"safety" }`,
             
             if (!groqRes.ok) throw new Error(`Groq HTTP ${groqRes.status}`);
             const groqData = await groqRes.json();
-            const groqText = groqData.choices?.[0]?.message?.content ?? '';
+            // ⚠️ Ler SEMPRE `reasoning` como rede: os modelos tipo `gpt-oss`
+            // devolvem `content: ""` e escrevem tudo em `reasoning`. Sem isto, o
+            // Kaze respondia vazio — que o utilizador lê como "está offline".
+            const groqText = (groqData.choices?.[0]?.message?.content ?? '').trim()
+              || (groqData.choices?.[0]?.message?.reasoning ?? '').trim();
+            if (!groqText) throw new Error('Groq devolveu resposta vazia');
             return ok({ text: groqText, message: groqText, intent: detectIntent(message), action: null, confidence: 0.90, provider: 'groq_fallback' });
           } catch (groqErr: any) {
             logAiUsage({ userId: user.id, action: 'kaze_chat', errorReturned: String(groqErr?.message || 'Fallback falhou') });

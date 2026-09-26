@@ -499,7 +499,9 @@ Deno.serve(async (req: Request) => {
     const activeModel = String(
       aiConfig.model
       || (activeProvider === 'groq'
-        ? 'llama-3.1-8b-instant'
+        // ⚠️ Modelo ACTUAL do Groq. `llama-3.1-8b-instant` foi descontinuado e
+        // devolvia 404 `model_not_found`, deixando o painel de admin sem chat.
+        ? 'qwen/qwen3.8-27b'
         : activeProvider === 'openai'
           ? 'gpt-4o'
           : activeProvider === 'anthropic'
