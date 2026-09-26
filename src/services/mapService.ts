@@ -214,6 +214,126 @@ function mapboxTypeToLocal(types: string[]): LocationResult['type'] {
   return 'bairro';
 }
 
+// ─── Photon (komoot) — o motor dos BAIRROS de Luanda ─────────────────────────
+//
+// ⚠️ Porque existe, e porque é o PRIMEIRO motor de pesquisa e não o último:
+//
+// O Mapbox Search Box **não tem bairros de Luanda**. Medido a 26/09/2026, com a
+// chave do projecto:
+//
+//   'Belas'   -> vazio          'Viana'    -> vazio
+//   'Cazenga' -> "Calenga", Província do HUAMBO  (≈600 km de distância!)
+//   'Rocha Pinto' / 'Cassequel' / 'Morro Bento' / 'Alvalade' / 'Palanca'
+//             -> nada de nada
+//
+// O Photon (base OpenStreetMap, sem chave e sem custo) acertou 15/15 nos mesmos
+// bairros, incluindo os que o Mapbox não conhece: Rocha Pinto, Cassequel, Morro
+// Bento, Bairro Azul, Alvalade, Maianga, Nelito Soares, Palanca, Zango, Camama,
+// Benfica, Kilamba, Talatona, Viana, Cazenga.
+//
+// Vai em PARALELO com o Mapbox (não em série): não acrescenta latência, e o
+// custo é zero. O Mapbox fica como reserva para POIs e moradas exactas, onde
+// continua a ser melhor.
+//
+// ⚠️ Limitações conhecidas, para não gerar falsas esperanças:
+//   • o Photon NÃO aceita `lang=pt` (só default/de/en/fr) — não mandar o
+//     parâmetro, senão devolve 400 e a pesquisa fica vazia em silêncio;
+//   • o serviço público pede ~1 pedido/s: usar com `signal` e sem retries
+//     agressivos. Para volume, alojar uma instância própria (é open source).
+const PHOTON_URL = 'https://photon.komoot.io/api/';
+
+/** Caixa que cobre Angola — evita resultados em países vizinhos. */
+const ANGOLA_BBOX_PHOTON = '11.4,-18.1,24.2,-4.4';
+
+interface PhotonFeature {
+  geometry?: { coordinates?: [number, number] };
+  properties?: {
+    name?: string;
+    street?: string;
+    housenumber?: string;
+    city?: string;
+    district?: string;
+    county?: string;
+    state?: string;
+    countrycode?: string;
+    osm_value?: string;
+    osm_key?: string;
+    type?: string;
+  };
+}
+
+/**
+ * Traduz o `type` do Photon (hub do OSM) para o vocabulário do app.
+ * `locality`/`district`/`county` são os que interessam: são os bairros.
+ */
+function photonTypeToLocal(p: PhotonFeature['properties']): LocationResult['type'] {
+  const valor = (p?.osm_value || p?.type || '').toLowerCase();
+  if (['neighbourhood', 'suburb', 'quarter', 'borough', 'district', 'locality', 'city_district'].includes(valor)) return 'bairro';
+  if (['city', 'town', 'village', 'municipality', 'county', 'administrative'].includes(valor)) return 'bairro';
+  if (['house', 'building', 'residential', 'apartments'].includes(valor)) return 'servico';
+  if (['street', 'road', 'pedestrian', 'footway', 'primary', 'secondary', 'tertiary', 'residential_road'].includes(valor)) return 'rua';
+  if (['amenity', 'shop', 'tourism', 'leisure', 'office'].includes(p?.osm_key || '')) return 'servico';
+  return 'bairro';
+}
+
+async function photonSuggest(
+  query: string,
+  userPos?: LatLng,
+  signal?: AbortSignal
+): Promise<LocationResult[]> {
+  const params = new URLSearchParams({
+    q: query.trim(),
+    limit: '10',
+    // ⚠️ `lang=pt` NÃO é aceite pelo Photon (400). Não acrescentar.
+    bbox: ANGOLA_BBOX_PHOTON,
+    // `osm_tag` não é usado de propósito: filtrar por tipo aqui esconderia os
+    // bairros, que é exactamente o problema que isto vem resolver.
+  });
+  if (userPos) {
+    params.set('lat', String(userPos.lat));
+    params.set('lon', String(userPos.lng));
+  }
+
+  try {
+    const res = await fetch(`${PHOTON_URL}?${params.toString()}`, { signal });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const features: PhotonFeature[] = Array.isArray(data?.features) ? data.features : [];
+
+    return features
+      .filter((f) => {
+        const code = f.properties?.countrycode;
+        // Só Angola. Sem código, deixa passar (alguns bairros não o trazem).
+        return !code || code.toUpperCase() === 'AO';
+      })
+      .map((f): LocationResult | null => {
+        const p = f.properties || {};
+        const coords = f.geometry?.coordinates;
+        if (!coords || coords.length < 2) return null;
+
+        const nome = p.name || p.street || '';
+        if (!nome) return null;
+
+        // A descrição junta o que existir, do mais fino para o mais largo —
+        // é isto que o utilizador lê por baixo do nome.
+        const partes = [p.district, p.city, p.county, p.state]
+          .filter((v, i, arr) => v && v !== nome && arr.indexOf(v) === i);
+        const descricao = partes.length ? `${nome}, ${partes.join(', ')}` : `${nome}, Angola`;
+
+        return {
+          name: nome,
+          description: descricao,
+          coords: { lat: coords[1], lng: coords[0] },
+          type: photonTypeToLocal(p),
+        } as LocationResult;
+      })
+      .filter((v): v is LocationResult => v !== null);
+  } catch (err: any) {
+    if (err?.name === 'AbortError') throw err;
+    return [];
+  }
+}
+
 // =============================================================================
 // SERVIÇO DE MAPAS
 // =============================================================================
@@ -259,6 +379,21 @@ export const mapService = {
       } catch (err) {
         console.warn('[mapService.geocodeAddress] Search Box fallback falhou:', err);
       }
+    }
+
+    // 3. Photon como ÚLTIMA rede — e é aqui que se salvam os bairros.
+    // O Mapbox devolve vazio para 'Belas', 'Viana', 'Rocha Pinto'… Este passo
+    // evita que um contrato fique com as coordenadas por omissão de Luanda
+    // centro (era o que acontecia: o chamador caía no `?? -8.836`).
+    try {
+      const photonResults = await photonSuggest(address);
+      const best = photonResults[0];
+      if (best?.coords) {
+        geocodeCache.set(cacheKey, best.coords);
+        return best.coords;
+      }
+    } catch (err) {
+      console.warn('[mapService.geocodeAddress] Photon falhou:', err);
     }
 
     return null;
@@ -334,7 +469,12 @@ export const mapService = {
       return POPULAR_LOCATIONS.slice(0, 10);
     }
 
-    // 1. Busca local lazy e Search Box API concorrentemente
+    // 1. Busca local lazy + Photon + Search Box API, tudo EM PARALELO.
+    //
+    // ⚠️ O Photon entra aqui, não no fim: é o único motor que tem os bairros de
+    // Luanda (ver a nota junto ao `photonSuggest`). Vai em paralelo, logo não
+    // acrescenta latência ao que o utilizador sente — o `Promise.all` espera
+    // pelo mais lento, e os três são independentes.
     const localPromise = searchAngolaLocationsLazy(query, 35).catch((err) => {
       console.warn('[mapService.searchPlaces] busca local falhou:', err);
       return [];
@@ -345,7 +485,16 @@ export const mapService = {
       return [];
     });
 
-    const [localResults, mapboxResults] = await Promise.all([localPromise, mapboxPromise]);
+    const photonPromise = photonSuggest(query, userPos, signal).catch((err: any) => {
+      if (err.name === 'AbortError') throw err;
+      return [];
+    });
+
+    const [localResults, mapboxResults, photonResults] = await Promise.all([
+      localPromise,
+      mapboxPromise,
+      photonPromise,
+    ]);
 
     if (signal?.aborted) {
       const abortErr = new Error('Busca cancelada');
@@ -367,6 +516,17 @@ export const mapService = {
 
     for (const c of combined) {
       seenNames.add(normalizeLocationText(c.name));
+    }
+
+    // 3b. Bairros do Photon — a seguir aos locais e ANTES do Mapbox, porque é
+    // aqui que está a cobertura que faltava. Se o mesmo nome já veio de outra
+    // fonte, fica a primeira (que traz coordenadas mais específicas).
+    for (const ph of photonResults) {
+      const phNorm = normalizeLocationText(ph.name);
+      if (phNorm && !seenNames.has(phNorm)) {
+        seenNames.add(phNorm);
+        combined.push(ph);
+      }
     }
 
     for (const mb of mapboxResults) {
