@@ -216,6 +216,19 @@ export interface KazeLiveSession {
    * tudo — e sem números as três são indistinguíveis do lado de fora.
    */
   getAudioStats(): KazeAudioStats;
+
+  /**
+   * Amplitude actual da voz do Kaze, de 0 a 1 — para animar os lábios.
+   *
+   * Lê o analisador de saída a cada chamada (RMS das amostras). Devolve 0
+   * quando não há áudio, o que é o caso normal fora da fala: o avatar deve
+   * fechar a boca em 0.
+   *
+   * ⚠️ Chamar num `requestAnimationFrame`, NÃO num `setInterval` — a boca tem
+   * de acompanhar o que sai das colunas, e o rAF é o único que está sincronizado
+   * com o ecrã.
+   */
+  getOutputLevel(): number;
 }
 
 export interface KazeAudioStats {
@@ -375,7 +388,24 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
   // sempre montado num único sítio (e para um mudo futuro ser uma linha).
   const masterGain = outputCtx.createGain();
   masterGain.gain.value = 1;
-  masterGain.connect(outputCtx.destination);
+
+  // ── Analisador de saída: a amplitude real da voz do Kaze ──────────────────
+  //
+  // É isto que faz os lábios do avatar acompanharem a fala. Sem ele só se sabe
+  // *se* o Kaze está a falar (o `onSpeakingChange` é binário) — não *quanto*.
+  // Um avatar que abre e fecha a boca sempre igual parece um LED a piscar.
+  //
+  // Montagem: fonte -> masterGain -> analyser -> destination. O analisador é um
+  // nó de passagem (não altera o som) e é barato: `fftSize` pequeno chega, não
+  // se está a fazer espectro, só a medir energia.
+  const outputAnalyser = outputCtx.createAnalyser();
+  outputAnalyser.fftSize = 256;
+  outputAnalyser.smoothingTimeConstant = 0.6;
+  masterGain.connect(outputAnalyser);
+  outputAnalyser.connect(outputCtx.destination);
+
+  /** Buffer reutilizado — alocar a cada leitura faria o GC tremer a boca. */
+  const leiturasOnda = new Uint8Array(outputAnalyser.frequencyBinCount);
 
   /** Retoma os dois contextos e diz se o de SAÍDA ficou mesmo a correr. */
   const garantirAudioActivo = async (): Promise<boolean> => {
@@ -972,6 +1002,37 @@ export async function startKazeLiveSession(options: KazeLiveOptions): Promise<Ka
 
     getResumptionHandle() {
       return resumptionHandle;
+    },
+
+    /**
+     * Amplitude (RMS) do que está a sair pelas colunas, normalizada para 0..1.
+     *
+     * O factor 32 e o recorte em 1 não são arbitrários: a voz sintetizada do
+     * Gemini sai a um nível modesto, e sem amplificação a boca mal mexia. Testar
+     * com `?` e ajustar é melhor do que mexer no ganho real do áudio — este
+     * número só afecta a animação, nunca o que se ouve.
+     */
+    getOutputLevel(): number {
+      try {
+        if (outputCtx.state !== 'running') return 0;
+        outputAnalyser.getByteTimeDomainData(leiturasOnda);
+        let soma = 0;
+        for (let i = 0; i < leiturasOnda.length; i++) {
+          // Centrado em 128; converter para [-1, 1].
+          // ⚠️ `?? 128` por causa do `noUncheckedIndexedAccess`: o TS não sabe
+          // que um índice dentro dos limites devolve sempre número, e o 128 é o
+          // valor neutro (silêncio) — nunca mascara som.
+          const v = ((leiturasOnda[i] ?? 128) - 128) / 128;
+          soma += v * v;
+        }
+        const rms = Math.sqrt(soma / leiturasOnda.length);
+        // O ruído de fundo do PCM sintetizado fica ~0.01; o corte limpa isso
+        // para a boca ficar mesmo fechada nos silêncios.
+        if (rms < 0.01) return 0;
+        return Math.min(1, rms * 32);
+      } catch {
+        return 0;
+      }
     },
 
     getAudioStats(): KazeAudioStats {
