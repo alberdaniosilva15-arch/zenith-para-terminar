@@ -28,13 +28,21 @@ import {
 import { startKazeLiveSession, KazeLiveSession, KazeAudioStats } from '../lib/kazeLiveClient';
 
 /**
- * O avatar 3D é carregado só quando o modo de voz abre.
+ * AVATAR 3D REMOVIDO DA DEMO (27/09/2026) — decisão do Dánio.
  *
- * Traz o `three` (~600 KB) e o TalkingHead atrás; quem abre o Kaze para
- * escrever uma mensagem não tem de os descarregar. `React.lazy` mantém-nos
- * fora do chunk do `KazeMascot`, que é carregado sempre que a app arranca.
+ * Saíram: o rosto 3D, o `three` (~600 KB no chunk `three-*.js`), o
+ * `talkinghead` (147 KB) e o GLB de 24,2 MB. Em vez de uma cara genérica que
+ * não era o estilo pedido ("jovem técnico/streetwear escuro"), fica o ícone
+ * `graphic_eq` — uma onda que pulsa com a voz. Menos peso, e nada a fingir
+ * que é o produto final.
+ *
+ * O código do avatar NÃO foi apagado: `KazeAvatar.tsx`, os scripts de
+ * verificação e o GLB continuam no repo, prontos a religar quando houver um
+ * rosto que sirva. Para voltar atrás, ver `src/assets/kaze/LEIA-ME.md`.
+ *
+ * Traço a lembrar: `pageSpeed`/`4G` — isto poupa ~24,8 MB no arranque da voz
+ * (o GLB sozinho eram 37 s em 4G e 3 min em 3G).
  */
-const KazeAvatar = React.lazy(() => import('./KazeAvatar'));
 
 interface KazeMascotProps {
   role:            UserRole;
@@ -1503,26 +1511,20 @@ const KazeMascot: React.FC<KazeMascotProps> = ({
                   />
                   <div style={{ width: '110px', height: '110px', borderRadius: '50%', background: 'var(--surface-3)', border: isLive ? '2px solid var(--gold)' : '2px solid transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', position: 'relative', zIndex: 1 }}>
                     {isLive ? (
-                      /* Cara 3D do Kaze. A boca segue a energia real da voz —
-                         ver `KazeAvatar.tsx`. Substitui o ícone `graphic_eq`,
-                         que era só uma onda a pulsar e não dizia nada.
-                         O `Suspense` cobre o instante do `import()` — as
-                         propriedades do 3D são o último sítio onde se quer um
-                         ecrã em branco. */
-                      <React.Suspense
-                        fallback={
-                          <span className="material-symbols-outlined animate-pulse" style={{ fontSize: '44px', color: 'var(--gold)', opacity: 0.75 }}>
-                            auto_awesome
-                          </span>
-                        }
+                      /* Onda de voz — substitui o rosto 3D (ver nota no topo
+                         deste ficheiro). Reage à energia real do áudio via
+                         `kazeSpeaking`, sem carregar `three` nem GLB. */
+                      <span
+                        className="material-symbols-outlined"
+                        style={{
+                          fontSize: '50px', color: 'var(--gold)',
+                          transform: kazeSpeaking ? 'scale(1.08)' : 'scale(0.9)',
+                          transition: 'transform 0.25s ease',
+                          opacity: kazeSpeaking ? 1 : 0.7,
+                        }}
                       >
-                        <KazeAvatar
-                          getOutputLevel={() => kazeLiveRef.current?.getOutputLevel() ?? 0}
-                          speaking={kazeSpeaking}
-                          listening={isLive && !kazeSpeaking}
-                          size={106}
-                        />
-                      </React.Suspense>
+                        graphic_eq
+                      </span>
                     ) : (
                       <span
                         className="material-symbols-outlined"
