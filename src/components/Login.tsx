@@ -5,6 +5,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../lib/supabase';
 import { UserRole } from '../types';
 import { hasRecoveryType, sanitizeRedirectTarget } from '../lib/authUtils';
@@ -49,6 +50,10 @@ const Login: React.FC = () => {
   const [success, setSuccess] = useState<string | null>(null);
   const isPasswordRole = true;
   const isPasswordAuthRole = true;
+
+  // O botão de tema só existia dentro do Layout — ou seja, só depois de entrar.
+  // Quem ainda não tem sessão não conseguia ver o modo claro de todo.
+  const { theme, toggle: toggleTema, isTransitioning } = useTheme();
 
   const clearFeedback = () => {
     setError(null);
@@ -309,10 +314,22 @@ const Login: React.FC = () => {
 
 
   return (
-    <div className="zr-shell" style={{ backgroundColor: '#000000' }}>
-      <div className="zr-app zr-app--login" style={{ backgroundColor: '#000000' }}>
+    <div className="zr-shell">
+      <button
+        type="button"
+        onClick={toggleTema}
+        disabled={isTransitioning}
+        aria-label={theme === 'dark' ? 'Mudar para modo claro' : 'Mudar para modo escuro'}
+        title={theme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+        className="zr-theme-fab liquid-glass-subcard"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>
+          {theme === 'dark' ? 'light_mode' : 'dark_mode'}
+        </span>
+      </button>
+      <div className="zr-app zr-app--login">
         <main className="zr-main" style={{ paddingTop: '20px', paddingBottom: '20px' }}>
-          <section className="zr-card zr-card--hero" style={{ backgroundColor: '#000000', backgroundImage: 'none' }}>
+          <section className="zr-card zr-card--hero">
             <div className="flex justify-center mb-6 mt-2">
               <video 
                 src="/zenith-emblem-loop.mp4" 
@@ -386,16 +403,15 @@ const Login: React.FC = () => {
                     )}
 
                     <div className="relative flex items-center py-2">
-                      <div className="flex-grow border-t border-[#333]"></div>
-                      <span className="flex-shrink-0 mx-4 text-[#888] text-sm">ou</span>
-                      <div className="flex-grow border-t border-[#333]"></div>
+                      <div className="zr-or-line flex-grow border-t"></div>
+                      <span className="zr-or-text flex-shrink-0 mx-4 text-sm">ou</span>
+                      <div className="zr-or-line flex-grow border-t"></div>
                     </div>
 
                     <button 
                       onClick={() => handleGoogleAuth(authRole || UserRole.PASSENGER)} 
                       disabled={loading} 
                       className="zr-button zr-button--secondary zr-button--block flex items-center justify-center gap-2"
-                      style={{ backgroundColor: '#1A1A1A', color: 'white', border: '1px solid #333' }}
                     >
                       <svg viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg">
                         <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
@@ -443,16 +459,15 @@ const Login: React.FC = () => {
                     <button onClick={handleSignUp} disabled={loading} className="zr-button zr-button--block">Criar conta</button>
 
                     <div className="relative flex items-center py-2">
-                      <div className="flex-grow border-t border-[#333]"></div>
-                      <span className="flex-shrink-0 mx-4 text-[#888] text-sm">ou</span>
-                      <div className="flex-grow border-t border-[#333]"></div>
+                      <div className="zr-or-line flex-grow border-t"></div>
+                      <span className="zr-or-text flex-shrink-0 mx-4 text-sm">ou</span>
+                      <div className="zr-or-line flex-grow border-t"></div>
                     </div>
 
                     <button 
                       onClick={() => handleGoogleAuth(role)} 
                       disabled={loading} 
                       className="zr-button zr-button--secondary zr-button--block flex items-center justify-center gap-2"
-                      style={{ backgroundColor: '#1A1A1A', color: 'white', border: '1px solid #333' }}
                     >
                       <svg viewBox="0 0 24 24" width="20" height="20" xmlns="http://www.w3.org/2000/svg">
                         <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>

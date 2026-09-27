@@ -20,6 +20,7 @@ interface MapSingletonState {
   container:    HTMLElement | null;
   isReady:      boolean;
   pendingResize: boolean;
+  estiloActual: string | null;
 }
 
 // ─── Estado interno do singleton ───────────────────────────────
@@ -28,6 +29,7 @@ const state: MapSingletonState = {
   container:     null,
   isReady:       false,
   pendingResize: false,
+  estiloActual:  null,
 };
 
 // Container persistente — criado LAZY (apenas quando init() é chamado)
@@ -53,6 +55,27 @@ const DEFAULT_CONFIG: Required<MapConfig> = {
   pitch:   45,
   bearing: 0,
 };
+
+// ─── Estilo do mapa por tema (27/09/2026) ───────────────────
+//
+// O mapa vivia sempre em `dark-v11`. No modo claro isso dava um bloco preto
+// no meio de uma app de marfim — o elemento que mais destoava. O Mapbox tem
+// o par nativo `light-v11`, com a mesma geometria e tipografia, pelo que a
+// troca é limpa: não se inventa nada, usa-se o que já existe.
+//
+// `applyTheme` é chamado pelo ThemeContext; se o mapa ainda não existir,
+// não faz nada (o `init` já arranca com o estilo certo).
+const STYLES = {
+  dark:  "mapbox://styles/mapbox/dark-v11",
+  light: "mapbox://styles/mapbox/light-v11",
+} as const;
+
+function styleDoTema(): string {
+  if (typeof document === "undefined") return STYLES.dark;
+  return document.documentElement.getAttribute("data-theme") === "light"
+    ? STYLES.light
+    : STYLES.dark;
+}
 
 // Callbacks registados para notificar componentes quando o mapa estiver pronto
 const readyCallbacks: Array<(map: mapboxgl.Map) => void> = [];
@@ -85,7 +108,7 @@ export const MapSingleton = {
         (cleanConfig as any)[key] = value;
       }
     }
-    const mergedConfig = { ...DEFAULT_CONFIG, ...cleanConfig };
+    const mergedConfig = { ...DEFAULT_CONFIG, style: styleDoTema(), ...cleanConfig };
 
     try {
       const map = new mapboxgl.Map({
@@ -108,6 +131,7 @@ export const MapSingleton = {
       state.map       = map;
       state.container = targetContainer;
       state.isReady   = false;
+      state.estiloActual = mergedConfig.style;
 
       // Marcar como pronto quando o estilo carregar
       map.once("load", () => {
@@ -196,6 +220,24 @@ export const MapSingleton = {
     return state.map;
   },
 
+  // ── Trocar o estilo do mapa quando o tema muda ─────────────
+  //
+  // Guardado em `state.estiloActual` para não se repetir `setStyle` quando o
+  // tema é alternado duas vezes seguidas (o `setStyle` recarrega tiles e
+  // faz piscar o mapa). Se o mapa ainda não existir, é no-op — o `init`
+  // apanha o tema corrente de qualquer forma.
+  applyTheme(theme: "dark" | "light"): void {
+    const pretendido = theme === "light" ? STYLES.light : STYLES.dark;
+    if (state.estiloActual === pretendido) return;
+    state.estiloActual = pretendido;
+    if (!state.map) return;
+    try {
+      state.map.setStyle(pretendido);
+    } catch (err) {
+      console.warn("[mapInstance] setStyle falhou:", err);
+    }
+  },
+
   onReady(callback: (map: mapboxgl.Map) => void): void {
     if (state.isReady && state.map) {
       callback(state.map);
@@ -228,6 +270,7 @@ export const MapSingleton = {
       state.map       = null;
       state.container = null;
       state.isReady   = false;
+      state.estiloActual = null;
       readyCallbacks.length = 0;
     }
   },

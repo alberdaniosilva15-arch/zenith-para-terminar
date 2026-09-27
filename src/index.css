@@ -3,6 +3,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,700;1,700&family=Inter:wght@300;400;500;600;700&family=Manrope:wght@400;700;800;900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap');
 @import './styles/zenith-design.css';
+@import './styles/zenith-light.css';
 
 @tailwind base;
 @tailwind components;
@@ -19,6 +20,12 @@
     --surface-4: #323232;
     --gold: #e6c364;
     --gold-soft: #ffe090;
+    /* `--gold-text` e a cor do ouro QUANDO E TEXTO. Existe separada de
+       `--gold-soft` porque essa serve de FUNDO (gradientes, botoes, o botao do
+       interruptor em ContractUi). No escuro sao iguais; no modo claro o texto
+       tem de escurecer para ser legivel sobre marfim, e o fundo nao.
+       Se um dia trocar uma pela outra, o contraste parte-se em silencio. */
+    --gold-text: #ffe090;
     --text: #f5efe4;
     --muted: #a79b86;
     --line: rgba(230, 195, 100, 0.18);

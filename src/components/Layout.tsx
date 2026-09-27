@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useCallback, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { TabType, UserRole } from '../types';
+import { useTheme } from '../contexts/ThemeContext';
 import DevQRCode from './DevQRCode';
 import RoleSwitcher from './RoleSwitcher';
 
@@ -48,6 +49,14 @@ const Layout: React.FC<LayoutProps> = ({
 }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { theme, toggle: themeToggle, isTransitioning } = useTheme();
+
+  // Stable ref so ThemePour's animation doesn't get a stale closure
+  const themeToggleRef = useRef(themeToggle);
+  themeToggleRef.current = themeToggle;
+  const handleThemeToggle = useCallback(() => {
+    if (!isTransitioning) themeToggleRef.current();
+  }, [isTransitioning]);
 
   const isDriver = role === UserRole.DRIVER;
   const isFleetOwner = role === UserRole.FLEET_OWNER;
@@ -114,6 +123,27 @@ const Layout: React.FC<LayoutProps> = ({
             >
               smart_toy
             </span>
+          </button>
+
+          {/* Theme toggle — sol/lua */}
+          <button
+            onClick={handleThemeToggle}
+            title={theme === 'dark' ? 'Modo claro' : 'Modo escuro'}
+            className={`w-8 h-8 rounded-full liquid-glass-subcard flex items-center justify-center transition-all ${
+              theme === 'light' ? 'border-[#DDB658]/60 text-[#b8942a]' : 'text-[#e6c364] hover:text-white'
+            }`}
+            disabled={isTransitioning}
+          >
+            {theme === 'dark' ? (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="12" cy="12" r="4.2" fill="currentColor" />
+                <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4" />
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20.3 14.6A8.6 8.6 0 0 1 9.4 3.7a.6.6 0 0 0-.8-.7 9.4 9.4 0 1 0 12.4 12.4.6.6 0 0 0-.7-.8Z" />
+              </svg>
+            )}
           </button>
 
           <RoleSwitcher compact />

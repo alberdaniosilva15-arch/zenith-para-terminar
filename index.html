@@ -63,6 +63,27 @@
     </script>
     <link rel="stylesheet" href="/zenith-shell.css" />
 
+    <script>
+      /* ── ANTI-FLASH DE TEMA (27/09/2026) ─────────────────────────────────
+         O `index.html` nasce SEM `data-theme` e o `:root` e escuro, logo quem
+         tinha escolhido o modo claro via um flash preto em cada carregamento
+         (o `ThemeContext` so corrige depois do React montar).
+         Aqui a decisao e tomada antes da primeira pintura. E o mesmo valor e a
+         mesma chave que o `ThemeContext` usa (`localStorage['zr-theme']`), por
+         isso os dois nunca divergem. */
+      (function () {
+        try {
+          var t = localStorage.getItem('zr-theme');
+          if (t !== 'light' && t !== 'dark') t = 'dark';
+          var h = document.documentElement;
+          h.setAttribute('data-theme', t);
+          h.style.colorScheme = t;
+          var m = document.querySelector('meta[name="theme-color"]');
+          if (m) m.setAttribute('content', t === 'light' ? '#f0eeeb' : '#050505');
+        } catch (e) {}
+      })();
+    </script>
+
     <title>Zenith Ride</title>
 
     <!-- Security Headers -->

@@ -193,6 +193,44 @@
     var(--surface);
 }
 
+/* O login tinha `backgroundColor:#000000` + `backgroundImage:none` inline.
+   Ao tirar o inline (que partia o modo claro), preserva-se aqui o escuro
+   tal como estava. O claro define o seu proprio aspecto em zenith-light.css. */
+.zr-app--login .zr-card--hero {
+  background: #000000;
+}
+
+/* ── Botão de tema no ecrã de entrada (27/09/2026) ────────────────────────
+   O botão de tema vivia só no `Layout`, ou seja, só depois de entrar — quem
+   ainda não tinha sessão não conseguia ver o modo claro de todo.
+   O `position: absolute` tem de ganhar ao `position: relative` que o
+   `.liquid-glass-subcard` (index.css) traz, daí o selector descendente:
+   mesma especificidade que `.liquid-glass-subcard`, mas a começar mais cedo
+   na cadeia (`.zr-shell > ...`), pelo que ganha. */
+.zr-shell > .zr-theme-fab {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 70;
+  width: 40px;
+  height: 40px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.zr-shell > .zr-theme-fab:active {
+  transform: scale(0.95);
+}
+
+.zr-shell > .zr-theme-fab:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .zr-card--danger {
   border-color: rgba(239, 68, 68, 0.26);
   background:
@@ -324,6 +362,16 @@
   color: var(--text);
   border: 1px solid rgba(255, 255, 255, 0.09);
   box-shadow: none;
+}
+
+/* Divisor "ou" do login — base escura.
+   O modo claro sobrepoe-se em zenith-light.css.
+   (Antes eram cores inline no Login.tsx, que ganhavam ao tema.) */
+.zr-or-text {
+  color: #888;
+}
+.zr-or-line {
+  border-color: #333;
 }
 
 .zr-button--ghost {

@@ -314,7 +314,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
           </div>
           <div className="zr-inline" style={{ gap: '4px' }}>
             <span className="animate-pulse" style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: 'var(--success)' }} />
-            <span className="zr-meta" style={{ fontSize: '10px', color: 'var(--success)' }}>LIVE</span>
+            <span className="zr-meta" style={{ fontSize: '10px', color: 'var(--green-ink, var(--success))' }}>LIVE</span>
           </div>
         </div>
       </div>
@@ -370,7 +370,7 @@ const RideTalk: React.FC<{ zone: string; role: UserRole }> = ({ zone, role }) =>
 
               <p className="zr-copy" style={{ fontSize: '12px', marginBottom: '12px' }}>{msg.text}</p>
 
-              <button onClick={() => handleConfirm(msg)} className="zr-icon-button" style={{ fontSize: '12px', color: 'var(--gold-soft)', display: 'inline-flex', gap: '4px', width: 'auto', padding: '4px 8px', height: 'auto', borderRadius: '16px' }}>
+              <button onClick={() => handleConfirm(msg)} className="zr-icon-button" style={{ fontSize: '12px', color: 'var(--gold-text)', display: 'inline-flex', gap: '4px', width: 'auto', padding: '4px 8px', height: 'auto', borderRadius: '16px' }}>
                 <span className="material-symbols-outlined" style={{fontSize:'12px',verticalAlign:'middle'}}>thumb_up</span> Confirmar · {msg.confirmations}
               </button>
             </div>

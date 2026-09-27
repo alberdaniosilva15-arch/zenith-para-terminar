@@ -281,7 +281,7 @@ const Contract: React.FC = () => {
                 </div>
                 <div className="zr-inline zr-inline--between" style={{ fontSize: '10px' }}>
                   <span className="zr-meta">{Math.round(kmBonus.km_total % PERK_THRESHOLD)} km percorridos</span>
-                  <span className="zr-meta" style={{ color: 'var(--gold-soft)' }}>Faltam {Math.ceil(kmBonus.km_to_next_perk)} km → 5 km grátis</span>
+                  <span className="zr-meta" style={{ color: 'var(--gold-text)' }}>Faltam {Math.ceil(kmBonus.km_to_next_perk)} km → 5 km grátis</span>
                 </div>
               </div>
             )}

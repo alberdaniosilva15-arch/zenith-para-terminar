@@ -26,6 +26,22 @@ html.fonts-ready .material-symbols-outlined {
   pointer-events: none;
 }
 
+/* Splash em modo claro. O `data-theme` ja vem posto do <head> (script
+   anti-flash), por isso isto aplica-se logo na primeira pintura — sem ele o
+   ecra de abertura ficava preto mesmo com o tema claro escolhido. */
+html[data-theme="light"] #zenith-splash {
+  background: #f0eeeb;
+}
+
+html[data-theme="light"] #zenith-splash .spinner {
+  border-color: rgba(171, 124, 60, 0.18);
+  border-top-color: #dba751;
+}
+
+html[data-theme="light"] #zenith-splash p {
+  color: rgba(23, 19, 14, 0.45);
+}
+
 #zenith-splash .spinner {
   width: 40px;
   height: 40px;

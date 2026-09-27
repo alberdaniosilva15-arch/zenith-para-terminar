@@ -1,7 +1,9 @@
 import React, { Suspense, useEffect, useRef } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import FullPageSpinner from './components/FullPageSpinner';
+import ThemePour from './components/ThemePour';
 import { hasRecoveryType, sanitizeRedirectTarget } from './lib/authUtils';
 
 const Login = React.lazy(() => import('./components/Login'));
@@ -206,13 +208,16 @@ const trackingScreen = (
 
 const App: React.FC = () => {
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <Routes>
-        <Route path="/track/:token" element={trackingScreen} />
-        <Route path="/tracking/:token" element={trackingScreen} />
-        <Route path="/*" element={<AuthenticatedRoutesRoot />} />
-      </Routes>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <ThemePour />
+        <Routes>
+          <Route path="/track/:token" element={trackingScreen} />
+          <Route path="/tracking/:token" element={trackingScreen} />
+          <Route path="/*" element={<AuthenticatedRoutesRoot />} />
+        </Routes>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 };
 

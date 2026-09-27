@@ -26,12 +26,15 @@ interface ZenithScoreProps {
 }
 
 const SCORE_COLORS: Record<ScoreLabel, { bar: string; badgeBg: string; text: string }> = {
+  // `bar` e FUNDO (mantem o metal claro) — `text` e TEXTO e tem de escurecer
+  // no modo claro. Por isso `text` usa `--gold-text` e nao `--gold`/`--gold-soft`.
+  // O `--green-ink` so existe no tema claro; no escuro cai no `--success`.
   'Sem Historial': { bar: 'var(--muted)', badgeBg: 'var(--surface-3)', text: 'var(--text)' },
-  'Básico':        { bar: 'var(--gold-soft)', badgeBg: 'rgba(230,195,100,0.1)', text: 'var(--gold-soft)' },
-  'Médio':         { bar: 'var(--gold-soft)', badgeBg: 'rgba(230,195,100,0.2)', text: 'var(--gold)' },
-  'Bom':           { bar: 'var(--gold)', badgeBg: 'rgba(230,195,100,0.3)', text: 'var(--gold)' },
-  'Excelente':     { bar: 'var(--success)', badgeBg: 'rgba(34,197,94,0.1)', text: 'var(--success)' },
-  'Extraordinário':{ bar: 'var(--gold)', badgeBg: 'rgba(230,195,100,0.4)', text: 'var(--gold)' },
+  'Básico':        { bar: 'var(--gold-soft)', badgeBg: 'rgba(230,195,100,0.1)', text: 'var(--gold-text)' },
+  'Médio':         { bar: 'var(--gold-soft)', badgeBg: 'rgba(230,195,100,0.2)', text: 'var(--gold-text)' },
+  'Bom':           { bar: 'var(--gold)', badgeBg: 'rgba(230,195,100,0.3)', text: 'var(--gold-text)' },
+  'Excelente':     { bar: 'var(--success)', badgeBg: 'rgba(34,197,94,0.1)', text: 'var(--green-ink, var(--success))' },
+  'Extraordinário':{ bar: 'var(--gold)', badgeBg: 'rgba(230,195,100,0.4)', text: 'var(--gold-text)' },
 };
 
 const BANK_PARTNERS = [

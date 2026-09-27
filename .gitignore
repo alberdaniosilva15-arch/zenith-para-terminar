@@ -56,6 +56,18 @@ advisors-*.json
 audit-rls-*.txt
 rollback-grants-antes.csv
 
+# Backups completos da base de dados (scripts/backup-base-completo.py).
+# CONTÊM DADOS PESSOAIS DE UTILIZADORES REAIS: emails, telefones, moradas,
+# histórico de corridas e de pagamentos. O repositório é PÚBLICO.
+# As passwords vão em hash bcrypt (auth.users.encrypted_password), não em
+# texto simples — mas isso não torna o ficheiro partilhável.
+# Guardar fora do repo (ver LEIA-ME.txt dentro de cada backup).
+backups/
+
+# Capturas de verificação do modo claro. São prova de trabalho, não código:
+# pesam ~280 KB cada e não pertencem ao repositório. Ficam só na máquina.
+verificacao-modo-claro/
+
 # Ficheiros Sensíveis e de Prompt
 *Lukéni Bot*.json
 src_tree.txt

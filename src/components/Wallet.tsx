@@ -282,7 +282,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
             overflow: 'hidden',
           }}>
             <div className="flex items-center justify-between" style={{ marginBottom: '8px' }}>
-              <p className="zr-kicker" style={{ color: (driverWallet?.operational_credit ?? 0) <= 0 ? 'var(--danger-soft)' : 'var(--gold-soft)' }}>
+              <p className="zr-kicker" style={{ color: (driverWallet?.operational_credit ?? 0) <= 0 ? 'var(--danger-soft)' : 'var(--gold-text)' }}>
                 Crédito Operacional
               </p>
               {driverWallet?.status === 'blocked' && (
@@ -334,7 +334,7 @@ const Wallet: React.FC<WalletProps> = ({ userId }) => {
 
         {/* Card de saldo */}
         <section className={`zr-card ${isDriver ? 'zr-card--danger' : 'zr-card--hero'}`} style={{ marginBottom: '24px', position: 'relative', overflow: 'hidden' }}>
-          <p className="zr-kicker" style={{ color: isDriver ? 'var(--danger-soft)' : 'var(--gold-soft)' }}>
+          <p className="zr-kicker" style={{ color: isDriver ? 'var(--danger-soft)' : 'var(--gold-text)' }}>
             {isDriver ? 'Lucro Líquido' : 'Saldo Zenith'}
           </p>
           <h2 className="zr-balance" style={{ marginBottom: '8px' }}>
