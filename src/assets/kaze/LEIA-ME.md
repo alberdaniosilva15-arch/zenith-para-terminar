@@ -37,7 +37,54 @@ O `brunette.glb` é o avatar de exemplo mais conhecido do TalkingHead e é o que
 aparece em quase todos os tutoriais. **É uma armadilha** — parece livre, e não
 é. Foi recusado explicitamente para este projecto por essa razão.
 
-## Como trocar por um avatar próprio (a cara definitiva do Kaze)
+## Peso — onde está e como se corta (medido 27/09)
+
+**36,8 MB originais → 24,2 MB** com `node scripts/optimizar-avatar.mjs --aplicar --sem-roupa`.
+
+O peso **não** estava onde parecia. Medido no chunk BIN:
+
+| Parte | Peso | Veredicto |
+|---|---|---|
+| 7 texturas **PNG** | **18,5 MB** | o problema real: PNG é o formato errado |
+| geometria + 66 morphs | 16,4 MB | já eficiente (sparse accessors; 96% dos vértices não se move) |
+
+O maior desperdício isolado: **`female_casualsuit01_normal`, um normal map de
+roupa a 4096×4096 = 5,48 MB**. E o pior de tudo: **a câmara do `KazeAvatar` está
+a `y=1.62, z=0.62`, FOV 28°, dentro de um círculo de 106 px** — ou seja, a roupa
+e o cabelo (12,4 MB com a geometria) são carregados, descodificados e enviados
+para a GPU **para serem desenhados fora do enquadramento**.
+
+### O que o `optimizar-avatar.mjs` faz
+
+1. **Reencoda cada textura no formato que lhe serve**, decidido por textura e
+   não em bloco:
+   - sem alpha → JPEG (normal maps a q92, difusas a q88)
+   - **com alpha real → mantém PNG** (`brown_eye`, `ponytail01_diffuse`,
+     `teeth` têm recorte; JPEG pintar-lhes-ia um fundo preto)
+2. **Esvazia as malhas que não entram no enquadramento** (`female_casualsuit01`,
+   `ponytail01`) — tira-lhes as *primitives* em vez de remover as malhas, porque
+   assim nenhum índice de node se desloca. Um remapeamento mal feito apontaria
+   nodes para a malha errada, em silêncio.
+
+**Não toca nos morph targets.** Um ápice mexido e o Kaze fica de boca fechada.
+
+### Como se prova que não partiu
+
+```bash
+npm run avatar:check                          # estrutura: 14 visemes, blinks
+node scripts/comparar-avatar.mjs              # carrega os DOIS no three.js real
+```
+
+O `comparar-avatar.mjs` é o teste que vale: usa o **mesmo `GLTFLoader` que o
+TalkingHead usa** e compara os morph targets que o motor **encontra** (não o que
+o ficheiro diz ter). Depois da optimização: **66 morphs, 46 837 vértices com
+morph, 14/14 visemes, lista idêntica** — zero perda.
+
+> ⚠️ Copy-paste antes de mexer: põe o original em `kaze-avatar.antes.glb`. Neste
+> ambiente o `/tmp` **não existe** e um `cp` dentro de um `||` falha em silêncio —
+> já se perdeu um GLB de 36 MB assim. Verifica sempre os bytes do backup.
+
+
 
 1. Criar o avatar em <https://readyplayer.me/avatar/> (gratuito).
 2. Copiar o **ID** do avatar (ex.: `64bfa15f0e72c63d7c3934a6`).
@@ -86,6 +133,13 @@ Ver o cabeçalho do `src/components/KazeAvatar.tsx` para o desenho completo.
 
 ## Histórico
 
+- **27/09/2026** — Optimizado: 36,8 → **24,2 MB** (−34%). As texturas foram
+  reencodadas (PNG→JPEG onde não há alpha) e a roupa/cabelo removidos por
+  estarem fora do enquadramento da câmara. Lip-sync provado intacto com o
+  `GLTFLoader` real: 66 morphs, 14/14 visemes, lista idêntica à original.
+  ⚠️ **Continua a ser um avatar provisório** e não corresponde ao estilo pedido
+  ("jovem técnico/streetwear escuro") — é uma mulher de fato casual. Trocar
+  antes de mostrar a investidores.
 - **26/09/2026** — Avatar criado. Escolhido o `mpfb.glb` (CC0) depois de o
   `brunette.glb` ser recusado por ser CC BY-NC 4.0 (proibido em uso comercial).
   Confirmados 66 morph targets, incluindo os 14 visemes Oculus, e o node

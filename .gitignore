@@ -163,3 +163,8 @@ KAZE_CORE_BACKUP.md
 dist-codex-kaze-audit/
 *.tsbuildinfo
 scratch_*
+
+# Backups locais do avatar (o original de 36 MB). Nao pertencem ao repo: o que
+# esta em uso e o `kaze-avatar.glb`. Recuperar com `git show HEAD:...`.
+src/assets/kaze/*.antes.glb
+src/assets/kaze/*.opt.glb
