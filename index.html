@@ -86,12 +86,15 @@
 
     <title>Zenith Ride</title>
 
-    <!-- Security Headers -->
-    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
-    <meta http-equiv="X-Frame-Options" content="DENY" />
-    <meta http-equiv="X-XSS-Protection" content="1; mode=block" />
+    <!-- Segurança
+         Estes cabeçalhos são enviados a SÉRIO pelo `vercel.json` (secção
+         "headers"), que é o sítio correcto. Aqui em `<meta http-equiv>` a
+         maioria é IGNORADA pelos browsers — o `X-Frame-Options` até gera um
+         aviso na consola ("may only be set via an HTTP header... may not be set
+         inside <meta>"), e o `X-XSS-Protection` está descontinuado.
+         Ficaram só os que o browser realmente respeita em `<meta>`, para o caso
+         de se correr o `index.html` fora da Vercel (dev local). -->
     <meta http-equiv="Referrer-Policy" content="strict-origin-when-cross-origin" />
-    <meta http-equiv="Permissions-Policy" content="camera=(), microphone=(self), geolocation=(self)" />
   </head>
   <body>
     <div id="zenith-splash">
